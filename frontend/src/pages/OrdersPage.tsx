@@ -1,0 +1,614 @@
+import { useEffect, useState, useCallback } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { getOrders, createOrder, updateOrderDetails } from '../api/orders'
+import { searchClients } from '../api/clients'
+import { geocodeAddress } from '../api/geocode'
+import type { Order, OrderStatus, CreateOrderRequest, Client } from '../types'
+
+const STATUS_LABELS: Record<string, string> = {
+  LEAD: 'Лид',
+  CREATED: 'Создан',
+  FOR_PICKUP: 'К забору',
+  IN_PROGRESS: 'В работе',
+  PARTIALLY_DONE: 'Частично готов',
+  DONE: 'Готов',
+  DELIVERED: 'Доставлен',
+  CANCELLED: 'Отменен',
+}
+
+const PAYMENT_LABELS: Record<string, string> = {
+  TRANSFER: 'Перевод',
+  CARD: 'Карта',
+  CASH: 'Наличные',
+}
+
+const ALL_STATUSES: OrderStatus[] = ['LEAD', 'CREATED', 'FOR_PICKUP', 'IN_PROGRESS', 'PARTIALLY_DONE', 'DONE', 'DELIVERED', 'CANCELLED']
+
+function formatOrderNumber(id: number, createdAt: string): string {
+  const num = String(id).padStart(5, '0')
+  const date = new Date(createdAt).toLocaleDateString('ru')
+  return `${num} от ${date}`
+}
+
+function StatusBadge({ status }: { status: string }) {
+  return (
+    <span className={`badge badge-${status.toLowerCase()}`}>
+      {STATUS_LABELS[status] ?? status}
+    </span>
+  )
+}
+
+function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreated: (o: Order) => void }) {
+  const [form, setForm] = useState<CreateOrderRequest>({ client_name: '', comment: '' })
+  const [clients, setClients] = useState<Client[]>([])
+  const [clientSearch, setClientSearch] = useState('')
+  const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
+  const [selectedClientName, setSelectedClientName] = useState('')
+  const [showNewClient, setShowNewClient] = useState(false)
+  const [newClientType, setNewClientType] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>('INDIVIDUAL')
+  const [newClientData, setNewClientData] = useState({
+    name: '',
+    first_name: '',
+    last_name: '',
+    phone: '',
+    extra_phone: '',
+    address: '',
+    district: '',
+    inn: '',
+    contact_person: '',
+    contact_person_phone: '',
+    comment: '',
+  })
+  const [showExtraPhone, setShowExtraPhone] = useState(false)
+  const [showInn, setShowInn] = useState(false)
+  const [pickupAddress, setPickupAddress] = useState('')
+  const [deliveryAddress, setDeliveryAddress] = useState('')
+  const [pickupDistrict, setPickupDistrict] = useState('')
+  const [deliveryDistrict, setDeliveryDistrict] = useState('')
+  const [pickupDistrictAuto, setPickupDistrictAuto] = useState(false)
+  const [deliveryDistrictAuto, setDeliveryDistrictAuto] = useState(false)
+  const [pickupGeoWarn, setPickupGeoWarn] = useState('')
+  const [deliveryGeoWarn, setDeliveryGeoWarn] = useState('')
+  const [legacyId, setLegacyId] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [searchTimer, setSearchTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
+  const [geoTimer, setGeoTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
+
+  const doClientSearch = (q: string) => {
+    setClientSearch(q)
+    setSelectedClientId(null)
+    setSelectedClientName('')
+    if (searchTimer) clearTimeout(searchTimer)
+    if (!q.trim()) { setClients([]); return }
+    const timer = setTimeout(async () => {
+      try {
+        const results = await searchClients(q.trim())
+        setClients(results)
+      } catch { /* ignore */ }
+    }, 300)
+    setSearchTimer(timer)
+  }
+
+  const selectClient = (c: Client) => {
+    setSelectedClientId(c.id)
+    setSelectedClientName(c.name)
+    setClientSearch(c.name)
+    setClients([])
+    if (c.address) {
+      handlePickupAddressChange(c.address)
+      handleDeliveryAddressChange(c.address)
+    }
+  }
+
+  const doGeocode = useCallback(async (address: string, type: 'pickup' | 'delivery') => {
+    if (!address.trim()) return
+    const setDistrict = type === 'pickup' ? setPickupDistrict : setDeliveryDistrict
+    const setAuto = type === 'pickup' ? setPickupDistrictAuto : setDeliveryDistrictAuto
+    const setWarn = type === 'pickup' ? setPickupGeoWarn : setDeliveryGeoWarn
+
+    const result = await geocodeAddress(address)
+    if (!result.found) {
+      setWarn('Адрес не найден. Укажите район вручную.')
+      setAuto(false)
+      return
+    }
+    if (!result.isSPB) {
+      setWarn('Адрес не в Санкт-Петербурге. Укажите район вручную.')
+      setAuto(false)
+      return
+    }
+    if (!result.district) {
+      setWarn('Не удалось определить район. Укажите вручную.')
+      setAuto(false)
+      return
+    }
+    setDistrict(result.district)
+    setAuto(true)
+    setWarn('')
+  }, [])
+
+  const handlePickupAddressChange = (val: string) => {
+    setPickupAddress(val)
+    setPickupDistrictAuto(false)
+    setPickupGeoWarn('')
+    if (geoTimer) clearTimeout(geoTimer)
+    if (val.trim().length > 5) {
+      const t = setTimeout(() => void doGeocode(val, 'pickup'), 1000)
+      setGeoTimer(t)
+    }
+  }
+
+  const handleDeliveryAddressChange = (val: string) => {
+    setDeliveryAddress(val)
+    setDeliveryDistrictAuto(false)
+    setDeliveryGeoWarn('')
+    if (geoTimer) clearTimeout(geoTimer)
+    if (val.trim().length > 5) {
+      const t = setTimeout(() => void doGeocode(val, 'delivery'), 1000)
+      setGeoTimer(t)
+    }
+  }
+
+  const submit = async () => {
+    setLoading(true)
+    try {
+      let clientId = selectedClientId
+      let clientName = ''
+
+      if (showNewClient) {
+        if (newClientType === 'INDIVIDUAL') {
+          if (!newClientData.first_name.trim() && !newClientData.name.trim()) {
+            setError('Имя клиента обязательно')
+            setLoading(false)
+            return
+          }
+        } else {
+          if (!newClientData.name.trim()) {
+            setError('Название организации обязательно')
+            setLoading(false)
+            return
+          }
+        }
+
+        const resolvedName = newClientType === 'INDIVIDUAL'
+          ? `${newClientData.last_name} ${newClientData.first_name}`.trim() || newClientData.name.trim()
+          : newClientData.name.trim()
+
+        const clientResponse = await fetch('http://localhost:8080/api/clients', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            client_type: newClientType,
+            name: resolvedName,
+            first_name: newClientData.first_name.trim() || null,
+            last_name: newClientData.last_name.trim() || null,
+            phone: newClientData.phone.trim() || null,
+            extra_phone: newClientData.extra_phone.trim() || null,
+            address: newClientData.address.trim() || null,
+            district: newClientData.district.trim() || null,
+            inn: newClientData.inn.trim() || null,
+            contact_person: newClientData.contact_person.trim() || null,
+            contact_person_phone: newClientData.contact_person_phone.trim() || null,
+            comment: newClientData.comment.trim() || null,
+          })
+        })
+
+        if (!clientResponse.ok) {
+          setError('Ошибка при создании клиента')
+          setLoading(false)
+          return
+        }
+
+        const newClient = await clientResponse.json()
+        clientId = newClient.id
+        clientName = newClient.name
+        if (newClient.address && !pickupAddress) setPickupAddress(newClient.address)
+        if (newClient.address && !deliveryAddress) setDeliveryAddress(newClient.address)
+      } else {
+        if (!selectedClientId) {
+          setError('Введите имя клиента и выберите из списка')
+          setLoading(false)
+          return
+        }
+        clientName = selectedClientName
+      }
+
+      // Валидация районов
+      if (pickupAddress.trim() && !pickupDistrict.trim()) {
+        setError('Укажите район забора (не удалось определить автоматически)')
+        setLoading(false)
+        return
+      }
+      if (deliveryAddress.trim() && !deliveryDistrict.trim()) {
+        setError('Укажите район доставки (не удалось определить автоматически)')
+        setLoading(false)
+        return
+      }
+
+      const orderData: CreateOrderRequest = {
+        client_id: clientId,
+        client_name: clientName,
+        comment: form.comment || null,
+        pickup_address: pickupAddress.trim() || null,
+        delivery_address: deliveryAddress.trim() || null,
+        legacy_id: legacyId ? Number(legacyId) : null,
+      }
+
+      const order = await createOrder(orderData)
+      // Установить районы через updateDetails
+      if (pickupDistrict.trim() || deliveryDistrict.trim()) {
+        await updateOrderDetails(order.id, {
+          pickup_address: pickupAddress.trim() || null,
+          delivery_address: deliveryAddress.trim() || null,
+          pickup_district: pickupDistrict.trim() || null,
+          delivery_district: deliveryDistrict.trim() || null,
+        })
+      }
+      onCreated(order)
+    } catch {
+      setError('Ошибка при создании заказа')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={() => { if (confirm('Отменить создание заказа?')) onClose() }}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Новый заказ</h2>
+
+        <div className="form-group">
+          <label>Клиент</label>
+          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+            <button
+              type="button"
+              className={!showNewClient ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
+              onClick={() => setShowNewClient(false)}
+            >
+              Выбрать существующего
+            </button>
+            <button
+              type="button"
+              className={showNewClient ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
+              onClick={() => setShowNewClient(true)}
+            >
+              Создать нового
+            </button>
+          </div>
+
+          {!showNewClient ? (
+            <div style={{ position: 'relative' }}>
+              <input
+                value={clientSearch}
+                onChange={e => doClientSearch(e.target.value)}
+                placeholder="Начните вводить имя, телефон, организацию..."
+                autoComplete="off"
+              />
+              {clients.length > 0 && !selectedClientId && (
+                <div style={{
+                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
+                  background: '#fff', border: '1px solid #ddd', borderRadius: 4,
+                  maxHeight: 200, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
+                }}>
+                  {clients.map(c => (
+                    <div
+                      key={c.id}
+                      onClick={() => selectClient(c)}
+                      style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#f0f6ff')}
+                      onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
+                    >
+                      <div><strong>{c.name}</strong>{c.client_type === 'LEGAL_ENTITY' ? ' (юр.)' : ''}</div>
+                      <div style={{ fontSize: '0.85em', color: '#666' }}>
+                        {c.phone || ''}{c.address ? ` · ${c.address}` : ''}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {selectedClientId && (
+                <div style={{ marginTop: 4, fontSize: '0.9em', color: '#27ae60' }}>
+                  Выбран: {selectedClientName} (#{selectedClientId})
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <div className="form-group">
+                <label>Тип клиента</label>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+                  <button type="button" className={newClientType === 'INDIVIDUAL' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'} onClick={() => setNewClientType('INDIVIDUAL')}>Физ. лицо</button>
+                  <button type="button" className={newClientType === 'LEGAL_ENTITY' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'} onClick={() => setNewClientType('LEGAL_ENTITY')}>Юр. лицо</button>
+                </div>
+              </div>
+
+              {newClientType === 'INDIVIDUAL' ? (
+                <>
+                  <div className="form-group">
+                    <label>Фамилия</label>
+                    <input value={newClientData.last_name} onChange={e => setNewClientData(d => ({ ...d, last_name: e.target.value }))} placeholder="Фамилия" />
+                  </div>
+                  <div className="form-group">
+                    <label>Имя *</label>
+                    <input value={newClientData.first_name} onChange={e => setNewClientData(d => ({ ...d, first_name: e.target.value }))} placeholder="Имя" />
+                  </div>
+                  <div className="form-group">
+                    <label>Телефон</label>
+                    <input value={newClientData.phone} onChange={e => setNewClientData(d => ({ ...d, phone: e.target.value }))} placeholder="Телефон" />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="form-group">
+                    <label>Название организации *</label>
+                    <input value={newClientData.name} onChange={e => setNewClientData(d => ({ ...d, name: e.target.value }))} placeholder="Название организации" />
+                  </div>
+                  <div className="form-group">
+                    <label>Контактное лицо</label>
+                    <input value={newClientData.contact_person} onChange={e => setNewClientData(d => ({ ...d, contact_person: e.target.value }))} placeholder="ФИО контактного лица" />
+                  </div>
+                  <div className="form-group">
+                    <label>Телефон контактного лица</label>
+                    <input value={newClientData.contact_person_phone} onChange={e => setNewClientData(d => ({ ...d, contact_person_phone: e.target.value }))} placeholder="Телефон контактного лица" />
+                  </div>
+                  <div className="form-group">
+                    <label>Телефон организации</label>
+                    <input value={newClientData.phone} onChange={e => setNewClientData(d => ({ ...d, phone: e.target.value }))} placeholder="Телефон организации" />
+                  </div>
+                  <div style={{ marginBottom: 8 }}>
+                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                      <input type="checkbox" style={{ width: 'auto' }} checked={showInn} onChange={e => setShowInn(e.target.checked)} />
+                      Указать ИНН
+                    </label>
+                  </div>
+                  {showInn && (
+                    <div className="form-group">
+                      <label>ИНН</label>
+                      <input value={newClientData.inn} onChange={e => setNewClientData(d => ({ ...d, inn: e.target.value }))} placeholder="ИНН" />
+                    </div>
+                  )}
+                </>
+              )}
+
+              <div style={{ marginBottom: 8 }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={showExtraPhone} onChange={e => setShowExtraPhone(e.target.checked)} />
+                  Дополнительный телефон
+                </label>
+              </div>
+              {showExtraPhone && (
+                <div className="form-group">
+                  <label>Доп. телефон</label>
+                  <input value={newClientData.extra_phone} onChange={e => setNewClientData(d => ({ ...d, extra_phone: e.target.value }))} placeholder="Дополнительный телефон" />
+                </div>
+              )}
+
+              <div className="form-group">
+                <label>Адрес</label>
+                <textarea rows={2} value={newClientData.address} onChange={e => setNewClientData(d => ({ ...d, address: e.target.value }))} placeholder="Адрес" />
+              </div>
+              <div className="form-group">
+                <label>Район</label>
+                <input value={newClientData.district} onChange={e => setNewClientData(d => ({ ...d, district: e.target.value }))} placeholder="Район" />
+              </div>
+              <div className="form-group">
+                <label>Комментарий</label>
+                <textarea rows={2} value={newClientData.comment} onChange={e => setNewClientData(d => ({ ...d, comment: e.target.value }))} placeholder="Комментарий" />
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div className="form-group">
+          <label>Адрес забора</label>
+          <input
+            value={pickupAddress}
+            onChange={e => handlePickupAddressChange(e.target.value)}
+            placeholder="Введите улицу и дом..."
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+            <input
+              value={pickupDistrict}
+              onChange={e => { setPickupDistrict(e.target.value); setPickupDistrictAuto(false); setPickupGeoWarn('') }}
+              placeholder="Район"
+              style={{ width: 180 }}
+            />
+            {pickupDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
+          </div>
+          {pickupGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{pickupGeoWarn}</div>}
+        </div>
+        <div className="form-group">
+          <label>Адрес доставки</label>
+          <input
+            value={deliveryAddress}
+            onChange={e => handleDeliveryAddressChange(e.target.value)}
+            placeholder="Введите улицу и дом..."
+          />
+          <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+            <input
+              value={deliveryDistrict}
+              onChange={e => { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }}
+              placeholder="Район"
+              style={{ width: 180 }}
+            />
+            {deliveryDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
+          </div>
+          {deliveryGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{deliveryGeoWarn}</div>}
+        </div>
+        <div className="form-group">
+          <label>Legacy ID</label>
+          <input
+            type="number"
+            value={legacyId}
+            onChange={e => setLegacyId(e.target.value)}
+            placeholder="ID из старой системы (необязательно)"
+          />
+        </div>
+
+        <div className="form-group">
+          <label>Комментарий</label>
+          <textarea
+            rows={3}
+            value={form.comment ?? ''}
+            onChange={e => setForm(f => ({ ...f, comment: e.target.value }))}
+            placeholder="Необязательный комментарий"
+          />
+        </div>
+        {error && <div className="error-msg">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Отмена</button>
+          <button className="btn-primary" onClick={submit} disabled={loading}>
+            {loading ? 'Создание...' : 'Создать'}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+export default function OrdersPage() {
+  const navigate = useNavigate()
+  const [orders, setOrders] = useState<Order[]>([])
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | ''>('')
+  const [paymentFilter, setPaymentFilter] = useState('')
+  const [orderIdSearch, setOrderIdSearch] = useState('')
+  const [legacyIdSearch, setLegacyIdSearch] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [page, setPage] = useState(0)
+  const [hasMore, setHasMore] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
+  const PAGE_SIZE = 20
+
+  const load = async () => {
+    setLoading(true)
+    try {
+      const data = await getOrders(
+        statusFilter || undefined,
+        page,
+        PAGE_SIZE,
+        dateFrom || undefined,
+        dateTo || undefined,
+        legacyIdSearch ? Number(legacyIdSearch) : undefined,
+        paymentFilter || undefined,
+        orderIdSearch ? Number(orderIdSearch) : undefined,
+      )
+      setOrders(data)
+      setHasMore(data.length === PAGE_SIZE)
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { void load() }, [statusFilter, paymentFilter, orderIdSearch, legacyIdSearch, dateFrom, dateTo, page])
+
+  const handleCreated = (order: Order) => {
+    setShowCreate(false)
+    navigate(`/orders/${order.id}`)
+  }
+
+  return (
+    <div>
+      <div className="page-header">
+        <h1>Заказы</h1>
+        <button className="btn-primary" onClick={() => setShowCreate(true)}>+ Новый заказ</button>
+      </div>
+
+      <div className="filters">
+        <div className="form-group">
+          <label>Статус</label>
+          <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value as OrderStatus | ''); setPage(0) }}>
+            <option value="">Все статусы</option>
+            {ALL_STATUSES.map(s => (
+              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-group">
+          <label>Номер заказа</label>
+          <input
+            type="number"
+            value={orderIdSearch}
+            onChange={e => { setOrderIdSearch(e.target.value); setPage(0) }}
+            placeholder="Поиск по номеру"
+            style={{ minWidth: 130 }}
+          />
+        </div>
+        <div className="form-group">
+          <label>Тип оплаты</label>
+          <select value={paymentFilter} onChange={e => { setPaymentFilter(e.target.value); setPage(0) }}>
+            <option value="">Все</option>
+            <option value="CARD">Карта</option>
+            <option value="CASH">Наличные</option>
+            <option value="TRANSFER">Перевод</option>
+          </select>
+        </div>
+        <div className="form-group">
+          <label>Legacy ID</label>
+          <input
+            type="number"
+            value={legacyIdSearch}
+            onChange={e => { setLegacyIdSearch(e.target.value); setPage(0) }}
+            placeholder="Поиск по legacy ID"
+            style={{ minWidth: 140 }}
+          />
+        </div>
+        <div className="form-group">
+          <label>Дата с</label>
+          <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
+        </div>
+        <div className="form-group">
+          <label>Дата по</label>
+          <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(0) }} />
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="loading">Загрузка...</div>
+      ) : (
+        <>
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Клиент</th>
+                <th>Статус</th>
+                <th>Сумма</th>
+                <th>Оплачен</th>
+                <th>Гарантийный</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.length === 0 ? (
+                <tr><td colSpan={6} className="empty">Заказы не найдены</td></tr>
+              ) : orders.map(o => (
+                <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/orders/${o.id}`)}>
+                  <td>{formatOrderNumber(o.id, o.created_at)}{o.legacy_id ? ` (${o.legacy_id})` : ''}</td>
+                  <td>{o.client_name}</td>
+                  <td><StatusBadge status={o.status} /></td>
+                  <td>{Number(o.total_amount).toFixed(2)} &#8381;</td>
+                  <td>{o.paid ? (PAYMENT_LABELS[o.payment_type ?? ''] ?? 'Да') : '—'}</td>
+                  <td>{o.is_warranty ? 'Да' : '—'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {(page > 0 || hasMore) && (
+            <div className="pagination">
+              <button className="btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>&#8592; Назад</button>
+              <span>Стр. {page + 1}</span>
+              <button className="btn-secondary btn-sm" disabled={!hasMore} onClick={() => setPage(p => p + 1)}>Вперёд &#8594;</button>
+            </div>
+          )}
+        </>
+      )}
+
+      {showCreate && <CreateOrderModal onClose={() => setShowCreate(false)} onCreated={handleCreated} />}
+    </div>
+  )
+}

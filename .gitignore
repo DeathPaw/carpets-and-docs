@@ -1,0 +1,30 @@
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# AI tools
+.kiro/
+CLAUDE.md
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
+~$*
+
+# Backend
+backend/target/
+*.class
+*.jar
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# Test data
+myclients
+
+# Office / docs
+~$*.docx
+*.docx

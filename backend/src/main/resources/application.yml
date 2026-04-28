@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/carpet_db
+    username: glebramazanov
+    password:
+    driver-class-name: org.postgresql.Driver
+
+  # Отключаем автоматическое применение schema.sql — применяем вручную
+  sql:
+    init:
+      mode: never
+
+  jackson:
+    # Сериализация и десериализация JSON в snake_case
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+
+server:
+  port: 8080

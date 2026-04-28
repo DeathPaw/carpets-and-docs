@@ -1,0 +1,81 @@
+import client from './client'
+import type {
+  ItemType,
+  ServiceDefinition,
+  Employee,
+  CreateItemTypeRequest,
+  CreateServiceDefinitionRequest,
+  CreateEmployeeRequest,
+  UpdateEmployeeRequest,
+  PriceListEntry,
+} from '../types'
+
+// Item Types
+export const getItemTypes = () =>
+  client.get<ItemType[]>('/api/item-types').then(r => r.data)
+
+export const getItemType = (id: number) =>
+  client.get<ItemType>(`/api/item-types/${id}`).then(r => r.data)
+
+export const createItemType = (data: CreateItemTypeRequest) =>
+  client.post<ItemType>('/api/item-types', data).then(r => r.data)
+
+export const updateItemType = (id: number, data: CreateItemTypeRequest) =>
+  client.put<ItemType>(`/api/item-types/${id}`, data).then(r => r.data)
+
+export const deleteItemType = (id: number) =>
+  client.delete(`/api/item-types/${id}`)
+
+// Price List
+export const getPriceList = (itemTypeId?: number) => {
+  const params = itemTypeId ? { params: { itemTypeId } } : {}
+  return client.get<PriceListEntry[]>('/api/price-list', params).then(r => r.data)
+}
+
+export const updatePriceListEntry = (id: number, price: number | null) =>
+  client.patch<PriceListEntry>(`/api/price-list/${id}`, { price }).then(r => r.data)
+
+// Service Definitions
+export const getServiceDefinitions = () =>
+  client.get<ServiceDefinition[]>('/api/service-definitions').then(r => r.data)
+
+export const createServiceDefinition = (data: CreateServiceDefinitionRequest) =>
+  client.post<ServiceDefinition>('/api/service-definitions', data).then(r => r.data)
+
+export const updateServiceDefinition = (id: number, data: CreateServiceDefinitionRequest) =>
+  client.put<ServiceDefinition>(`/api/service-definitions/${id}`, data).then(r => r.data)
+
+export const deleteServiceDefinition = (id: number) =>
+  client.delete(`/api/service-definitions/${id}`)
+
+// Employees
+export const getEmployees = () =>
+  client.get<Employee[]>('/api/employees').then(r => r.data)
+
+export const createEmployee = (data: CreateEmployeeRequest) =>
+  client.post<Employee>('/api/employees', data).then(r => r.data)
+
+export const updateEmployee = (id: number, data: UpdateEmployeeRequest) =>
+  client.put<Employee>(`/api/employees/${id}`, data).then(r => r.data)
+
+export const deactivateEmployee = (id: number) =>
+  client.patch(`/api/employees/${id}/deactivate`)
+
+export const activateEmployee = (id: number) =>
+  client.patch(`/api/employees/${id}/activate`)
+
+export const getEmployeesAll = (includeInactive?: boolean) =>
+  client.get<Employee[]>('/api/employees', { params: includeInactive ? { includeInactive: true } : {} }).then(r => r.data)
+
+// Price Modifiers
+export const getPriceModifiers = () =>
+  client.get<import('../types').PriceModifier[]>('/api/price-modifiers').then(r => r.data)
+
+export const createPriceModifier = (data: { name: string; percent: number }) =>
+  client.post<import('../types').PriceModifier>('/api/price-modifiers', data).then(r => r.data)
+
+export const updatePriceModifier = (id: number, data: { name: string; percent: number }) =>
+  client.put<import('../types').PriceModifier>(`/api/price-modifiers/${id}`, data).then(r => r.data)
+
+export const deletePriceModifier = (id: number) =>
+  client.delete(`/api/price-modifiers/${id}`)
