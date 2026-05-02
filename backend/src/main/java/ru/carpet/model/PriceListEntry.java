@@ -8,6 +8,7 @@ public record PriceListEntry(
         Long itemTypeId,
         Long serviceDefId,
         BigDecimal price,
+        BigDecimal costPrice,
         boolean isActive,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

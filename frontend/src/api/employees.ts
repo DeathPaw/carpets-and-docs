@@ -1,12 +1,10 @@
-import { OrderItemService } from '../types'
-
-const API_BASE = 'http://localhost:8080/api'
+import client from './client'
+import type { OrderItemService } from '../types'
 
 export async function getEmployeeServices(employeeId: number, status?: string): Promise<OrderItemService[]> {
-  const params = new URLSearchParams()
-  if (status) params.set('status', status)
-  
-  const response = await fetch(`${API_BASE}/employees/${employeeId}/services?${params}`)
-  if (!response.ok) throw new Error('Failed to fetch employee services')
-  return response.json()
+  const params: Record<string, string> = {}
+  if (status) params.status = status
+
+  const response = await client.get<OrderItemService[]>(`/api/employees/${employeeId}/services`, { params })
+  return response.data
 }

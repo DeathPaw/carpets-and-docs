@@ -1,14 +1,6 @@
 import { useEffect, useState } from 'react'
 import client from '../api/client'
-
-interface AuditLogEntry {
-  id: number
-  entity_type: string
-  entity_id: number | null
-  action: string
-  description: string
-  occurred_at: string
-}
+import type { AuditLogEntry } from '../types'
 
 const ENTITY_LABELS: Record<string, string> = {
   ORDER: 'Заказ',

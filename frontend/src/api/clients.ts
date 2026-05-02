@@ -27,3 +27,9 @@ export const addClientModifier = (clientId: number, modifierId: number) =>
 
 export const removeClientModifier = (clientId: number, modifierId: number) =>
   apiClient.delete(`/api/clients/${clientId}/modifiers/${modifierId}`)
+
+export const getClientEvents = (clientId: number) =>
+  apiClient.get<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>(`/api/clients/${clientId}/events`).then(r => r.data)
+
+export const addClientEvent = (clientId: number, eventType: string, description: string) =>
+  apiClient.post(`/api/clients/${clientId}/events`, { event_type: eventType, description })

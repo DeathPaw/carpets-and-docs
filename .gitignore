@@ -28,3 +28,7 @@ myclients
 # Office / docs
 ~$*.docx
 *.docx
+
+# Placeholder files — каталоги наполнены реальным кодом
+.gitkeep
+**/.gitkeep

@@ -30,6 +30,8 @@ public class PriceListController {
     public PriceListEntryDto updatePrice(@PathVariable Long id, @RequestBody Map<String, Object> body) {
         Object priceObj = body.get("price");
         BigDecimal price = priceObj != null ? new BigDecimal(priceObj.toString()) : null;
-        return service.updatePrice(id, price);
+        Object costPriceObj = body.get("cost_price");
+        BigDecimal costPrice = costPriceObj != null ? new BigDecimal(costPriceObj.toString()) : null;
+        return service.updatePrice(id, price, costPrice);
     }
 }

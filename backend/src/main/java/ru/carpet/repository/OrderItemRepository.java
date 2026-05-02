@@ -113,14 +113,14 @@ public class OrderItemRepository {
 
     public void updateStatus(Long id, OrderItemStatus status) {
         jdbc.update(
-                "UPDATE order_items SET status = :status, updated_at = NOW() WHERE id = :id",
+                "UPDATE order_items SET status = :status, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("status", status.name(), "id", id)
         );
     }
 
     public void updatePrice(Long id, BigDecimal price) {
         jdbc.update(
-                "UPDATE order_items SET price = :price, updated_at = NOW() WHERE id = :id",
+                "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("price", price, "id", id)
         );
     }
@@ -136,7 +136,7 @@ public class OrderItemRepository {
                 .addValue("runningMeters", runningMeters);
         jdbc.update(
                 "UPDATE order_items SET length = :length, width = :width, weight = :weight, " +
-                "area = :area, running_meters = :runningMeters, updated_at = NOW() WHERE id = :id",
+                "area = :area, running_meters = :runningMeters, version = version + 1, updated_at = NOW() WHERE id = :id",
                 params
         );
     }
@@ -147,7 +147,7 @@ public class OrderItemRepository {
                 .addValue("description", description)
                 .addValue("defects", defects);
         jdbc.update(
-                "UPDATE order_items SET description = :description, defects = :defects, updated_at = NOW() WHERE id = :id",
+                "UPDATE order_items SET description = :description, defects = :defects, version = version + 1, updated_at = NOW() WHERE id = :id",
                 params
         );
     }

@@ -2,6 +2,7 @@ package ru.carpet.service;
 
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.exception.EntityNotFoundException;
 import ru.carpet.model.*;
 import ru.carpet.repository.*;
@@ -41,6 +42,7 @@ public class OrderItemService {
         this.priceListRepository = priceListRepository;
     }
 
+    @Transactional
     public OrderItem addItem(Long orderId, Long itemTypeId, String description) {
         orderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
@@ -93,6 +95,7 @@ public class OrderItemService {
     }
 
     /** Обновление параметров ковра (длина, ширина, вес, площадь, погонные метры) */
+    @Transactional
     public OrderItem updateDimensions(Long itemId, BigDecimal length, BigDecimal width, BigDecimal weight,
                                        BigDecimal area, BigDecimal runningMeters) {
         OrderItem item = findById(itemId);
@@ -117,6 +120,7 @@ public class OrderItemService {
      * Автоматический пересчёт статуса позиции на основе статусов её услуг.
      * Вызывается после изменения статуса услуги.
      */
+    @Transactional
     public void recalculateItemStatus(Long orderItemId) {
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(orderItemId);
         if (services.isEmpty()) {
@@ -136,6 +140,7 @@ public class OrderItemService {
      * Автоматический пересчёт стоимости позиции на основе стоимости её услуг.
      * Вызывается после изменения стоимости услуги.
      */
+    @Transactional
     public void recalculateItemPrice(Long orderItemId) {
         BigDecimal totalServicePrice = serviceInstanceRepository.sumPriceByOrderItemId(orderItemId);
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
@@ -148,6 +153,7 @@ public class OrderItemService {
      * Пересчет стоимости всех услуг позиции на основе новых параметров.
      * Пересчитываются только услуги с is_manual_price = false.
      */
+    @Transactional
     public void recalculateServicePrices(Long orderItemId) {
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(orderItemId);

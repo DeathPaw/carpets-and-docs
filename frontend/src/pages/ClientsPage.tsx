@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier } from '../api/clients'
+import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier, getClientEvents, addClientEvent } from '../api/clients'
 import { getPriceModifiers } from '../api/references'
+import { geocodeAddress } from '../api/geocode'
+import { useToast } from '../components/Toast'
 import type { Client, Order, CreateClientRequest } from '../types'
 
 function formatOrderNumber(id: number, createdAt: string): string {
@@ -39,10 +41,30 @@ function CreateClientModal({
   })
   const [showExtraPhone, setShowExtraPhone] = useState(!!editClient?.extra_phone)
   const [showInn, setShowInn] = useState(!!editClient?.inn)
+  const [districtAuto, setDistrictAuto] = useState(false)
+  const [geoTimer, setGeoTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [clientMods, setClientMods] = useState<number[]>([])
   const [allMods, setAllMods] = useState<import('../types').PriceModifier[]>([])
+
+  const doGeocode = useCallback(async (address: string) => {
+    const result = await geocodeAddress(address)
+    if (result.found && result.isSPB && result.district) {
+      setForm(f => ({ ...f, district: result.district! }))
+      setDistrictAuto(true)
+    }
+  }, [])
+
+  const handleAddressChange = (val: string) => {
+    setForm(f => ({ ...f, address: val }))
+    setDistrictAuto(false)
+    if (geoTimer) clearTimeout(geoTimer)
+    if (val.trim().length > 5) {
+      const t = setTimeout(() => void doGeocode(val), 1000)
+      setGeoTimer(t)
+    }
+  }
 
   useEffect(() => {
     getPriceModifiers().then(setAllMods).catch(() => {})
@@ -90,8 +112,13 @@ function CreateClientModal({
   }
 
   return (
-    <div className="modal-overlay" onClick={() => { if (confirm(editClient ? 'Отменить редактирование клиента?' : 'Отменить создание клиента?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
+        <button
+          onClick={onClose}
+          style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', fontSize: '1.5em', cursor: 'pointer', color: '#888', lineHeight: 1 }}
+          title="Закрыть"
+        >&times;</button>
         <h2>{editClient ? 'Редактировать клиента' : 'Новый клиент'}</h2>
 
         <div className="form-group">
@@ -216,17 +243,21 @@ function CreateClientModal({
           <textarea
             rows={2}
             value={form.address || ''}
-            onChange={e => setForm(f => ({ ...f, address: e.target.value }))}
+            onChange={e => handleAddressChange(e.target.value)}
             placeholder="Адрес"
           />
         </div>
         <div className="form-group">
           <label>Район</label>
-          <input
-            value={form.district || ''}
-            onChange={e => setForm(f => ({ ...f, district: e.target.value }))}
-            placeholder="Район"
-          />
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <input
+              value={form.district || ''}
+              onChange={e => { setForm(f => ({ ...f, district: e.target.value })); setDistrictAuto(false) }}
+              placeholder="Район"
+              style={{ flex: 1 }}
+            />
+            {districtAuto && <span style={{ fontSize: '0.8em', color: '#27ae60', whiteSpace: 'nowrap' }}>определён автоматически</span>}
+          </div>
         </div>
         <div className="form-group">
           <label>Комментарий</label>
@@ -238,44 +269,43 @@ function CreateClientModal({
           />
         </div>
 
-        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', marginBottom: 12 }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" style={{ width: 'auto' }} checked={form.is_pensioner || false} onChange={e => setForm(f => ({ ...f, is_pensioner: e.target.checked }))} />
-            Пенсионер
-          </label>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" style={{ width: 'auto' }} checked={form.is_regular || false} onChange={e => setForm(f => ({ ...f, is_regular: e.target.checked }))} />
-            Постоянный клиент
-          </label>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" style={{ width: 'auto' }} checked={form.is_problem || false} onChange={e => setForm(f => ({ ...f, is_problem: e.target.checked }))} />
-            Проблемный
-          </label>
-        </div>
-
-        {editClient && allMods.length > 0 && (
+        {allMods.length > 0 && (
           <div style={{ marginBottom: 12 }}>
-            <label style={{ fontWeight: 600, marginBottom: 4, display: 'block' }}>Модификаторы цены:</label>
-            <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-              {allMods.map(m => (
-                <label key={m.id} style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    style={{ width: 'auto' }}
-                    checked={clientMods.includes(m.id)}
-                    onChange={async (e) => {
-                      if (e.target.checked) {
-                        await addClientModifier(editClient.id, m.id)
-                        setClientMods(prev => [...prev, m.id])
-                      } else {
+            <label style={{ fontWeight: 600, marginBottom: 6, display: 'block' }}>Модификаторы цены:</label>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              {allMods.map(m => {
+                const active = clientMods.includes(m.id)
+                const color = m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888'
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={async () => {
+                      if (!editClient) return
+                      if (active) {
                         await removeClientModifier(editClient.id, m.id)
                         setClientMods(prev => prev.filter(id => id !== m.id))
+                      } else {
+                        await addClientModifier(editClient.id, m.id)
+                        setClientMods(prev => [...prev, m.id])
                       }
                     }}
-                  />
-                  {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
-                </label>
-              ))}
+                    disabled={!editClient}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: 4,
+                      border: `2px solid ${active ? color : '#ddd'}`,
+                      background: active ? (m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5') : '#fff',
+                      color: active ? color : '#999',
+                      fontWeight: active ? 600 : 400,
+                      cursor: editClient ? 'pointer' : 'default',
+                      fontSize: '0.9em',
+                    }}
+                  >
+                    {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                  </button>
+                )
+              })}
             </div>
           </div>
         )}
@@ -319,7 +349,7 @@ function ClientOrdersModal({
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal large" onClick={e => e.stopPropagation()}>
+      <div className="modal large" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
         <h2>Заказы клиента: {client.name}</h2>
         {loading ? (
           <div className="loading">Загрузка...</div>
@@ -369,12 +399,142 @@ function ClientOrdersModal({
   )
 }
 
+function ClientCardModal({
+  client,
+  onClose,
+  onEdit,
+  onShowOrders,
+}: {
+  client: Client
+  onClose: () => void
+  onEdit: (c: Client) => void
+  onShowOrders: (c: Client) => void
+}) {
+  const [clientMods, setClientMods] = useState<import('../types').PriceModifier[]>([])
+  const [events, setEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
+  const [newNote, setNewNote] = useState('')
+
+  useEffect(() => {
+    getClientModifiers(client.id).then(setClientMods).catch(() => {})
+    getClientEvents(client.id).then(evts => setEvents(evts.slice(0, 10))).catch(() => {})
+  }, [client.id])
+
+  const handleAddNote = () => {
+    if (!newNote.trim()) return
+    addClientEvent(client.id, 'NOTE', newNote.trim())
+      .then(() => getClientEvents(client.id))
+      .then(evts => { setEvents(evts.slice(0, 10)); setNewNote('') })
+      .catch(() => {})
+  }
+
+  const isLegal = client.client_type === 'LEGAL_ENTITY'
+
+  const eventTypeColors: Record<string, string> = { NOTE: '#888', CALL: '#3498db', COMPLAINT: '#e74c3c', ORDER_CREATED: '#27ae60', WARRANTY: '#f39c12' }
+  const eventTypeLabels: Record<string, string> = { NOTE: 'Заметка', CALL: 'Звонок', COMPLAINT: 'Жалоба', ORDER_CREATED: 'Заказ', WARRANTY: 'Гарантия' }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal large" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+          <div>
+            <h2 style={{ margin: 0 }}>{client.name}</h2>
+            <div style={{ color: '#888', fontSize: '0.9em', marginTop: 4 }}>
+              {isLegal ? 'Юридическое лицо' : 'Физическое лицо'} &middot; #{client.id}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-primary btn-sm" onClick={() => { onClose(); onEdit(client) }}>Редактировать</button>
+            <button className="btn-secondary btn-sm" onClick={() => { onClose(); onShowOrders(client) }}>Заказы клиента</button>
+          </div>
+        </div>
+
+        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+          <div style={{ flex: '1 1 250px' }}>
+            {!isLegal && (
+              <>
+                <div style={{ marginBottom: 8 }}><strong>Фамилия:</strong> {client.last_name || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Имя:</strong> {client.first_name || 'не указано'}</div>
+              </>
+            )}
+            {isLegal && (
+              <>
+                <div style={{ marginBottom: 8 }}><strong>ИНН:</strong> {client.inn || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Контактное лицо:</strong> {client.contact_person || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Тел. контакта:</strong> {client.contact_person_phone || 'не указано'}</div>
+              </>
+            )}
+            <div style={{ marginBottom: 8 }}><strong>Телефон:</strong> {client.phone || 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Доп. телефон:</strong> {client.extra_phone || 'не указано'}</div>
+          </div>
+          <div style={{ flex: '1 1 250px' }}>
+            <div style={{ marginBottom: 8 }}><strong>Адрес:</strong> {client.address || 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Район:</strong> {client.district || 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Комментарий:</strong> {client.comment || 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Создан:</strong> {new Date(client.created_at).toLocaleDateString('ru')}</div>
+          </div>
+        </div>
+
+        {clientMods.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <strong>Модификаторы цены:</strong>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+              {clientMods.map(m => (
+                <span key={m.id} style={{
+                  padding: '3px 8px', borderRadius: 4, fontSize: '0.85em', fontWeight: 600,
+                  color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
+                  background: m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
+                }}>
+                  {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Client Events */}
+        <div style={{ marginTop: 16 }}>
+          <strong>События клиента</strong>
+          <div style={{ display: 'flex', gap: 4, marginTop: 8, marginBottom: 8 }}>
+            <input
+              value={newNote}
+              onChange={e => setNewNote(e.target.value)}
+              placeholder="Добавить заметку..."
+              style={{ flex: 1 }}
+              onKeyDown={e => { if (e.key === 'Enter') handleAddNote() }}
+            />
+            <button className="btn-primary btn-sm" disabled={!newNote.trim()} onClick={handleAddNote}>Добавить</button>
+          </div>
+          <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+            {events.length === 0 ? (
+              <div style={{ color: '#999', fontSize: '0.9em' }}>Нет событий</div>
+            ) : events.map(ev => (
+              <div key={ev.id} style={{ display: 'flex', gap: 8, padding: '4px 0', borderBottom: '1px solid #f0f0f0', fontSize: '0.85em' }}>
+                <span style={{ color: eventTypeColors[ev.event_type] || '#888', fontWeight: 600, minWidth: 60 }}>
+                  {eventTypeLabels[ev.event_type] || ev.event_type}
+                </span>
+                <span style={{ flex: 1 }}>{ev.description}</span>
+                <span style={{ color: '#999', whiteSpace: 'nowrap' }}>{new Date(ev.created_at).toLocaleDateString('ru')}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="modal-actions" style={{ marginTop: 16 }}>
+          <button className="btn-secondary" onClick={onClose}>Закрыть</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function ClientsPage() {
+  const { showToast } = useToast()
   const [clients, setClients] = useState<Client[]>([])
   const [loading, setLoading] = useState(true)
   const [showCreate, setShowCreate] = useState(false)
   const [editClient, setEditClient] = useState<Client | null>(null)
   const [showOrders, setShowOrders] = useState<Client | null>(null)
+  const [viewClient, setViewClient] = useState<Client | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const [tab, setTab] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>('INDIVIDUAL')
@@ -384,8 +544,9 @@ export default function ClientsPage() {
     try {
       const data = await getClients()
       setClients(data)
-    } catch {
-      // ignore
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки клиентов'
+      showToast(msg, 'error')
     } finally {
       setLoading(false)
     }
@@ -402,8 +563,9 @@ export default function ClientsPage() {
         try {
           const results = await searchClients(q.trim())
           setClients(results)
-        } catch {
-          // ignore
+        } catch (e: unknown) {
+          const msg = (e as any)?.response?.data?.message || 'Ошибка поиска клиентов'
+          showToast(msg, 'error')
         } finally {
           setLoading(false)
         }
@@ -432,15 +594,13 @@ export default function ClientsPage() {
           <th>Доп. телефон</th>
           <th>Адрес</th>
           <th>Район</th>
-          <th>Метки</th>
-          <th>Действия</th>
         </tr>
       </thead>
       <tbody>
         {list.length === 0 ? (
-          <tr><td colSpan={8} className="empty">Клиенты не найдены</td></tr>
+          <tr><td colSpan={6} className="empty">Клиенты не найдены</td></tr>
         ) : list.map(c => (
-          <tr key={c.id}>
+          <tr key={c.id} onClick={() => setViewClient(c)} style={{ cursor: 'pointer' }}>
             <td>{c.id}</td>
             <td>
               {c.name}
@@ -450,19 +610,6 @@ export default function ClientsPage() {
             <td>{c.extra_phone || '—'}</td>
             <td>{c.address || '—'}</td>
             <td>{c.district || '—'}</td>
-            <td>
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {c.is_regular && <span className="badge badge-done">Постоянный</span>}
-                {c.is_pensioner && <span className="badge badge-lead">Пенсионер</span>}
-                {c.is_problem && <span className="badge badge-cancelled">Проблемный</span>}
-              </div>
-            </td>
-            <td>
-              <div className="actions">
-                <button className="btn-secondary btn-sm" onClick={() => setShowOrders(c)}>Заказы</button>
-                <button className="btn-secondary btn-sm" onClick={() => setEditClient(c)}>Изменить</button>
-              </div>
-            </td>
           </tr>
         ))}
       </tbody>
@@ -480,15 +627,13 @@ export default function ClientsPage() {
           <th>Тел. контакта</th>
           <th>Телефон</th>
           <th>Адрес</th>
-          <th>Метки</th>
-          <th>Действия</th>
         </tr>
       </thead>
       <tbody>
         {list.length === 0 ? (
-          <tr><td colSpan={9} className="empty">Клиенты не найдены</td></tr>
+          <tr><td colSpan={7} className="empty">Клиенты не найдены</td></tr>
         ) : list.map(c => (
-          <tr key={c.id}>
+          <tr key={c.id} onClick={() => setViewClient(c)} style={{ cursor: 'pointer' }}>
             <td>{c.id}</td>
             <td>
               {c.name}
@@ -499,18 +644,6 @@ export default function ClientsPage() {
             <td>{c.contact_person_phone || '—'}</td>
             <td>{c.phone || '—'}</td>
             <td>{c.address || '—'}</td>
-            <td>
-              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                {c.is_regular && <span className="badge badge-done">Постоянный</span>}
-                {c.is_problem && <span className="badge badge-cancelled">Проблемный</span>}
-              </div>
-            </td>
-            <td>
-              <div className="actions">
-                <button className="btn-secondary btn-sm" onClick={() => setShowOrders(c)}>Заказы</button>
-                <button className="btn-secondary btn-sm" onClick={() => setEditClient(c)}>Изменить</button>
-              </div>
-            </td>
           </tr>
         ))}
       </tbody>
@@ -575,6 +708,15 @@ export default function ClientsPage() {
         <ClientOrdersModal
           client={showOrders}
           onClose={() => setShowOrders(null)}
+        />
+      )}
+
+      {viewClient && (
+        <ClientCardModal
+          client={viewClient}
+          onClose={() => setViewClient(null)}
+          onEdit={(c) => { setViewClient(null); setEditClient(c) }}
+          onShowOrders={(c) => { setViewClient(null); setShowOrders(c) }}
         />
       )}
     </div>

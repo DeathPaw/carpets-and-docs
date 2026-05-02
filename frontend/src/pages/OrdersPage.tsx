@@ -1,8 +1,9 @@
 import { useEffect, useState, useCallback } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getOrders, createOrder, updateOrderDetails } from '../api/orders'
-import { searchClients } from '../api/clients'
+import { searchClients, createClient } from '../api/clients'
 import { geocodeAddress } from '../api/geocode'
+import { useToast } from '../components/Toast'
 import type { Order, OrderStatus, CreateOrderRequest, Client } from '../types'
 
 const STATUS_LABELS: Record<string, string> = {
@@ -61,6 +62,8 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
   })
   const [showExtraPhone, setShowExtraPhone] = useState(false)
   const [showInn, setShowInn] = useState(false)
+  const [customAddress, setCustomAddress] = useState(false)
+  const [sameAddress, setSameAddress] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
   const [deliveryAddress, setDeliveryAddress] = useState('')
   const [pickupDistrict, setPickupDistrict] = useState('')
@@ -95,10 +98,6 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
     setSelectedClientName(c.name)
     setClientSearch(c.name)
     setClients([])
-    if (c.address) {
-      handlePickupAddressChange(c.address)
-      handleDeliveryAddressChange(c.address)
-    }
   }
 
   const doGeocode = useCallback(async (address: string, type: 'pickup' | 'delivery') => {
@@ -175,32 +174,27 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
           ? `${newClientData.last_name} ${newClientData.first_name}`.trim() || newClientData.name.trim()
           : newClientData.name.trim()
 
-        const clientResponse = await fetch('http://localhost:8080/api/clients', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
+        let newClient: Client
+        try {
+          newClient = await createClient({
             client_type: newClientType,
             name: resolvedName,
-            first_name: newClientData.first_name.trim() || null,
-            last_name: newClientData.last_name.trim() || null,
-            phone: newClientData.phone.trim() || null,
-            extra_phone: newClientData.extra_phone.trim() || null,
-            address: newClientData.address.trim() || null,
-            district: newClientData.district.trim() || null,
-            inn: newClientData.inn.trim() || null,
-            contact_person: newClientData.contact_person.trim() || null,
-            contact_person_phone: newClientData.contact_person_phone.trim() || null,
-            comment: newClientData.comment.trim() || null,
+            first_name: newClientData.first_name.trim() || undefined,
+            last_name: newClientData.last_name.trim() || undefined,
+            phone: newClientData.phone.trim() || undefined,
+            extra_phone: newClientData.extra_phone.trim() || undefined,
+            address: newClientData.address.trim() || undefined,
+            district: newClientData.district.trim() || undefined,
+            inn: newClientData.inn.trim() || undefined,
+            contact_person: newClientData.contact_person.trim() || undefined,
+            contact_person_phone: newClientData.contact_person_phone.trim() || undefined,
+            comment: newClientData.comment.trim() || undefined,
           })
-        })
-
-        if (!clientResponse.ok) {
+        } catch {
           setError('Ошибка при создании клиента')
           setLoading(false)
           return
         }
-
-        const newClient = await clientResponse.json()
         clientId = newClient.id
         clientName = newClient.name
         if (newClient.address && !pickupAddress) setPickupAddress(newClient.address)
@@ -214,13 +208,22 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
         clientName = selectedClientName
       }
 
-      // Валидация районов
-      if (pickupAddress.trim() && !pickupDistrict.trim()) {
-        setError('Укажите район забора (не удалось определить автоматически)')
+      // Адреса: если customAddress — берём из полей, иначе из адреса клиента
+      const clientAddr = showNewClient ? newClientData.address.trim() : (clients.find(c => c.id === clientId)?.address || '')
+      const clientDist = showNewClient ? newClientData.district.trim() : ''
+
+      const finalPickupAddress = customAddress ? pickupAddress.trim() : clientAddr
+      const finalPickupDistrict = customAddress ? pickupDistrict.trim() : clientDist
+      const finalDeliveryAddress = customAddress ? (sameAddress ? pickupAddress.trim() : deliveryAddress.trim()) : clientAddr
+      const finalDeliveryDistrict = customAddress ? (sameAddress ? pickupDistrict.trim() : deliveryDistrict.trim()) : clientDist
+
+      // Валидация районов (только если адрес заполнен)
+      if (finalPickupAddress && !finalPickupDistrict) {
+        setError('Укажите район (не удалось определить автоматически)')
         setLoading(false)
         return
       }
-      if (deliveryAddress.trim() && !deliveryDistrict.trim()) {
+      if (finalDeliveryAddress && !finalDeliveryDistrict && finalDeliveryAddress !== finalPickupAddress) {
         setError('Укажите район доставки (не удалось определить автоматически)')
         setLoading(false)
         return
@@ -230,19 +233,19 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
         client_id: clientId,
         client_name: clientName,
         comment: form.comment || null,
-        pickup_address: pickupAddress.trim() || null,
-        delivery_address: deliveryAddress.trim() || null,
+        pickup_address: finalPickupAddress || null,
+        delivery_address: finalDeliveryAddress || null,
         legacy_id: legacyId ? Number(legacyId) : null,
       }
 
       const order = await createOrder(orderData)
       // Установить районы через updateDetails
-      if (pickupDistrict.trim() || deliveryDistrict.trim()) {
+      if (finalPickupDistrict || finalDeliveryDistrict) {
         await updateOrderDetails(order.id, {
-          pickup_address: pickupAddress.trim() || null,
-          delivery_address: deliveryAddress.trim() || null,
-          pickup_district: pickupDistrict.trim() || null,
-          delivery_district: deliveryDistrict.trim() || null,
+          pickup_address: finalPickupAddress || null,
+          delivery_address: finalDeliveryAddress || null,
+          pickup_district: finalPickupDistrict || null,
+          delivery_district: finalDeliveryDistrict || finalPickupDistrict || null,
         })
       }
       onCreated(order)
@@ -254,8 +257,13 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
   }
 
   return (
-    <div className="modal-overlay" onClick={() => { if (confirm('Отменить создание заказа?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-overlay">
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
+        <button
+          onClick={onClose}
+          style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', fontSize: '1.5em', cursor: 'pointer', color: '#888', lineHeight: 1 }}
+          title="Закрыть"
+        >&times;</button>
         <h2>Новый заказ</h2>
 
         <div className="form-group">
@@ -400,42 +408,89 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
           )}
         </div>
 
-        <div className="form-group">
-          <label>Адрес забора</label>
-          <input
-            value={pickupAddress}
-            onChange={e => handlePickupAddressChange(e.target.value)}
-            placeholder="Введите улицу и дом..."
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
-            <input
-              value={pickupDistrict}
-              onChange={e => { setPickupDistrict(e.target.value); setPickupDistrictAuto(false); setPickupGeoWarn('') }}
-              placeholder="Район"
-              style={{ width: 180 }}
-            />
-            {pickupDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
-          </div>
-          {pickupGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{pickupGeoWarn}</div>}
+        <div style={{ marginBottom: 8 }}>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={customAddress} onChange={e => {
+              setCustomAddress(e.target.checked)
+              if (!e.target.checked) {
+                // Сбрасываем адреса заказа — будут браться из клиента
+                setPickupAddress('')
+                setPickupDistrict('')
+                setPickupDistrictAuto(false)
+                setPickupGeoWarn('')
+                setDeliveryAddress('')
+                setDeliveryDistrict('')
+                setDeliveryDistrictAuto(false)
+                setDeliveryGeoWarn('')
+                setSameAddress(true)
+              }
+            }} />
+            Указать другие адреса для заказа
+          </label>
         </div>
-        <div className="form-group">
-          <label>Адрес доставки</label>
-          <input
-            value={deliveryAddress}
-            onChange={e => handleDeliveryAddressChange(e.target.value)}
-            placeholder="Введите улицу и дом..."
-          />
-          <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
-            <input
-              value={deliveryDistrict}
-              onChange={e => { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }}
-              placeholder="Район"
-              style={{ width: 180 }}
-            />
-            {deliveryDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
-          </div>
-          {deliveryGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{deliveryGeoWarn}</div>}
-        </div>
+        {customAddress && (
+          <>
+            <div className="form-group">
+              <label>Адрес забора</label>
+              <input
+                value={pickupAddress}
+                onChange={e => {
+                  handlePickupAddressChange(e.target.value)
+                  if (sameAddress) handleDeliveryAddressChange(e.target.value)
+                }}
+                placeholder="Введите улицу и дом..."
+              />
+              <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+                <input
+                  value={pickupDistrict}
+                  onChange={e => {
+                    setPickupDistrict(e.target.value); setPickupDistrictAuto(false); setPickupGeoWarn('')
+                    if (sameAddress) { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }
+                  }}
+                  placeholder="Район"
+                  style={{ width: 180 }}
+                />
+                {pickupDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
+              </div>
+              {pickupGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{pickupGeoWarn}</div>}
+            </div>
+            <div style={{ marginBottom: 8 }}>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={!sameAddress} onChange={e => {
+                  const diff = e.target.checked
+                  setSameAddress(!diff)
+                  if (!diff) {
+                    setDeliveryAddress(pickupAddress)
+                    setDeliveryDistrict(pickupDistrict)
+                    setDeliveryDistrictAuto(pickupDistrictAuto)
+                    setDeliveryGeoWarn('')
+                  }
+                }} />
+                Адреса забора и доставки отличаются
+              </label>
+            </div>
+            {!sameAddress && (
+              <div className="form-group">
+                <label>Адрес доставки</label>
+                <input
+                  value={deliveryAddress}
+                  onChange={e => handleDeliveryAddressChange(e.target.value)}
+                  placeholder="Введите улицу и дом..."
+                />
+                <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
+                  <input
+                    value={deliveryDistrict}
+                    onChange={e => { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }}
+                    placeholder="Район"
+                    style={{ width: 180 }}
+                  />
+                  {deliveryDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
+                </div>
+                {deliveryGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{deliveryGeoWarn}</div>}
+              </div>
+            )}
+          </>
+        )}
         <div className="form-group">
           <label>Legacy ID</label>
           <input
@@ -469,18 +524,61 @@ function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreat
 
 export default function OrdersPage() {
   const navigate = useNavigate()
+  const { showToast } = useToast()
+  const [searchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | ''>('')
+  const [totalElements, setTotalElements] = useState(0)
+  const [statusFilter, setStatusFilter] = useState<OrderStatus | ''>(searchParams.get('status') as OrderStatus || '')
   const [paymentFilter, setPaymentFilter] = useState('')
   const [orderIdSearch, setOrderIdSearch] = useState('')
   const [legacyIdSearch, setLegacyIdSearch] = useState('')
+  const [clientPhoneSearch, setClientPhoneSearch] = useState('')
+  const [clientNameSearch, setClientNameSearch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
+  const [sortBy, setSortBy] = useState('id')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const PAGE_SIZE = 20
+
+  // Синхронизация фильтра статуса из URL при навигации
+  useEffect(() => {
+    const s = searchParams.get('status')
+    if (s) setStatusFilter(s as OrderStatus)
+  }, [searchParams])
+
+  const toggleSort = (col: string) => {
+    if (sortBy === col) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortBy(col)
+      setSortDir('desc')
+    }
+    setPage(0)
+  }
+
+  const exportCSV = () => {
+    const headers = ['Номер', 'Клиент', 'Статус', 'Сумма', 'Оплачен', 'Создан']
+    const rows = orders.map(o => [
+      o.id,
+      o.client_name,
+      STATUS_LABELS[o.status] || o.status,
+      Number(o.total_amount).toFixed(2),
+      o.paid ? 'Да' : 'Нет',
+      new Date(o.created_at).toLocaleDateString('ru'),
+    ])
+    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(';')).join('\n')
+    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `orders_${new Date().toISOString().slice(0,10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const load = async () => {
     setLoading(true)
@@ -494,17 +592,30 @@ export default function OrdersPage() {
         legacyIdSearch ? Number(legacyIdSearch) : undefined,
         paymentFilter || undefined,
         orderIdSearch ? Number(orderIdSearch) : undefined,
+        clientPhoneSearch || undefined,
+        clientNameSearch || undefined,
+        sortBy,
+        sortDir,
       )
-      setOrders(data)
-      setHasMore(data.length === PAGE_SIZE)
-    } catch {
-      // ignore
+      // Support both paginated and array responses
+      if (Array.isArray(data)) {
+        setOrders(data as unknown as Order[])
+        setTotalElements(0)
+        setHasMore((data as unknown as Order[]).length === PAGE_SIZE)
+      } else {
+        setOrders(data.content)
+        setTotalElements(data.total_elements)
+        setHasMore(data.content.length === PAGE_SIZE)
+      }
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки заказов'
+      showToast(msg, 'error')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { void load() }, [statusFilter, paymentFilter, orderIdSearch, legacyIdSearch, dateFrom, dateTo, page])
+  useEffect(() => { void load() }, [statusFilter, paymentFilter, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, page, sortBy, sortDir])
 
   const handleCreated = (order: Order) => {
     setShowCreate(false)
@@ -515,7 +626,10 @@ export default function OrdersPage() {
     <div>
       <div className="page-header">
         <h1>Заказы</h1>
-        <button className="btn-primary" onClick={() => setShowCreate(true)}>+ Новый заказ</button>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button className="btn-secondary" onClick={exportCSV}>Экспорт CSV</button>
+          <button className="btn-primary" onClick={() => setShowCreate(true)}>+ Новый заказ</button>
+        </div>
       </div>
 
       <div className="filters">
@@ -558,6 +672,24 @@ export default function OrdersPage() {
           />
         </div>
         <div className="form-group">
+          <label>Телефон клиента</label>
+          <input
+            value={clientPhoneSearch}
+            onChange={e => { setClientPhoneSearch(e.target.value); setPage(0) }}
+            placeholder="Поиск по телефону"
+            style={{ minWidth: 140 }}
+          />
+        </div>
+        <div className="form-group">
+          <label>Имя клиента</label>
+          <input
+            value={clientNameSearch}
+            onChange={e => { setClientNameSearch(e.target.value); setPage(0) }}
+            placeholder="Поиск по имени"
+            style={{ minWidth: 140 }}
+          />
+        </div>
+        <div className="form-group">
           <label>Дата с</label>
           <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
         </div>
@@ -571,13 +703,26 @@ export default function OrdersPage() {
         <div className="loading">Загрузка...</div>
       ) : (
         <>
+          {totalElements > 0 && (
+            <div style={{ marginBottom: 8, color: '#666', fontSize: '0.9em' }}>
+              Показано {orders.length} из {totalElements}
+            </div>
+          )}
           <table>
             <thead>
               <tr>
-                <th>#</th>
-                <th>Клиент</th>
-                <th>Статус</th>
-                <th>Сумма</th>
+                <th onClick={() => toggleSort('id')} style={{ cursor: 'pointer' }}>
+                  # {sortBy === 'id' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                </th>
+                <th onClick={() => toggleSort('client_name')} style={{ cursor: 'pointer' }}>
+                  Клиент {sortBy === 'client_name' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                </th>
+                <th onClick={() => toggleSort('status')} style={{ cursor: 'pointer' }}>
+                  Статус {sortBy === 'status' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                </th>
+                <th onClick={() => toggleSort('total_amount')} style={{ cursor: 'pointer' }}>
+                  Сумма {sortBy === 'total_amount' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                </th>
                 <th>Оплачен</th>
                 <th>Гарантийный</th>
               </tr>

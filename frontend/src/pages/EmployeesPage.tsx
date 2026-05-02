@@ -3,6 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { getEmployees, createEmployee, updateEmployee, deactivateEmployee, activateEmployee, getEmployeesAll } from '../api/references'
 import { getEmployeeServices } from '../api/employees'
 import { getEmployeeEarnings } from '../api/orders'
+import apiClient from '../api/client'
+import { useToast } from '../components/Toast'
+import ConfirmModal from '../components/ConfirmModal'
 import type { Employee, OrderItemService, ServiceStatus } from '../types'
 
 const SERVICE_STATUS_LABELS: Record<ServiceStatus, string> = {
@@ -20,6 +23,7 @@ function EmployeeServicesModal({
   onClose: () => void
 }) {
   const navigate = useNavigate()
+  const { showToast } = useToast()
   const [services, setServices] = useState<OrderItemService[]>([])
   const [statusFilter, setStatusFilter] = useState<ServiceStatus | ''>('')
   const [earnings, setEarnings] = useState<number>(0)
@@ -36,8 +40,9 @@ function EmployeeServicesModal({
       ])
       setServices(servicesData)
       setEarnings(earningsData)
-    } catch {
-      // ignore
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки услуг'
+      showToast(msg, 'error')
     } finally {
       setLoading(false)
     }
@@ -122,13 +127,11 @@ function EmployeeServicesModal({
                       onClick={async () => {
                         onClose()
                         try {
-                          const response = await fetch(`http://localhost:8080/api/order-items/${service.order_item_id}`)
-                          if (response.ok) {
-                            const orderItem = await response.json()
-                            navigate(`/orders/${orderItem.order_id}`)
-                          }
-                        } catch {
-                          // ignore
+                          const response = await apiClient.get(`/api/order-items/${service.order_item_id}`)
+                          navigate(`/orders/${response.data.order_id}`)
+                        } catch (e: unknown) {
+                          const msg = (e as any)?.response?.data?.message || 'Ошибка перехода к заказу'
+                          showToast(msg, 'error')
                         }
                       }}
                     >
@@ -150,6 +153,7 @@ function EmployeeServicesModal({
 }
 
 export default function EmployeesPage() {
+  const { showToast } = useToast()
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(false)
   const [newName, setNewName] = useState('')
@@ -161,6 +165,7 @@ export default function EmployeesPage() {
   const [showServices, setShowServices] = useState<Employee | null>(null)
   const [showInactive, setShowInactive] = useState(false)
   const [nameFilter, setNameFilter] = useState('')
+  const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void, danger?: boolean} | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -191,22 +196,28 @@ export default function EmployeesPage() {
       await updateEmployee(id, { name: editName.trim(), contact: editContact.trim() || undefined })
       setEditId(null)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения'; showToast(msg, 'error') }
   }
 
-  const deactivate = async (id: number) => {
-    if (!confirm('Деактивировать сотрудника?')) return
-    try {
-      await deactivateEmployee(id)
-      await load()
-    } catch { /* ignore */ }
+  const deactivate = (id: number) => {
+    setConfirmAction({
+      title: 'Деактивировать сотрудника',
+      message: 'Вы уверены, что хотите деактивировать сотрудника?',
+      danger: true,
+      action: async () => {
+        try {
+          await deactivateEmployee(id)
+          await load()
+        } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка деактивации'; showToast(msg, 'error') }
+      }
+    })
   }
 
   const activate = async (id: number) => {
     try {
       await activateEmployee(id)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка активации'; showToast(msg, 'error') }
   }
 
   const filteredEmployees = employees.filter(e =>
@@ -329,6 +340,16 @@ export default function EmployeesPage() {
         <EmployeeServicesModal
           employee={showServices}
           onClose={() => setShowServices(null)}
+        />
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          danger={confirmAction.danger}
+          onConfirm={() => { setConfirmAction(null); confirmAction.action() }}
+          onCancel={() => setConfirmAction(null)}
         />
       )}
     </div>

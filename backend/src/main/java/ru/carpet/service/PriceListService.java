@@ -35,8 +35,8 @@ public class PriceListService {
         return priceListRepository.findByItemTypeId(itemTypeId).stream().map(this::toDto).toList();
     }
 
-    public PriceListEntryDto updatePrice(Long entryId, BigDecimal price) {
-        priceListRepository.updatePrice(entryId, price);
+    public PriceListEntryDto updatePrice(Long entryId, BigDecimal price, BigDecimal costPrice) {
+        priceListRepository.updatePrice(entryId, price, costPrice);
         PriceListEntry entry = priceListRepository.findAll().stream()
                 .filter(e -> e.id().equals(entryId)).findFirst().orElseThrow();
         return toDto(entry);
@@ -61,6 +61,7 @@ public class PriceListService {
                 sd != null ? sd.name() : null,
                 sd != null ? sd.pricingType().name() : null,
                 entry.price(),
+                entry.costPrice(),
                 entry.isActive()
         );
     }

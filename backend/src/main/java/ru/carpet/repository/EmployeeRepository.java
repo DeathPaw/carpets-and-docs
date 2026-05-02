@@ -10,6 +10,7 @@ import ru.carpet.model.Employee;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 @Repository
 public class EmployeeRepository {
@@ -43,6 +44,16 @@ public class EmployeeRepository {
                 Map.of(),
                 ROW_MAPPER
         );
+    }
+
+    public Map<Long, Employee> findByIds(List<Long> ids) {
+        if (ids.isEmpty()) return Map.of();
+        var params = new MapSqlParameterSource("ids", ids);
+        List<Employee> employees = jdbc.query(
+            "SELECT id, name, contact, active, created_at, updated_at FROM employees WHERE id IN (:ids)",
+            params, ROW_MAPPER
+        );
+        return employees.stream().collect(Collectors.toMap(Employee::id, e -> e));
     }
 
     public Optional<Employee> findById(Long id) {

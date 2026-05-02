@@ -5,13 +5,12 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import ru.carpet.dto.*;
 import ru.carpet.model.*;
+import ru.carpet.repository.OrderItemPhotoRepository;
 import ru.carpet.service.OrderItemService;
 import ru.carpet.service.OrderService;
 
-import java.time.LocalDate;
 import java.util.List;
 import java.util.Map;
-import java.math.BigDecimal;
 
 @RestController
 @RequestMapping("/api/orders")
@@ -19,24 +18,33 @@ public class OrderController {
 
     private final OrderService service;
     private final OrderItemService orderItemService;
+    private final OrderItemPhotoRepository photoRepository;
 
-    public OrderController(OrderService service, OrderItemService orderItemService) {
+    public OrderController(OrderService service, OrderItemService orderItemService,
+                           OrderItemPhotoRepository photoRepository) {
         this.service = service;
         this.orderItemService = orderItemService;
+        this.photoRepository = photoRepository;
     }
 
     @GetMapping
-    public List<Order> getAll(
+    public PageResponse<Order> getAll(
             @RequestParam(required = false) OrderStatus status,
             @RequestParam(required = false) String dateFrom,
             @RequestParam(required = false) String dateTo,
             @RequestParam(required = false) Long legacyId,
             @RequestParam(required = false) Long orderId,
             @RequestParam(required = false) String paymentType,
+            @RequestParam(required = false) String clientPhone,
+            @RequestParam(required = false) String clientName,
+            @RequestParam(required = false) String sortBy,
+            @RequestParam(required = false) String sortDir,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return service.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, page, size);
+        List<Order> content = service.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, sortBy, sortDir, page, size);
+        long totalElements = service.countAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+        return new PageResponse<>(content, totalElements, page, size);
     }
 
     @PostMapping
@@ -62,32 +70,16 @@ public class OrderController {
     }
 
     @PatchMapping("/{id}/details")
-    public Order updateDetails(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        String pickupAddress = (String) body.get("pickup_address");
-        String deliveryAddress = (String) body.get("delivery_address");
-        Number legacyIdNum = (Number) body.get("legacy_id");
-        Long legacyId = legacyIdNum != null ? legacyIdNum.longValue() : null;
-        String pickupDateStr = (String) body.get("pickup_date");
-        LocalDate pickupDate = pickupDateStr != null && !pickupDateStr.isEmpty() ? LocalDate.parse(pickupDateStr) : null;
-        String pickupTimeSlot = (String) body.get("pickup_time_slot");
-        String deliveryDateStr = (String) body.get("delivery_date");
-        LocalDate deliveryDate = deliveryDateStr != null && !deliveryDateStr.isEmpty() ? LocalDate.parse(deliveryDateStr) : null;
-        String deliveryTimeSlot = (String) body.get("delivery_time_slot");
-        String pickupDistrict = (String) body.get("pickup_district");
-        String deliveryDistrict = (String) body.get("delivery_district");
-        return service.updateDetails(id, pickupAddress, deliveryAddress, legacyId,
-                pickupDate, pickupTimeSlot, deliveryDate, deliveryTimeSlot, pickupDistrict, deliveryDistrict);
+    public Order updateDetails(@PathVariable Long id, @RequestBody UpdateOrderDetailsRequest request) {
+        return service.updateDetails(id, request.pickupAddress(), request.deliveryAddress(), request.legacyId(),
+                request.pickupDate(), request.pickupTimeSlot(), request.deliveryDate(), request.deliveryTimeSlot(),
+                request.pickupDistrict(), request.deliveryDistrict());
     }
 
     @PatchMapping("/{id}/actual-dates")
-    public Order updateActualDates(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        String pickupDateStr = (String) body.get("actual_pickup_date");
-        LocalDate pickupDate = pickupDateStr != null && !pickupDateStr.isEmpty() ? LocalDate.parse(pickupDateStr) : null;
-        String pickupTimeSlot = (String) body.get("actual_pickup_time_slot");
-        String deliveryDateStr = (String) body.get("actual_delivery_date");
-        LocalDate deliveryDate = deliveryDateStr != null && !deliveryDateStr.isEmpty() ? LocalDate.parse(deliveryDateStr) : null;
-        String deliveryTimeSlot = (String) body.get("actual_delivery_time_slot");
-        return service.updateActualDates(id, pickupDate, pickupTimeSlot, deliveryDate, deliveryTimeSlot);
+    public Order updateActualDates(@PathVariable Long id, @RequestBody UpdateActualDatesRequest request) {
+        return service.updateActualDates(id, request.actualPickupDate(), request.actualPickupTimeSlot(),
+                request.actualDeliveryDate(), request.actualDeliveryTimeSlot());
     }
 
     @PostMapping("/{id}/pay")
@@ -183,5 +175,23 @@ public class OrderController {
     @PostMapping("/{id}/modifiers/push-to-client")
     public void pushModifiersToClient(@PathVariable Long id) {
         service.pushModifiersToClient(id);
+    }
+
+    @GetMapping("/{orderId}/items/{itemId}/photos")
+    public List<OrderItemPhoto> getPhotos(@PathVariable Long orderId, @PathVariable Long itemId) {
+        return photoRepository.findByOrderItemId(itemId);
+    }
+
+    @PostMapping("/{orderId}/items/{itemId}/photos")
+    @ResponseStatus(HttpStatus.CREATED)
+    public OrderItemPhoto addPhoto(@PathVariable Long orderId, @PathVariable Long itemId,
+                                   @RequestBody Map<String, String> body) {
+        return photoRepository.save(itemId, body.get("filename"), body.get("content_type"), body.get("data"));
+    }
+
+    @DeleteMapping("/{orderId}/items/{itemId}/photos/{photoId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deletePhoto(@PathVariable Long orderId, @PathVariable Long itemId, @PathVariable Long photoId) {
+        photoRepository.delete(photoId);
     }
 }

@@ -1,0 +1,16 @@
+CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status);
+CREATE INDEX IF NOT EXISTS idx_orders_client_id ON orders(client_id);
+CREATE INDEX IF NOT EXISTS idx_orders_created_at ON orders(created_at);
+CREATE INDEX IF NOT EXISTS idx_orders_legacy_id ON orders(legacy_id);
+CREATE INDEX IF NOT EXISTS idx_orders_pickup_date ON orders(actual_pickup_date);
+CREATE INDEX IF NOT EXISTS idx_orders_delivery_date ON orders(actual_delivery_date);
+CREATE INDEX IF NOT EXISTS idx_order_items_order_id ON order_items(order_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_services_order_item_id ON order_item_services(order_item_id);
+CREATE INDEX IF NOT EXISTS idx_order_item_services_service_def_id ON order_item_services(service_def_id);
+CREATE INDEX IF NOT EXISTS idx_service_assignees_employee_id ON service_assignees(employee_id);
+CREATE INDEX IF NOT EXISTS idx_price_list_item_type_id ON price_list(item_type_id);
+CREATE INDEX IF NOT EXISTS idx_price_list_service_def_id ON price_list(service_def_id);
+CREATE INDEX IF NOT EXISTS idx_order_modifiers_order_id ON order_modifiers(order_id);
+CREATE INDEX IF NOT EXISTS idx_client_modifiers_client_id ON client_modifiers(client_id);
+CREATE INDEX IF NOT EXISTS idx_clients_phone ON clients(phone);
+CREATE INDEX IF NOT EXISTS idx_clients_name ON clients(LOWER(name));

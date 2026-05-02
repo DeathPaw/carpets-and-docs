@@ -6,8 +6,10 @@ import org.springframework.web.bind.annotation.*;
 import ru.carpet.dto.CreateClientRequest;
 import ru.carpet.exception.EntityNotFoundException;
 import ru.carpet.model.Client;
+import ru.carpet.model.ClientEvent;
 import ru.carpet.model.Order;
 import ru.carpet.model.PriceModifier;
+import ru.carpet.repository.ClientEventRepository;
 import ru.carpet.repository.ClientRepository;
 import ru.carpet.repository.OrderRepository;
 import ru.carpet.service.AuditLogService;
@@ -24,13 +26,16 @@ public class ClientController {
     private final OrderRepository orderRepository;
     private final AuditLogService auditLogService;
     private final ClientModifierService clientModifierService;
+    private final ClientEventRepository clientEventRepository;
 
     public ClientController(ClientRepository clientRepository, OrderRepository orderRepository,
-                            AuditLogService auditLogService, ClientModifierService clientModifierService) {
+                            AuditLogService auditLogService, ClientModifierService clientModifierService,
+                            ClientEventRepository clientEventRepository) {
         this.clientRepository = clientRepository;
         this.orderRepository = orderRepository;
         this.auditLogService = auditLogService;
         this.clientModifierService = clientModifierService;
+        this.clientEventRepository = clientEventRepository;
     }
 
     @GetMapping
@@ -100,5 +105,20 @@ public class ClientController {
     @DeleteMapping("/{id}/modifiers/{modifierId}")
     public void removeClientModifier(@PathVariable Long id, @PathVariable Long modifierId) {
         clientModifierService.removeModifier(id, modifierId);
+    }
+
+    @GetMapping("/{id}/events")
+    public List<ClientEvent> getClientEvents(@PathVariable Long id) {
+        clientRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Client not found: " + id));
+        return clientEventRepository.findByClientId(id);
+    }
+
+    @PostMapping("/{id}/events")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ClientEvent addClientEvent(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        clientRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Client not found: " + id));
+        return clientEventRepository.save(id, body.get("event_type"), body.get("description"));
     }
 }

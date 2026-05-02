@@ -32,6 +32,7 @@ public record Order(
         String actualDeliveryTimeSlot,
         BigDecimal baseAmount,
         BigDecimal discountPercent,
+        Long version,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {}

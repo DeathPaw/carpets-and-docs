@@ -60,6 +60,7 @@ export default function LogisticsPage() {
   const [allOrders, setAllOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(false)
   const [dragData, setDragData] = useState<{orderId: number, type: CardType} | null>(null)
+  const [dragOverDay, setDragOverDay] = useState<string | null>(null)
 
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
 
@@ -67,7 +68,7 @@ export default function LogisticsPage() {
     const load = async () => {
       setLoading(true)
       try {
-        const [leads, created, forPickup, inProgress, partiallyDone, done] = await Promise.all([
+        const results = await Promise.all([
           getOrders('LEAD', 0, 200),
           getOrders('CREATED', 0, 200),
           getOrders('FOR_PICKUP', 0, 200),
@@ -75,7 +76,8 @@ export default function LogisticsPage() {
           getOrders('PARTIALLY_DONE', 0, 200),
           getOrders('DONE', 0, 200),
         ])
-        setAllOrders([...leads, ...created, ...forPickup, ...inProgress, ...partiallyDone, ...done])
+        const allFetched = results.flatMap(r => Array.isArray(r) ? r as unknown as import('../types').Order[] : r.content)
+        setAllOrders(allFetched)
       } catch { /* ignore */ }
       finally { setLoading(false) }
     }
@@ -177,6 +179,7 @@ export default function LogisticsPage() {
     if (!dragData) return
     const {orderId, type} = dragData
     setDragData(null)
+    setDragOverDay(null)
     try {
       if (type === 'pickup') {
         await updateActualDates(orderId, { actual_pickup_date: targetDate })
@@ -226,7 +229,9 @@ export default function LogisticsPage() {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <strong>{formatOrderNumber(card.order.id, card.order.created_at)}</strong>
+          <span style={{ fontSize: '1.15em', fontWeight: 700, color: card.district ? '#2c3e50' : '#ccc' }}>
+            {card.district || 'район не указан'}
+          </span>
           <span style={{
             fontSize: '0.75em', padding: '2px 6px', borderRadius: 3,
             background: isPickup ? '#ebf5fb' : '#eafaf1',
@@ -236,14 +241,10 @@ export default function LogisticsPage() {
             {isPickup ? 'Забор' : 'Доставка'}
           </span>
         </div>
+        <div style={{ marginTop: 4, fontSize: '0.85em', color: '#666' }}>{formatOrderNumber(card.order.id, card.order.created_at)}</div>
         <div style={{ color: '#555', marginTop: 2 }}>{card.order.client_name}</div>
         {card.address && <div style={{ marginTop: 2, fontSize: '0.85em', color: '#666' }}>{card.address}</div>}
-        <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 2, fontSize: '0.85em' }}>
-          <span style={{ color: card.district ? '#2c3e50' : '#ccc', fontWeight: card.district ? 600 : 400 }}>
-            {card.district || 'район не указан'}
-          </span>
-          <span style={{ color: '#888' }}>{card.timeSlot || ''}</span>
-        </div>
+        {card.timeSlot && <div style={{ fontSize: '0.8em', color: '#888', marginTop: 2 }}>{card.timeSlot}</div>}
         <div style={{ marginTop: 2, fontWeight: 600 }}>{Number(card.order.total_amount).toFixed(2)} &#8381;</div>
       </div>
     )
@@ -251,17 +252,20 @@ export default function LogisticsPage() {
 
   const renderDaySection = (dateStr: string, label: string, cards: OrderCard[]) => {
     const isToday = dateStr === today
+    const isDragOver = dragOverDay === dateStr
     return (
       <div
         key={dateStr}
         onDragOver={handleDragOver}
-        onDrop={() => { if (dateStr !== 'no-date') void handleDrop(dateStr) }}
+        onDragEnter={() => setDragOverDay(dateStr)}
+        onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverDay(null) }}
+        onDrop={() => { setDragOverDay(null); if (dateStr !== 'no-date') void handleDrop(dateStr) }}
         style={{
           padding: '12px 16px',
           marginBottom: 8,
           borderRadius: 8,
-          background: isToday ? '#fffde7' : '#fafafa',
-          border: isToday ? '2px solid #f9a825' : '1px solid #e0e0e0',
+          background: isDragOver ? '#ebf5fb' : isToday ? '#fffde7' : '#fafafa',
+          border: isDragOver ? '2px dashed #3498db' : isToday ? '2px solid #f9a825' : '1px solid #e0e0e0',
           minHeight: 60,
         }}
       >

@@ -5,6 +5,8 @@ import {
   getPriceList, updatePriceListEntry,
   getPriceModifiers, createPriceModifier, updatePriceModifier, deletePriceModifier,
 } from '../api/references'
+import { useToast } from '../components/Toast'
+import ConfirmModal from '../components/ConfirmModal'
 import type { ItemType, ServiceDefinition, PriceListEntry, PriceModifier } from '../types'
 
 const pricingLabel = (pt?: string | null) => {
@@ -17,32 +19,37 @@ const pricingLabel = (pt?: string | null) => {
   }
 }
 
-function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: number, price: number | null) => void }) {
+function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: number, price: number | null, costPrice?: number | null) => void }) {
   const [value, setValue] = useState(entry?.price?.toString() ?? '')
+  const [costValue, setCostValue] = useState(entry?.cost_price?.toString() ?? '')
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setValue(entry?.price?.toString() ?? '')
-  }, [entry?.price])
+    setCostValue(entry?.cost_price?.toString() ?? '')
+  }, [entry?.price, entry?.cost_price])
 
   if (!entry) return <td style={{ background: '#f5f5f5' }}>—</td>
 
   const save = async () => {
     const newPrice = value.trim() === '' ? null : Number(value)
-    if (newPrice === entry.price) return
+    const newCost = (newPrice !== null && costValue.trim() !== '') ? Number(costValue) : null
+    if (newPrice === entry.price && newCost === entry.cost_price) return
     setSaving(true)
     try {
-      await onSave(entry.id, newPrice)
+      await onSave(entry.id, newPrice, newCost)
     } finally {
       setSaving(false)
     }
   }
 
   return (
-    <td style={{
-      borderLeft: entry.is_active ? '3px solid #27ae60' : '3px solid #ddd',
-      background: entry.is_active ? '#f0fff4' : '#fafafa',
-    }}>
+    <td
+      style={{
+        borderLeft: entry.is_active ? '3px solid #27ae60' : '3px solid #ddd',
+        background: entry.is_active ? '#f0fff4' : '#fafafa',
+      }}
+    >
       <input
         type="number"
         step="0.01"
@@ -51,14 +58,28 @@ function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: num
         onBlur={save}
         onKeyDown={e => { if (e.key === 'Enter') save() }}
         disabled={saving}
-        style={{ width: 80, textAlign: 'center' }}
-        placeholder="—"
+        style={{ width: 75, textAlign: 'center', fontSize: '0.9em' }}
+        placeholder="Цена"
       />
+      {entry.is_active && (
+        <input
+          type="number"
+          step="0.01"
+          value={costValue}
+          onChange={e => setCostValue(e.target.value)}
+          onBlur={save}
+          onKeyDown={e => { if (e.key === 'Enter') save() }}
+          disabled={saving}
+          style={{ width: 75, textAlign: 'center', fontSize: '0.8em', color: '#888', marginTop: 2 }}
+          placeholder="себест."
+        />
+      )}
     </td>
   )
 }
 
 export default function ReferencesPage() {
+  const { showToast } = useToast()
   const [defs, setDefs] = useState<ServiceDefinition[]>([])
   const [types, setTypes] = useState<ItemType[]>([])
   const [priceList, setPriceList] = useState<PriceListEntry[]>([])
@@ -69,6 +90,7 @@ export default function ReferencesPage() {
   const [editModName, setEditModName] = useState('')
   const [editModPercent, setEditModPercent] = useState('')
   const [modError, setModError] = useState('')
+  const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void, danger?: boolean} | null>(null)
 
   // Общая загрузка — оба списка всегда синхронны
   const load = async () => {
@@ -116,12 +138,18 @@ export default function ReferencesPage() {
       })
       setEditDefId(null)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения'; showToast(msg, 'error') }
   }
 
-  const removeDef = async (id: number) => {
-    if (!confirm('Удалить шаблон услуги?')) return
-    try { await deleteServiceDefinition(id); await load() } catch { /* ignore */ }
+  const removeDef = (id: number) => {
+    setConfirmAction({
+      title: 'Удалить шаблон услуги',
+      message: 'Вы уверены, что хотите удалить шаблон услуги?',
+      danger: true,
+      action: async () => {
+        try { await deleteServiceDefinition(id); await load() } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка удаления'; showToast(msg, 'error') }
+      }
+    })
   }
 
   // --- Типы позиций ---
@@ -165,19 +193,25 @@ export default function ReferencesPage() {
       })
       setEditTypeId(null)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения'; showToast(msg, 'error') }
   }
 
-  const removeType = async (id: number) => {
-    if (!confirm('Удалить тип позиции?')) return
-    try { await deleteItemType(id); await load() } catch { /* ignore */ }
+  const removeType = (id: number) => {
+    setConfirmAction({
+      title: 'Удалить тип позиции',
+      message: 'Вы уверены, что хотите удалить тип позиции?',
+      danger: true,
+      action: async () => {
+        try { await deleteItemType(id); await load() } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка удаления'; showToast(msg, 'error') }
+      }
+    })
   }
 
-  const handlePriceSave = async (id: number, price: number | null) => {
+  const handlePriceSave = async (id: number, price: number | null, costPrice?: number | null) => {
     try {
-      await updatePriceListEntry(id, price)
+      await updatePriceListEntry(id, price, costPrice)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка обновления цены'; showToast(msg, 'error') }
   }
 
   const createMod = async () => {
@@ -198,12 +232,18 @@ export default function ReferencesPage() {
       await updatePriceModifier(id, { name: editModName.trim(), percent: Number(editModPercent) })
       setEditModId(null)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения'; showToast(msg, 'error') }
   }
 
-  const removeMod = async (id: number) => {
-    if (!confirm('Удалить модификатор цены?')) return
-    try { await deletePriceModifier(id); await load() } catch { /* ignore */ }
+  const removeMod = (id: number) => {
+    setConfirmAction({
+      title: 'Удалить модификатор цены',
+      message: 'Вы уверены, что хотите удалить модификатор цены?',
+      danger: true,
+      action: async () => {
+        try { await deletePriceModifier(id); await load() } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка удаления'; showToast(msg, 'error') }
+      }
+    })
   }
 
   return (
@@ -444,7 +484,7 @@ export default function ReferencesPage() {
                 <td>
                   {editModId === m.id
                     ? <input type="number" step="0.01" value={editModPercent} onChange={e => setEditModPercent(e.target.value)} style={{ width: 100 }} />
-                    : <span style={{ color: m.percent > 0 ? '#27ae60' : m.percent < 0 ? '#e74c3c' : undefined, fontWeight: 600 }}>
+                    : <span style={{ color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : undefined, fontWeight: 600 }}>
                         {m.percent > 0 ? '+' : ''}{Number(m.percent).toFixed(2)}%
                       </span>}
                 </td>
@@ -472,6 +512,16 @@ export default function ReferencesPage() {
           </tbody>
         </table>
       </div>
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          danger={confirmAction.danger}
+          onConfirm={() => { setConfirmAction(null); confirmAction.action() }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
     </div>
   )
 }

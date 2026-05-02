@@ -1,21 +1,24 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, payOrder, createWarrantyOrder,
-  addOrderItem, setOrderItemPrice, updateOrderItemDescription, duplicateOrder, duplicateItem,
+  addOrderItem, setOrderItemPrice, updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
   updateOrderComment,
   updateOrderDetails,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient,
+  getItemPhotos, uploadItemPhoto, deleteItemPhoto,
 } from '../api/orders'
-import { updateOrderItemDimensions } from '../api/orders'
 import { getItemServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
 import { getItemTypes, getEmployees, getItemType, getPriceModifiers } from '../api/references'
+import { getClient, getClientModifiers, getClientEvents, addClientEvent } from '../api/clients'
+import { useToast } from '../components/Toast'
+import ConfirmModal from '../components/ConfirmModal'
 import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
   PaymentType, AddOrderItemRequest, PriceListEntry,
-  PriceModifier, OrderModifier,
+  PriceModifier, OrderModifier, Client,
 } from '../types'
 
 const ORDER_STATUS_LABELS: Record<string, string> = {
@@ -82,7 +85,7 @@ function WarrantyModal({
 
   return (
     <div className="modal-overlay" onClick={() => { if (confirm('Отменить создание гарантийного возврата?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
         <h2>Гарантийный возврат</h2>
         <p style={{ color: '#666', marginBottom: 12 }}>Выберите позиции для возврата:</p>
         <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12 }}>
@@ -146,7 +149,7 @@ function AddItemModal({
 
   return (
     <div className="modal-overlay" onClick={() => { if (confirm('Отменить добавление позиции?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
         <h2>Добавить позицию</h2>
         <div className="form-group">
           <label>Тип позиции *</label>
@@ -225,6 +228,7 @@ function ServicesPanel({
   onRefresh: () => void
   isEditable: boolean
 }) {
+  const { showToast } = useToast()
   const itemId = item.id
   const [services, setServices] = useState<OrderItemService[]>([])
   const [availableServices, setAvailableServices] = useState<{id: number, name: string, pricing_type?: string | null}[]>([])
@@ -263,7 +267,7 @@ function ServicesPanel({
       await updateServiceStatus(orderId, itemId, serviceId, { status })
       await load()
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка смены статуса услуги'; showToast(msg, 'error') }
   }
 
   const openAssign = (serviceId: number, current: Employee[]) => {
@@ -278,7 +282,7 @@ function ServicesPanel({
       await assignServiceEmployees(orderId, itemId, assignModal, { employee_ids: selectedEmployees })
       setAssignModal(null)
       await load()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка назначения исполнителей'; showToast(msg, 'error') }
   }
 
   const tryAddService = (serviceDefId: number) => {
@@ -298,7 +302,7 @@ function ServicesPanel({
       setDimWarning('')
       await load()
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка добавления услуги'; showToast(msg, 'error') }
   }
 
   const openPriceEdit = (serviceId: number, currentPrice: number) => {
@@ -313,7 +317,7 @@ function ServicesPanel({
       setEditingPrice(null)
       await load()
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка изменения цены'; showToast(msg, 'error') }
   }
 
   if (loading) return <div className="loading">Загрузка услуг...</div>
@@ -419,6 +423,20 @@ function ServicesPanel({
                           <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }} title="Заполните размеры позиции">
                             Заблокировано
                           </span>
+                        ) : (!s.assignees || s.assignees.length === 0) && s.status === 'CREATED' ? (
+                          <div>
+                            <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }}>
+                              Назначьте исполнителя
+                            </span>
+                            <select
+                              value={s.status}
+                              onChange={e => changeStatus(s.id, e.target.value as ServiceStatus)}
+                              style={{ width: 'auto', marginLeft: 4 }}
+                            >
+                              <option value="CREATED">Создана</option>
+                              <option value="CANCELLED">Отменена</option>
+                            </select>
+                          </div>
                         ) : (
                           <select
                             value={s.status}
@@ -513,10 +531,15 @@ function ItemRow({
   onRefresh: () => void
   isEditable: boolean
 }) {
+  const { showToast } = useToast()
   const [expanded, setExpanded] = useState(false)
   const [editPrice, setEditPrice] = useState(false)
   const [editDimensions, setEditDimensions] = useState(false)
   const [editDesc, setEditDesc] = useState(false)
+  const [photos, setPhotos] = useState<{id: number, filename: string, content_type: string, data: string}[]>([])
+  const [photoPreview, setPhotoPreview] = useState<string | null>(null)
+  const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [descValue, setDescValue] = useState(item.description || '')
   const [defectsValue, setDefectsValue] = useState(item.defects || '')
   const [price, setPrice] = useState(String(item.price))
@@ -528,6 +551,29 @@ function ItemRow({
     running_meters: item.running_meters?.toString() || '',
   })
 
+  useEffect(() => {
+    if (expanded) {
+      getItemPhotos(orderId, item.id).then(setPhotos).catch(() => {})
+    }
+  }, [expanded, orderId, item.id])
+
+  const handlePhotoUpload = async (file: File) => {
+    setUploadingPhoto(true)
+    try {
+      await uploadItemPhoto(orderId, item.id, file)
+      const p = await getItemPhotos(orderId, item.id)
+      setPhotos(p)
+    } catch { showToast('Ошибка загрузки фото', 'error') }
+    finally { setUploadingPhoto(false) }
+  }
+
+  const handlePhotoDelete = async (photoId: number) => {
+    try {
+      await deleteItemPhoto(orderId, item.id, photoId)
+      setPhotos(prev => prev.filter(p => p.id !== photoId))
+    } catch { showToast('Ошибка удаления фото', 'error') }
+  }
+
   const saveDesc = async () => {
     try {
       await updateOrderItemDescription(orderId, item.id, {
@@ -536,7 +582,7 @@ function ItemRow({
       })
       setEditDesc(false)
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения описания'; showToast(msg, 'error') }
   }
 
   const savePrice = async () => {
@@ -544,7 +590,7 @@ function ItemRow({
       await setOrderItemPrice(orderId, item.id, { price: Number(price) })
       setEditPrice(false)
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка изменения цены'; showToast(msg, 'error') }
   }
 
   const saveDimensions = async () => {
@@ -558,7 +604,7 @@ function ItemRow({
       })
       setEditDimensions(false)
       onRefresh()
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения размеров'; showToast(msg, 'error') }
   }
 
   return (
@@ -691,7 +737,7 @@ function ItemRow({
                 try {
                   await duplicateItem(orderId, item.id)
                   onRefresh()
-                } catch { /* ignore */ }
+                } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка дублирования позиции'; showToast(msg, 'error') }
               }}
               title="Дублировать позицию"
             >Дубль</button>
@@ -701,6 +747,78 @@ function ItemRow({
       {expanded && (
         <tr>
           <td colSpan={7} style={{ background: '#f8f9fa', padding: '12px 20px' }}>
+            {/* Photo section */}
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                <h4 style={{ margin: 0 }}>Фото</h4>
+                {isEditable && (
+                  <>
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={uploadingPhoto}
+                    >
+                      {uploadingPhoto ? 'Загрузка...' : 'Добавить фото'}
+                    </button>
+                    <input
+                      ref={el => { fileInputRef.current = el }}
+                      type="file"
+                      accept="image/*"
+                      style={{ display: 'none' }}
+                      onChange={e => {
+                        const f = e.target.files?.[0]
+                        if (f) { void handlePhotoUpload(f) }
+                        e.target.value = ''
+                      }}
+                    />
+                  </>
+                )}
+              </div>
+              {photos.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                  {photos.map(p => (
+                    <div key={p.id} style={{ position: 'relative', flexShrink: 0 }}>
+                      <img
+                        src={`data:${p.content_type};base64,${p.data}`}
+                        alt={p.filename}
+                        style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
+                        onClick={() => setPhotoPreview(`data:${p.content_type};base64,${p.data}`)}
+                      />
+                      {isEditable && (
+                        <button
+                          onClick={() => void handlePhotoDelete(p.id)}
+                          style={{
+                            position: 'absolute', top: -6, right: -6,
+                            width: 20, height: 20, borderRadius: '50%',
+                            background: '#e74c3c', color: '#fff', border: 'none',
+                            cursor: 'pointer', fontSize: 12, lineHeight: '20px',
+                            padding: 0, textAlign: 'center',
+                          }}
+                        >&times;</button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {photoPreview && (
+              <div
+                className="modal-overlay"
+                onClick={() => setPhotoPreview(null)}
+                style={{ zIndex: 1000 }}
+              >
+                <div onClick={e => e.stopPropagation()} style={{ maxWidth: '90vw', maxHeight: '90vh' }}>
+                  <img
+                    src={photoPreview}
+                    alt="preview"
+                    style={{ maxWidth: '90vw', maxHeight: '85vh', borderRadius: 8 }}
+                  />
+                  <div style={{ textAlign: 'center', marginTop: 8 }}>
+                    <button className="btn-secondary" onClick={() => setPhotoPreview(null)}>Закрыть</button>
+                  </div>
+                </div>
+              </div>
+            )}
             <ServicesPanel orderId={orderId} item={item} itemTypeId={item.item_type_id} employees={employees} onRefresh={onRefresh} isEditable={isEditable} />
           </td>
         </tr>
@@ -713,6 +831,7 @@ function ItemRow({
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
+  const { showToast } = useToast()
   const orderId = Number(id)
 
   const [order, setOrder] = useState<Order | null>(null)
@@ -727,9 +846,14 @@ export default function OrderDetailPage() {
   const [error, setError] = useState('')
   const [orderModifiers, setOrderModifiers] = useState<OrderModifier[]>([])
   const [allModifiers, setAllModifiers] = useState<PriceModifier[]>([])
+  const [showClientCard, setShowClientCard] = useState<Client | null>(null)
+  const [clientCardMods, setClientCardMods] = useState<PriceModifier[]>([])
+  const [clientEvents, setClientEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
+  const [newEventNote, setNewEventNote] = useState('')
   const [editComment, setEditComment] = useState(false)
   const [commentValue, setCommentValue] = useState('')
   const [editDetails, setEditDetails] = useState(false)
+  const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void} | null>(null)
   const [details, setDetails] = useState({
     pickup_address: '',
     delivery_address: '',
@@ -786,7 +910,7 @@ export default function OrderDetailPage() {
       setOrder(updated)
       const hist = await getOrderHistory(orderId)
       setHistory(hist)
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка смены статуса'; showToast(msg, 'error') }
   }
 
   const handlePay = async (paymentType: PaymentType) => {
@@ -847,7 +971,7 @@ export default function OrderDetailPage() {
       await loadOrder()
       const mods = await getOrderModifiers(orderId)
       setOrderModifiers(mods)
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка добавления модификатора'; showToast(msg, 'error') }
   }
 
   const handleRemoveModifier = async (modifierId: number) => {
@@ -856,15 +980,162 @@ export default function OrderDetailPage() {
       await loadOrder()
       const mods = await getOrderModifiers(orderId)
       setOrderModifiers(mods)
-    } catch { /* ignore */ }
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка удаления модификатора'; showToast(msg, 'error') }
   }
 
   const handlePushToClient = async () => {
     try {
       await pushModifiersToClient(orderId)
       setError('')
-      alert('Модификаторы сохранены в клиента')
-    } catch { setError('Ошибка сохранения модификаторов в клиента') }
+      showToast('Модификаторы сохранены в клиента', 'success')
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения модификаторов в клиента'; showToast(msg, 'error') }
+  }
+
+  const openClientCard = async () => {
+    if (!order?.client_id) return
+    try {
+      const c = await getClient(order.client_id)
+      setShowClientCard(c)
+      const mods = await getClientModifiers(order.client_id)
+      setClientCardMods(mods)
+      getClientEvents(order.client_id).then(evts => setClientEvents(evts.slice(0, 10))).catch(() => {})
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки клиента'; showToast(msg, 'error') }
+  }
+
+  const handlePrintPdf = async () => {
+    if (!order) return
+    const modRows = orderModifiers.map(m => {
+      const amount = Number(order.base_amount) * m.percent / 100
+      const sign = amount >= 0 ? '+' : ''
+      return `<tr><td style="padding:4px 8px">${m.modifier_name} (${m.percent > 0 ? '+' : ''}${m.percent}%)</td><td style="padding:4px 8px;text-align:right">${sign}${amount.toFixed(2)} руб.</td></tr>`
+    }).join('')
+
+    // Загружаем услуги для всех позиций
+    const allItemServices = await Promise.all(
+      items.map(it => getItemServices(orderId, it.id).catch(() => []))
+    )
+
+    const defaultTypeIds = new Set(itemTypes.filter(t => t.is_default).map(t => t.id))
+    const itemRows = items.map((it, idx) => {
+      const isDefault = defaultTypeIds.has(it.item_type_id)
+      const svcList = allItemServices[idx] || []
+      const svcRows = svcList.map(s =>
+        `<tr style="background:#fafafa;font-size:11px">
+          <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.service_def_name || 'Услуга #' + s.service_def_id}
+            <span style="color:#888;margin-left:8px">(${SERVICE_STATUS_LABELS[s.status] || s.status})</span>
+          </td>
+          <td style="padding:2px 8px"></td>
+          <td style="padding:2px 8px;text-align:right">${Number(s.price).toFixed(2)} руб.</td>
+        </tr>`
+      ).join('')
+      return `<tr${isDefault ? ' style="color:#888"' : ''}>
+        <td style="padding:4px 8px">${idx + 1}</td>
+        <td style="padding:4px 8px">${it.item_type_name || 'Тип #' + it.item_type_id}</td>
+        <td style="padding:4px 8px">${it.description || '—'}${it.defects ? '<br><span style="color:#e67e22;font-size:0.9em">Дефекты: ' + it.defects + '</span>' : ''}</td>
+        <td style="padding:4px 8px">${it.length ? it.length + '×' + (it.width || 0) : '—'}${it.weight ? ' (' + it.weight + 'кг)' : ''}${it.area ? ' S=' + it.area : ''}${it.running_meters ? ' ' + it.running_meters + 'п.м.' : ''}</td>
+        <td style="padding:4px 8px;text-align:right;font-weight:bold">${Number(it.price).toFixed(2)} руб.</td>
+      </tr>${svcRows}`
+    }).join('')
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Заказ ${formatOrderNumber(order.id, order.created_at)}</title>
+<style>
+  body { font-family: Arial, sans-serif; font-size: 13px; margin: 30px; color: #333; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 16px 0 8px; border-bottom: 1px solid #999; padding-bottom: 4px; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
+  th { background: #f0f0f0; text-align: left; padding: 4px 8px; border: 1px solid #ccc; font-size: 12px; }
+  td { border: 1px solid #ccc; font-size: 12px; vertical-align: top; }
+  .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
+  .company { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
+  .info-grid { display: flex; gap: 30px; margin-bottom: 12px; }
+  .info-col { flex: 1; }
+  .info-row { margin-bottom: 4px; }
+  .label { font-weight: bold; }
+  .total-row { font-size: 15px; font-weight: bold; }
+  .signatures { display: flex; justify-content: space-between; margin-top: 50px; }
+  .sig-block { width: 45%; }
+  .sig-line { border-bottom: 1px solid #333; margin-top: 40px; margin-bottom: 4px; }
+  .sig-label { font-size: 11px; color: #666; }
+  @media print { body { margin: 15px; } }
+</style></head><body>
+<div class="header">
+  <div class="company">КОВРОВОЕ ПРОИЗВОДСТВО</div>
+  <div style="font-size:11px;color:#666">Система учёта заказов</div>
+</div>
+
+<h1>Заказ ${formatOrderNumber(order.id, order.created_at)}</h1>
+${order.legacy_id ? '<div style="margin-bottom:8px;color:#666">ID из старой системы: ' + order.legacy_id + '</div>' : ''}
+
+<div class="info-grid">
+  <div class="info-col">
+    <div class="info-row"><span class="label">Клиент:</span> ${order.client_name}</div>
+    ${order.client_address ? '<div class="info-row"><span class="label">Адрес клиента:</span> ' + order.client_address + '</div>' : ''}
+    <div class="info-row"><span class="label">Статус:</span> ${ORDER_STATUS_LABELS[order.status]}</div>
+    ${order.is_warranty ? '<div class="info-row"><span class="label">Гарантийный заказ</span>' + (order.parent_order_id ? ' (от заказа #' + String(order.parent_order_id).padStart(5, '0') + ')' : '') + '</div>' : ''}
+  </div>
+  <div class="info-col">
+    ${order.pickup_address ? '<div class="info-row"><span class="label">Адрес забора:</span> ' + order.pickup_address + (order.pickup_district ? ' (' + order.pickup_district + ')' : '') + '</div>' : ''}
+    ${order.delivery_address ? '<div class="info-row"><span class="label">Адрес доставки:</span> ' + order.delivery_address + (order.delivery_district ? ' (' + order.delivery_district + ')' : '') + '</div>' : ''}
+    ${order.pickup_date ? '<div class="info-row"><span class="label">Дата забора:</span> ' + order.pickup_date + (order.pickup_time_slot ? ' (' + order.pickup_time_slot + ')' : '') + '</div>' : ''}
+    ${order.delivery_date ? '<div class="info-row"><span class="label">Дата доставки:</span> ' + order.delivery_date + (order.delivery_time_slot ? ' (' + order.delivery_time_slot + ')' : '') + '</div>' : ''}
+  </div>
+</div>
+
+${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комментарий:</span> ' + order.comment + '</div>' : ''}
+
+<h2>Позиции заказа</h2>
+<table>
+  <thead><tr><th>#</th><th>Тип</th><th>Описание</th><th>Размеры</th><th style="text-align:right">Стоимость</th></tr></thead>
+  <tbody>${itemRows}</tbody>
+</table>
+
+<h2>Расчёт стоимости</h2>
+<table>
+  <tbody>
+    <tr><td style="padding:4px 8px;font-weight:bold">Сумма позиций (базовая)</td><td style="padding:4px 8px;text-align:right;font-weight:bold">${Number(order.base_amount).toFixed(2)} руб.</td></tr>
+    ${modRows}
+    <tr class="total-row"><td style="padding:8px;border-top:2px solid #333">ИТОГО</td><td style="padding:8px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
+  </tbody>
+</table>
+
+<div style="margin-top:8px">
+  <span class="label">Оплата:</span> ${order.paid ? 'Оплачен (' + (PAYMENT_LABELS[order.payment_type ?? ''] || order.payment_type || '') + ')' : 'Не оплачен'}
+</div>
+
+<div class="signatures">
+  <div class="sig-block">
+    <div class="sig-line"></div>
+    <div class="sig-label">Подпись клиента / ФИО</div>
+  </div>
+  <div class="sig-block">
+    <div class="sig-line"></div>
+    <div class="sig-label">Подпись представителя компании / ФИО</div>
+  </div>
+</div>
+
+<div style="text-align:center;margin-top:30px;font-size:10px;color:#999">
+  Документ сформирован ${new Date().toLocaleString('ru')}
+</div>
+</body></html>`
+
+    const iframe = document.createElement('iframe')
+    iframe.style.position = 'fixed'
+    iframe.style.left = '-9999px'
+    iframe.style.top = '-9999px'
+    document.body.appendChild(iframe)
+    const doc = iframe.contentDocument || iframe.contentWindow?.document
+    if (doc) {
+      doc.open()
+      doc.write(html)
+      doc.close()
+      setTimeout(() => {
+        iframe.contentWindow?.print()
+        iframe.addEventListener('afterprint', () => document.body.removeChild(iframe))
+        // Fallback cleanup after 60 seconds
+        setTimeout(() => { if (iframe.parentNode) document.body.removeChild(iframe) }, 60000)
+      }, 300)
+    }
   }
 
   if (loading) return <div className="loading">Загрузка...</div>
@@ -899,7 +1170,7 @@ export default function OrderDetailPage() {
             <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${PAYMENT_LABELS[order.payment_type ?? ''] ?? order.payment_type})` : 'Нет'}</div>
             <div style={{ marginBottom: 8 }}>
               <strong>Клиент:</strong>{' '}
-              <button className="btn-secondary btn-sm" onClick={() => navigate('/clients')} style={{ marginLeft: 4 }}>
+              <button className="btn-secondary btn-sm" onClick={openClientCard} style={{ marginLeft: 4 }}>
                 {order.client_name}
               </button>
             </div>
@@ -1069,13 +1340,19 @@ export default function OrderDetailPage() {
           {order.status === 'DELIVERED' && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
           )}
-          <button className="btn-secondary" onClick={async () => {
-            if (!confirm('Дублировать заказ?')) return
-            try {
-              const dup = await duplicateOrder(orderId)
-              navigate(`/orders/${dup.id}`)
-            } catch { setError('Ошибка дублирования заказа') }
+          <button className="btn-secondary" onClick={() => {
+            setConfirmAction({
+              title: 'Дублировать заказ',
+              message: 'Создать копию этого заказа?',
+              action: async () => {
+                try {
+                  const dup = await duplicateOrder(orderId)
+                  navigate(`/orders/${dup.id}`)
+                } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка дублирования заказа'; showToast(msg, 'error') }
+              }
+            })
           }}>Дублировать заказ</button>
+          <button className="btn-secondary" onClick={handlePrintPdf}>Печать PDF</button>
         </div>
       </div>
 
@@ -1143,7 +1420,7 @@ export default function OrderDetailPage() {
                   <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
                     <span>{m.modifier_name} ({isPositive ? '+' : ''}{m.percent}%)</span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                      <span style={{ color: isPositive ? '#27ae60' : '#e74c3c', fontWeight: 600 }}>
+                      <span style={{ color: isPositive ? '#e74c3c' : '#27ae60', fontWeight: 600 }}>
                         {isPositive ? '+' : ''}{amount.toFixed(2)} &#8381;
                       </span>
                       {isEditable && (
@@ -1229,6 +1506,122 @@ export default function OrderDetailPage() {
           onClose={() => setShowWarranty(false)}
           onConfirm={handleWarranty}
         />
+      )}
+
+      {confirmAction && (
+        <ConfirmModal
+          title={confirmAction.title}
+          message={confirmAction.message}
+          onConfirm={() => { setConfirmAction(null); confirmAction.action() }}
+          onCancel={() => setConfirmAction(null)}
+        />
+      )}
+
+      {showClientCard && (
+        <div className="modal-overlay" onClick={() => setShowClientCard(null)}>
+          <div className="modal large" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+              <div>
+                <h2 style={{ margin: 0 }}>{showClientCard.name}</h2>
+                <div style={{ color: '#888', fontSize: '0.9em', marginTop: 4 }}>
+                  {showClientCard.client_type === 'LEGAL_ENTITY' ? 'Юридическое лицо' : 'Физическое лицо'} &middot; #{showClientCard.id}
+                </div>
+              </div>
+            </div>
+            <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+              <div style={{ flex: '1 1 250px' }}>
+                {showClientCard.client_type === 'INDIVIDUAL' && (
+                  <>
+                    <div style={{ marginBottom: 8 }}><strong>Фамилия:</strong> {showClientCard.last_name || 'не указано'}</div>
+                    <div style={{ marginBottom: 8 }}><strong>Имя:</strong> {showClientCard.first_name || 'не указано'}</div>
+                  </>
+                )}
+                {showClientCard.client_type === 'LEGAL_ENTITY' && (
+                  <>
+                    <div style={{ marginBottom: 8 }}><strong>ИНН:</strong> {showClientCard.inn || 'не указано'}</div>
+                    <div style={{ marginBottom: 8 }}><strong>Контактное лицо:</strong> {showClientCard.contact_person || 'не указано'}</div>
+                    <div style={{ marginBottom: 8 }}><strong>Тел. контакта:</strong> {showClientCard.contact_person_phone || 'не указано'}</div>
+                  </>
+                )}
+                <div style={{ marginBottom: 8 }}><strong>Телефон:</strong> {showClientCard.phone || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Доп. телефон:</strong> {showClientCard.extra_phone || 'не указано'}</div>
+              </div>
+              <div style={{ flex: '1 1 250px' }}>
+                <div style={{ marginBottom: 8 }}><strong>Адрес:</strong> {showClientCard.address || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Район:</strong> {showClientCard.district || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Комментарий:</strong> {showClientCard.comment || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Создан:</strong> {new Date(showClientCard.created_at).toLocaleDateString('ru')}</div>
+              </div>
+            </div>
+            {clientCardMods.length > 0 && (
+              <div style={{ marginTop: 12 }}>
+                <strong>Модификаторы цены:</strong>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
+                  {clientCardMods.map(m => (
+                    <span key={m.id} style={{
+                      padding: '3px 8px', borderRadius: 4, fontSize: '0.85em', fontWeight: 600,
+                      color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
+                      background: m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
+                    }}>
+                      {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Client Events */}
+            <div style={{ marginTop: 16 }}>
+              <strong>События клиента</strong>
+              <div style={{ display: 'flex', gap: 4, marginTop: 8, marginBottom: 8 }}>
+                <input
+                  value={newEventNote}
+                  onChange={e => setNewEventNote(e.target.value)}
+                  placeholder="Добавить заметку..."
+                  style={{ flex: 1 }}
+                  onKeyDown={e => {
+                    if (e.key === 'Enter' && newEventNote.trim() && showClientCard) {
+                      addClientEvent(showClientCard.id, 'NOTE', newEventNote.trim())
+                        .then(() => getClientEvents(showClientCard.id))
+                        .then(evts => { setClientEvents(evts.slice(0, 10)); setNewEventNote('') })
+                        .catch(() => {})
+                    }
+                  }}
+                />
+                <button
+                  className="btn-primary btn-sm"
+                  disabled={!newEventNote.trim()}
+                  onClick={() => {
+                    if (newEventNote.trim() && showClientCard) {
+                      addClientEvent(showClientCard.id, 'NOTE', newEventNote.trim())
+                        .then(() => getClientEvents(showClientCard.id))
+                        .then(evts => { setClientEvents(evts.slice(0, 10)); setNewEventNote('') })
+                        .catch(() => {})
+                    }
+                  }}
+                >Добавить</button>
+              </div>
+              <div style={{ maxHeight: 200, overflowY: 'auto' }}>
+                {clientEvents.length === 0 ? (
+                  <div style={{ color: '#999', fontSize: '0.9em' }}>Нет событий</div>
+                ) : clientEvents.map(ev => {
+                  const typeColors: Record<string, string> = { NOTE: '#888', CALL: '#3498db', COMPLAINT: '#e74c3c', ORDER_CREATED: '#27ae60', WARRANTY: '#f39c12' }
+                  return (
+                    <div key={ev.id} style={{ display: 'flex', gap: 8, padding: '4px 0', borderBottom: '1px solid #f0f0f0', fontSize: '0.85em' }}>
+                      <span style={{ color: typeColors[ev.event_type] || '#888', fontWeight: 600, minWidth: 60 }}>
+                        {ev.event_type === 'NOTE' ? 'Заметка' : ev.event_type === 'CALL' ? 'Звонок' : ev.event_type === 'COMPLAINT' ? 'Жалоба' : ev.event_type === 'ORDER_CREATED' ? 'Заказ' : ev.event_type === 'WARRANTY' ? 'Гарантия' : ev.event_type}
+                      </span>
+                      <span style={{ flex: 1 }}>{ev.description}</span>
+                      <span style={{ color: '#999', whiteSpace: 'nowrap' }}>{new Date(ev.created_at).toLocaleDateString('ru')}</span>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+            <div className="modal-actions" style={{ marginTop: 16 }}>
+              <button className="btn-secondary" onClick={() => setShowClientCard(null)}>Закрыть</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

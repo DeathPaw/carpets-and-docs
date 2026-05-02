@@ -23,12 +23,26 @@ const SPB_DISTRICTS: Record<string, [number, number, number, number]> = {
 }
 
 function detectDistrictByCoords(lat: number, lon: number): string | null {
+  // Сначала точное попадание в bbox
   for (const [name, [latMin, latMax, lonMin, lonMax]] of Object.entries(SPB_DISTRICTS)) {
     if (lat >= latMin && lat <= latMax && lon >= lonMin && lon <= lonMax) {
       return name
     }
   }
-  return null
+  // Если между районами — ищем ближайший по центру bbox
+  let nearest: string | null = null
+  let minDist = Infinity
+  for (const [name, [latMin, latMax, lonMin, lonMax]] of Object.entries(SPB_DISTRICTS)) {
+    const cLat = (latMin + latMax) / 2
+    const cLon = (lonMin + lonMax) / 2
+    const dist = Math.sqrt((lat - cLat) ** 2 + ((lon - cLon) * 0.55) ** 2) // 0.55 — коррекция долготы для широты ~60
+    if (dist < minDist) {
+      minDist = dist
+      nearest = name
+    }
+  }
+  // Только если достаточно близко (не за пределами города)
+  return minDist < 0.15 ? nearest : null
 }
 
 export interface GeocodeResult {

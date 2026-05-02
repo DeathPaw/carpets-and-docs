@@ -2,6 +2,7 @@ package ru.carpet.service;
 
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.exception.BusinessRuleException;
 import ru.carpet.exception.ConflictException;
 import ru.carpet.exception.EntityNotFoundException;
@@ -28,6 +29,7 @@ public class OrderService {
     private final OrderModifierRepository orderModifierRepository;
     private final PriceModifierRepository priceModifierRepository;
     private final ClientModifierRepository clientModifierRepository;
+    private final ClientEventRepository clientEventRepository;
 
     public OrderService(
             OrderRepository repository,
@@ -42,7 +44,8 @@ public class OrderService {
             @Lazy OrderItemService orderItemService,
             OrderModifierRepository orderModifierRepository,
             PriceModifierRepository priceModifierRepository,
-            ClientModifierRepository clientModifierRepository
+            ClientModifierRepository clientModifierRepository,
+            ClientEventRepository clientEventRepository
     ) {
         this.repository = repository;
         this.itemRepository = itemRepository;
@@ -57,6 +60,7 @@ public class OrderService {
         this.orderModifierRepository = orderModifierRepository;
         this.priceModifierRepository = priceModifierRepository;
         this.clientModifierRepository = clientModifierRepository;
+        this.clientEventRepository = clientEventRepository;
     }
 
     public List<Order> findAll(OrderStatus status, int page, int size) {
@@ -68,11 +72,26 @@ public class OrderService {
     }
 
     public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, int page, int size) {
-        return repository.findAll(status, dateFrom, dateTo, legacyId, null, null, page, size);
+        return repository.findAll(status, dateFrom, dateTo, legacyId, null, null, null, null, page, size);
     }
 
     public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, Long orderId, String paymentType, int page, int size) {
-        return repository.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, page, size);
+        return repository.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, null, null, page, size);
+    }
+
+    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, Long orderId, String paymentType,
+                               String clientPhone, String clientName, int page, int size) {
+        return repository.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, null, null, page, size);
+    }
+
+    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, Long orderId, String paymentType,
+                               String clientPhone, String clientName, String sortBy, String sortDir, int page, int size) {
+        return repository.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, sortBy, sortDir, page, size);
+    }
+
+    public long countAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, Long orderId, String paymentType,
+                         String clientPhone, String clientName) {
+        return repository.countAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
     }
 
     public Order findById(Long id) {
@@ -80,6 +99,7 @@ public class OrderService {
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + id));
     }
 
+    @Transactional
     public Order create(Long clientId, String clientName, String comment,
                         String pickupAddress, String deliveryAddress, Long legacyId) {
         Order order = repository.save(clientId, clientName, comment, pickupAddress, deliveryAddress, legacyId);
@@ -94,6 +114,10 @@ public class OrderService {
         }
         // Пересчитываем сумму и дефолтные позиции
         recalculateTotalAmount(order.id());
+        // Автоматически создаём событие клиента
+        if (clientId != null) {
+            clientEventRepository.save(clientId, "ORDER_CREATED", "Создан заказ #" + order.id());
+        }
         return repository.findById(order.id()).orElseThrow();
     }
 
@@ -102,6 +126,7 @@ public class OrderService {
      * Логика: если freeThreshold задан и сумма остальных позиций >= threshold → цена = 0,
      * иначе цена = defaultPrice.
      */
+    @Transactional
     public void recalculateDefaultItemPrices(Long orderId) {
         List<OrderItem> items = itemRepository.findByOrderId(orderId);
         List<ItemType> defaults = itemTypeRepository.findDefaults();
@@ -143,6 +168,7 @@ public class OrderService {
     }
 
     /** Ручное изменение статуса заказа */
+    @Transactional
     public Order updateStatus(Long orderId, OrderStatus newStatus) {
         Order order = findById(orderId);
         validateStatusTransition(order.status(), newStatus);
@@ -179,6 +205,7 @@ public class OrderService {
      * Не затрагивает LEAD и DELIVERED — они управляются только вручную.
      * FOR_PICKUP может переходить в IN_PROGRESS/PARTIALLY_DONE/DONE автоматически.
      */
+    @Transactional
     public void recalculateOrderStatus(Long orderId) {
         Order order = findById(orderId);
         // Не трогаем LEAD и DELIVERED
@@ -233,6 +260,7 @@ public class OrderService {
     }
 
     /** Оплата заказа */
+    @Transactional
     public Order pay(Long orderId, PaymentType paymentType) {
         Order order = findById(orderId);
         if (order.paid()) {
@@ -247,6 +275,7 @@ public class OrderService {
     }
 
     /** Гарантийный возврат — только из статуса DELIVERED, с выбором позиций */
+    @Transactional
     public Order createWarranty(Long orderId, List<Long> itemIds, String warrantyComment) {
         Order original = findById(orderId);
         if (original.status() != OrderStatus.DELIVERED) {
@@ -270,6 +299,10 @@ public class OrderService {
             serviceInstanceRepository.saveAll(newItem.id(), serviceDefIds);
         }
 
+        // Автоматически создаём событие клиента о гарантийном возврате
+        if (original.clientId() != null) {
+            clientEventRepository.save(original.clientId(), "WARRANTY", "Гарантийный возврат по заказу #" + orderId);
+        }
         return repository.findById(warranty.id()).orElseThrow();
     }
 
@@ -311,6 +344,7 @@ public class OrderService {
     }
 
     /** Дублирование заказа — копирует все позиции, услуги, модификаторы. Новый заказ в статусе LEAD, цены из прайс-листа */
+    @Transactional
     public Order duplicateOrder(Long orderId) {
         Order original = findById(orderId);
         // Создаём новый заказ
@@ -382,6 +416,7 @@ public class OrderService {
     }
 
     /** Пересчёт итоговой суммы с учётом модификаторов */
+    @Transactional
     public void recalculateTotalWithModifiers(Long orderId, BigDecimal baseAmount) {
         List<OrderModifier> modifiers = orderModifierRepository.findByOrderId(orderId);
         BigDecimal modifierSum = BigDecimal.ZERO;
@@ -399,6 +434,7 @@ public class OrderService {
     }
 
     /** Добавить модификатор к заказу */
+    @Transactional
     public Order addModifier(Long orderId, Long modifierId) {
         findById(orderId);
         PriceModifier pm = priceModifierRepository.findById(modifierId)
@@ -409,6 +445,7 @@ public class OrderService {
     }
 
     /** Удалить модификатор из заказа */
+    @Transactional
     public Order removeModifier(Long orderId, Long modifierId) {
         findById(orderId);
         orderModifierRepository.removeByOrderIdAndModifierId(orderId, modifierId);
@@ -417,6 +454,7 @@ public class OrderService {
     }
 
     /** Перенести модификаторы заказа на клиента */
+    @Transactional
     public void pushModifiersToClient(Long orderId) {
         Order order = findById(orderId);
         if (order.clientId() == null) {

@@ -6,7 +6,7 @@ import type {
 } from '../types'
 
 // Orders
-export const getOrders = (status?: string, page = 0, size = 20, dateFrom?: string, dateTo?: string, legacyId?: number, paymentType?: string, orderId?: number) => {
+export const getOrders = (status?: string, page = 0, size = 20, dateFrom?: string, dateTo?: string, legacyId?: number, paymentType?: string, orderId?: number, clientPhone?: string, clientName?: string, sortBy?: string, sortDir?: string) => {
   const params = new URLSearchParams()
   if (status) params.append('status', status)
   if (dateFrom) params.append('dateFrom', dateFrom)
@@ -14,11 +14,15 @@ export const getOrders = (status?: string, page = 0, size = 20, dateFrom?: strin
   if (legacyId) params.append('legacyId', legacyId.toString())
   if (paymentType) params.append('paymentType', paymentType)
   if (orderId) params.append('orderId', orderId.toString())
+  if (clientPhone) params.append('clientPhone', clientPhone)
+  if (clientName) params.append('clientName', clientName)
+  if (sortBy) params.append('sortBy', sortBy)
+  if (sortDir) params.append('sortDir', sortDir)
   params.append('page', page.toString())
   params.append('size', size.toString())
 
   const query = params.toString() ? `?${params.toString()}` : ''
-  return client.get<Order[]>(`/api/orders${query}`).then(r => r.data)
+  return client.get<{content: Order[], total_elements: number, page: number, size: number}>(`/api/orders${query}`).then(r => r.data)
 }
 
 export const getOrder = (id: number) =>
@@ -104,6 +108,32 @@ export const pushModifiersToClient = (orderId: number) =>
   client.post(`/api/orders/${orderId}/modifiers/push-to-client`)
 
 // Employee Earnings
+// Item Photos
+export const getItemPhotos = (orderId: number, itemId: number) =>
+  client.get<{id: number, order_item_id: number, filename: string, content_type: string, data: string, created_at: string}[]>(`/api/orders/${orderId}/items/${itemId}/photos`).then(r => r.data)
+
+export const uploadItemPhoto = (orderId: number, itemId: number, file: File) => {
+  return new Promise<void>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = async () => {
+      try {
+        const base64 = (reader.result as string).split(',')[1]
+        await client.post(`/api/orders/${orderId}/items/${itemId}/photos`, {
+          filename: file.name,
+          content_type: file.type,
+          data: base64,
+        })
+        resolve()
+      } catch (e) { reject(e) }
+    }
+    reader.onerror = reject
+    reader.readAsDataURL(file)
+  })
+}
+
+export const deleteItemPhoto = (orderId: number, itemId: number, photoId: number) =>
+  client.delete(`/api/orders/${orderId}/items/${itemId}/photos/${photoId}`)
+
 export const getEmployeeEarnings = (employeeId: number, status?: string, dateFrom?: string, dateTo?: string) => {
   const params = new URLSearchParams()
   if (status) params.append('status', status)

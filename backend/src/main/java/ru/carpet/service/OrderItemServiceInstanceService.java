@@ -1,6 +1,7 @@
 package ru.carpet.service;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.dto.OrderItemServiceWithAssignees;
 import ru.carpet.exception.BusinessRuleException;
 import ru.carpet.exception.EntityNotFoundException;
@@ -8,7 +9,7 @@ import ru.carpet.model.*;
 import ru.carpet.repository.*;
 
 import java.math.BigDecimal;
-import java.util.List;
+import java.util.*;
 
 @Service
 public class OrderItemServiceInstanceService {
@@ -47,8 +48,38 @@ public class OrderItemServiceInstanceService {
     }
 
     public List<OrderItemServiceWithAssignees> findByOrderItemIdWithAssignees(Long orderItemId) {
+        return findByOrderItemIdWithAssigneesBatch(orderItemId);
+    }
+
+    public List<OrderItemServiceWithAssignees> findByOrderItemIdWithAssigneesBatch(Long orderItemId) {
         List<OrderItemServiceInstance> services = repository.findByOrderItemId(orderItemId);
-        return services.stream().map(this::mapToWithAssignees).toList();
+        if (services.isEmpty()) return List.of();
+
+        List<Long> serviceIds = services.stream().map(OrderItemServiceInstance::id).toList();
+        Map<Long, List<Long>> assigneeMap = assigneeRepository.findEmployeeIdsByServiceIds(serviceIds);
+
+        // Collect all employee IDs
+        Set<Long> allEmpIds = new HashSet<>();
+        assigneeMap.values().forEach(allEmpIds::addAll);
+        Map<Long, Employee> empMap = allEmpIds.isEmpty() ? Map.of() : employeeRepository.findByIds(new ArrayList<>(allEmpIds));
+
+        // Collect all service def IDs
+        List<Long> defIds = services.stream().map(OrderItemServiceInstance::serviceDefId).distinct().toList();
+        Map<Long, ServiceDefinition> defMap = new HashMap<>();
+        for (Long defId : defIds) {
+            serviceDefinitionRepository.findById(defId).ifPresent(d -> defMap.put(defId, d));
+        }
+
+        return services.stream().map(service -> {
+            List<Long> empIds = assigneeMap.getOrDefault(service.id(), List.of());
+            List<Employee> assignees = empIds.stream().map(empMap::get).filter(Objects::nonNull).toList();
+            ServiceDefinition sd = defMap.get(service.serviceDefId());
+            return new OrderItemServiceWithAssignees(
+                service.id(), service.orderItemId(), service.serviceDefId(),
+                sd != null ? sd.name() : null, service.status(), service.price(),
+                service.isManualPrice(), assignees, service.createdAt(), service.updatedAt()
+            );
+        }).toList();
     }
 
     public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status) {
@@ -59,6 +90,7 @@ public class OrderItemServiceInstanceService {
         return repository.sumPriceByEmployeeId(employeeId, status, dateFrom, dateTo);
     }
 
+    @Transactional
     public OrderItemServiceInstance addService(Long orderItemId, Long serviceDefId) {
         // Получаем позицию заказа
         OrderItem orderItem = orderItemRepository.findById(orderItemId)
@@ -97,9 +129,18 @@ public class OrderItemServiceInstanceService {
         return mapToWithAssignees(service);
     }
 
+    @Transactional
     public OrderItemServiceInstance updateStatus(Long serviceId, ServiceStatus status) {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
+
+        // Блокировка: нельзя перевести в IN_PROGRESS или DONE без назначенного исполнителя
+        if (status != ServiceStatus.CREATED && status != ServiceStatus.CANCELLED) {
+            List<Long> assigneeIds = assigneeRepository.findEmployeeIdsByServiceId(serviceId);
+            if (assigneeIds.isEmpty()) {
+                throw new BusinessRuleException("Невозможно сменить статус: не назначен исполнитель");
+            }
+        }
 
         // Блокировка: если размеры не заполнены для данного pricing_type, нельзя переводить дальше CREATED
         if (status != ServiceStatus.CREATED && status != ServiceStatus.CANCELLED) {
@@ -120,6 +161,7 @@ public class OrderItemServiceInstanceService {
         return repository.findById(serviceId).orElseThrow();
     }
 
+    @Transactional
     public OrderItemServiceInstance updatePrice(Long serviceId, java.math.BigDecimal price) {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
@@ -139,6 +181,7 @@ public class OrderItemServiceInstanceService {
         return mapToWithAssignees(service);
     }
 
+    @Transactional
     public void assignEmployees(Long serviceId, List<Long> employeeIds) {
         repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));

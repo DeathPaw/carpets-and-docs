@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getFilteredItems } from '../api/services'
 import { getItemTypes, getEmployees } from '../api/references'
 import type { OrderItem, ItemType, Employee, OrderItemStatus } from '../types'
@@ -12,10 +12,12 @@ const ALL_ITEM_STATUSES: OrderItemStatus[] = ['CREATED', 'IN_PROGRESS', 'PARTIAL
 
 export default function ItemsPage() {
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
   const [items, setItems] = useState<OrderItem[]>([])
   const [itemTypes, setItemTypes] = useState<ItemType[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
   const [loading, setLoading] = useState(false)
+  const [pendingTypeName, setPendingTypeName] = useState(searchParams.get('type') || '')
 
   const [statusFilter, setStatusFilter] = useState<OrderItemStatus | ''>('')
   const [itemTypeFilter, setItemTypeFilter] = useState<number | ''>('')
@@ -29,6 +31,12 @@ export default function ItemsPage() {
     Promise.all([getItemTypes(), getEmployees()]).then(([types, emps]) => {
       setItemTypes(types)
       setEmployees(emps)
+      // Применить фильтр из URL по имени типа
+      if (pendingTypeName) {
+        const found = types.find(t => t.name === pendingTypeName)
+        if (found) setItemTypeFilter(found.id)
+        setPendingTypeName('')
+      }
     })
   }, [])
 

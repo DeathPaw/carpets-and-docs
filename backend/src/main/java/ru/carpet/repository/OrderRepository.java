@@ -47,6 +47,8 @@ public class OrderRepository {
         BigDecimal baseAmount = rs.getBigDecimal("base_amount");
         BigDecimal discountPercent = rs.getBigDecimal("discount_percent");
 
+        Long version = rs.getObject("version", Long.class);
+
         Date actualPickupDateSql = rs.getDate("actual_pickup_date");
         var actualPickupDate = actualPickupDateSql != null ? actualPickupDateSql.toLocalDate() : null;
 
@@ -81,6 +83,7 @@ public class OrderRepository {
                 rs.getString("actual_delivery_time_slot"),
                 baseAmount,
                 discountPercent,
+                version,
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime()
         );
@@ -91,19 +94,27 @@ public class OrderRepository {
     }
 
     public List<Order> findAll(OrderStatus status, int page, int size) {
-        return findAll(status, null, null, null, page, size);
+        return findAll(status, null, null, null, null, null, null, null, page, size);
     }
 
     public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, int page, int size) {
-        return findAll(status, dateFrom, dateTo, null, page, size);
+        return findAll(status, dateFrom, dateTo, null, null, null, null, null, page, size);
     }
 
     public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, int page, int size) {
-        return findAll(status, dateFrom, dateTo, legacyId, null, null, page, size);
+        return findAll(status, dateFrom, dateTo, legacyId, null, null, null, null, page, size);
     }
 
     public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
-                               Long orderId, String paymentType, int page, int size) {
+                               Long orderId, String paymentType,
+                               String clientPhone, String clientName, int page, int size) {
+        return findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, null, null, page, size);
+    }
+
+    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
+                               Long orderId, String paymentType,
+                               String clientPhone, String clientName,
+                               String sortBy, String sortDir, int page, int size) {
         Map<String, Object> params = new HashMap<>();
         params.put("limit", size);
         params.put("offset", (long) page * size);
@@ -111,6 +122,36 @@ public class OrderRepository {
         StringBuilder sql = new StringBuilder(
                 "SELECT o.*, c.address as client_address FROM orders o LEFT JOIN clients c ON c.id = o.client_id WHERE 1=1 ");
 
+        appendWhereClause(sql, params, status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+
+        String orderBy = switch (sortBy != null ? sortBy : "id") {
+            case "total_amount" -> "o.total_amount";
+            case "created_at" -> "o.created_at";
+            case "status" -> "o.status";
+            case "client_name" -> "o.client_name";
+            default -> "o.id";
+        };
+        String dir = "asc".equalsIgnoreCase(sortDir) ? "ASC" : "DESC";
+        sql.append("ORDER BY ").append(orderBy).append(" ").append(dir).append(" LIMIT :limit OFFSET :offset");
+
+        return jdbc.query(sql.toString(), params, ROW_MAPPER);
+    }
+
+    public long countAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
+                         Long orderId, String paymentType, String clientPhone, String clientName) {
+        Map<String, Object> params = new HashMap<>();
+        StringBuilder sql = new StringBuilder(
+                "SELECT COUNT(*) FROM orders o LEFT JOIN clients c ON c.id = o.client_id WHERE 1=1 ");
+
+        appendWhereClause(sql, params, status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+
+        Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
+        return count != null ? count : 0;
+    }
+
+    private void appendWhereClause(StringBuilder sql, Map<String, Object> params,
+                                   OrderStatus status, String dateFrom, String dateTo, Long legacyId,
+                                   Long orderId, String paymentType, String clientPhone, String clientName) {
         if (status != null) {
             sql.append("AND o.status = :status ");
             params.put("status", status.name());
@@ -135,9 +176,14 @@ public class OrderRepository {
             sql.append("AND o.payment_type = :paymentType ");
             params.put("paymentType", paymentType);
         }
-        sql.append("ORDER BY o.id DESC LIMIT :limit OFFSET :offset");
-
-        return jdbc.query(sql.toString(), params, ROW_MAPPER);
+        if (clientPhone != null && !clientPhone.isEmpty()) {
+            sql.append("AND (c.phone LIKE :clientPhone OR c.extra_phone LIKE :clientPhone) ");
+            params.put("clientPhone", "%" + clientPhone + "%");
+        }
+        if (clientName != null && !clientName.isEmpty()) {
+            sql.append("AND (LOWER(o.client_name) LIKE :clientNameLike OR LOWER(COALESCE(c.contact_person,'')) LIKE :clientNameLike) ");
+            params.put("clientNameLike", "%" + clientName.toLowerCase() + "%");
+        }
     }
 
     public Optional<Order> findById(Long id) {
@@ -162,28 +208,28 @@ public class OrderRepository {
 
     public void updateStatus(Long id, OrderStatus status) {
         jdbc.update(
-                "UPDATE orders SET status = :status, updated_at = NOW() WHERE id = :id",
+                "UPDATE orders SET status = :status, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("status", status.name(), "id", id)
         );
     }
 
     public void updateBaseAmount(Long id, java.math.BigDecimal baseAmount) {
         jdbc.update(
-                "UPDATE orders SET base_amount = :baseAmount, updated_at = NOW() WHERE id = :id",
+                "UPDATE orders SET base_amount = :baseAmount, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("baseAmount", baseAmount, "id", id)
         );
     }
 
     public void updateTotalAmount(Long id, java.math.BigDecimal totalAmount) {
         jdbc.update(
-                "UPDATE orders SET total_amount = :totalAmount, updated_at = NOW() WHERE id = :id",
+                "UPDATE orders SET total_amount = :totalAmount, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("totalAmount", totalAmount, "id", id)
         );
     }
 
     public void updateComment(Long id, String comment) {
         jdbc.update(
-                "UPDATE orders SET comment = :comment, updated_at = NOW() WHERE id = :id",
+                "UPDATE orders SET comment = :comment, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("comment", comment, "id", id)
         );
     }
@@ -212,14 +258,14 @@ public class OrderRepository {
                 "actual_pickup_time_slot = COALESCE(actual_pickup_time_slot, :pickupTimeSlot), " +
                 "actual_delivery_date = COALESCE(actual_delivery_date, :deliveryDate), " +
                 "actual_delivery_time_slot = COALESCE(actual_delivery_time_slot, :deliveryTimeSlot), " +
-                "updated_at = NOW() WHERE id = :id",
+                "version = version + 1, updated_at = NOW() WHERE id = :id",
                 params
         );
     }
 
     public void pay(Long id, ru.carpet.model.PaymentType paymentType) {
         jdbc.update(
-                "UPDATE orders SET paid = true, payment_type = :paymentType, payment_date = NOW(), updated_at = NOW() WHERE id = :id",
+                "UPDATE orders SET paid = true, payment_type = :paymentType, payment_date = NOW(), version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("paymentType", paymentType.name(), "id", id)
         );
     }
@@ -293,7 +339,7 @@ public class OrderRepository {
         jdbc.update(
                 "UPDATE orders SET actual_pickup_date = :actualPickupDate, actual_pickup_time_slot = :actualPickupTimeSlot, " +
                 "actual_delivery_date = :actualDeliveryDate, actual_delivery_time_slot = :actualDeliveryTimeSlot, " +
-                "updated_at = NOW() WHERE id = :id",
+                "version = version + 1, updated_at = NOW() WHERE id = :id",
                 params
         );
     }

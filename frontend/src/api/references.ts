@@ -32,8 +32,8 @@ export const getPriceList = (itemTypeId?: number) => {
   return client.get<PriceListEntry[]>('/api/price-list', params).then(r => r.data)
 }
 
-export const updatePriceListEntry = (id: number, price: number | null) =>
-  client.patch<PriceListEntry>(`/api/price-list/${id}`, { price }).then(r => r.data)
+export const updatePriceListEntry = (id: number, price: number | null, costPrice?: number | null) =>
+  client.patch<PriceListEntry>(`/api/price-list/${id}`, { price, cost_price: costPrice }).then(r => r.data)
 
 // Service Definitions
 export const getServiceDefinitions = () =>

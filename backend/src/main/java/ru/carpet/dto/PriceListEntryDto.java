@@ -10,5 +10,6 @@ public record PriceListEntryDto(
         String serviceDefName,
         String pricingType,
         BigDecimal price,
+        BigDecimal costPrice,
         boolean isActive
 ) {}

@@ -5,10 +5,11 @@ spring:
     password:
     driver-class-name: org.postgresql.Driver
 
-  # Отключаем автоматическое применение schema.sql — применяем вручную
-  sql:
-    init:
-      mode: never
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
 
   jackson:
     # Сериализация и десериализация JSON в snake_case

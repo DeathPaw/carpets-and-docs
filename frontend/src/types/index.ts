@@ -106,6 +106,7 @@ export interface PriceListEntry {
   service_def_name: string | null
   pricing_type: string | null
   price: number | null
+  cost_price: number | null
   is_active: boolean
 }
 
@@ -140,6 +141,15 @@ export interface ErrorLogEntry {
   error_type: string
   message: string
   request_path: string | null
+  occurred_at: string
+}
+
+export interface AuditLogEntry {
+  id: number
+  entity_type: string
+  entity_id: number | null
+  action: string
+  description: string
   occurred_at: string
 }
 

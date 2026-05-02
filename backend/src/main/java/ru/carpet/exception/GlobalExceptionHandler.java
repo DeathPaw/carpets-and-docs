@@ -75,6 +75,7 @@ public class GlobalExceptionHandler {
         return ResponseEntity.status(status).body(Map.of(
                 "error", error,
                 "message", message != null ? message : "",
+                "path", path != null ? path : "",
                 "timestamp", LocalDateTime.now().toString()
         ));
     }
