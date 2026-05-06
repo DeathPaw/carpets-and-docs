@@ -1,1 +1,0 @@
-ALTER TABLE price_list ADD COLUMN IF NOT EXISTS cost_price NUMERIC(12,2);

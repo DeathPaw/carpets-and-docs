@@ -22,6 +22,7 @@ public class OrderItemServiceInstanceRepository {
             ServiceStatus.valueOf(rs.getString("status")),
             rs.getBigDecimal("price"),
             rs.getBoolean("is_manual_price"),
+            rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
     );
@@ -48,9 +49,24 @@ public class OrderItemServiceInstanceRepository {
 
     public List<OrderItemServiceInstance> findByOrderItemId(Long orderItemId) {
         return jdbc.query(
-                "SELECT id, order_item_id, service_def_id, status, price, is_manual_price, created_at, updated_at " +
+                "SELECT id, order_item_id, service_def_id, status, price, is_manual_price, cancellation_reason, created_at, updated_at " +
                 "FROM order_item_services WHERE order_item_id = :orderItemId ORDER BY id",
                 Map.of("orderItemId", orderItemId),
+                ROW_MAPPER
+        );
+    }
+
+    /**
+     * Все услуги по списку позиций — батч-выборка одним запросом.
+     * Спасает от N+1 на странице заказа: было N {@code findByOrderItemId} запросов
+     * (на каждую позицию заказа отдельно), стал один.
+     */
+    public List<OrderItemServiceInstance> findByOrderItemIds(java.util.Collection<Long> orderItemIds) {
+        if (orderItemIds == null || orderItemIds.isEmpty()) return List.of();
+        return jdbc.query(
+                "SELECT id, order_item_id, service_def_id, status, price, is_manual_price, cancellation_reason, created_at, updated_at " +
+                "FROM order_item_services WHERE order_item_id IN (:ids) ORDER BY order_item_id, id",
+                new MapSqlParameterSource("ids", orderItemIds),
                 ROW_MAPPER
         );
     }
@@ -59,6 +75,18 @@ public class OrderItemServiceInstanceRepository {
         jdbc.update(
                 "UPDATE order_item_services SET status = :status, updated_at = NOW() WHERE id = :id",
                 Map.of("status", status.name(), "id", id)
+        );
+    }
+
+    public void updateStatusWithReason(Long id, ServiceStatus status, String reason) {
+        var params = new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("status", status.name())
+                .addValue("reason", reason);
+        jdbc.update(
+                "UPDATE order_item_services SET status = :status, cancellation_reason = :reason, " +
+                "updated_at = NOW() WHERE id = :id",
+                params
         );
     }
 
@@ -87,7 +115,7 @@ public class OrderItemServiceInstanceRepository {
 
     public java.util.Optional<OrderItemServiceInstance> findById(Long id) {
         List<OrderItemServiceInstance> result = jdbc.query(
-                "SELECT id, order_item_id, service_def_id, status, price, is_manual_price, created_at, updated_at " +
+                "SELECT id, order_item_id, service_def_id, status, price, is_manual_price, cancellation_reason, created_at, updated_at " +
                 "FROM order_item_services WHERE id = :id",
                 Map.of("id", id),
                 ROW_MAPPER
@@ -97,7 +125,7 @@ public class OrderItemServiceInstanceRepository {
 
     public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status) {
         String sql = """
-            SELECT ois.id, ois.order_item_id, ois.service_def_id, ois.status, ois.price, ois.is_manual_price, ois.created_at, ois.updated_at
+            SELECT ois.id, ois.order_item_id, ois.service_def_id, ois.status, ois.price, ois.is_manual_price, ois.cancellation_reason, ois.created_at, ois.updated_at
             FROM order_item_services ois
             JOIN service_assignees sa ON ois.id = sa.order_item_service_id
             WHERE sa.employee_id = :employeeId

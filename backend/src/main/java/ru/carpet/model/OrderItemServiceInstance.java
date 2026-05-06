@@ -10,6 +10,7 @@ public record OrderItemServiceInstance(
         ServiceStatus status,
         BigDecimal price,
         Boolean isManualPrice,
+        String cancellationReason,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {}

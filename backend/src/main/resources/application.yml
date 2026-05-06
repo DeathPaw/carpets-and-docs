@@ -16,5 +16,15 @@ spring:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
 
+# Swagger UI — http://localhost:8080/swagger-ui.html
+# OpenAPI спецификация — http://localhost:8080/v3/api-docs
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
 server:
   port: 8080

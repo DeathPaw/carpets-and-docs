@@ -31,12 +31,14 @@ public class ServiceDefinitionRepository {
 
     public List<ServiceDefinition> findAll() {
         return jdbc.query(
-                "SELECT id, name, base_price, pricing_type, created_at, updated_at FROM service_definitions ORDER BY id",
+                "SELECT id, name, base_price, pricing_type, created_at, updated_at FROM service_definitions " +
+                "WHERE is_deleted = FALSE ORDER BY id",
                 Map.of(),
                 ROW_MAPPER
         );
     }
 
+    /** findById не фильтрует по is_deleted — нужно для отображения исторических услуг в старых заказах. */
     public Optional<ServiceDefinition> findById(Long id) {
         List<ServiceDefinition> result = jdbc.query(
                 "SELECT id, name, base_price, pricing_type, created_at, updated_at FROM service_definitions WHERE id = :id",
@@ -75,7 +77,17 @@ public class ServiceDefinitionRepository {
         return findById(id).orElseThrow();
     }
 
+    /** Soft-delete: помечаем услугу удалённой, исторические записи order_item_services сохраняются. */
     public void delete(Long id) {
-        jdbc.update("DELETE FROM service_definitions WHERE id = :id", Map.of("id", id));
+        jdbc.update("UPDATE service_definitions SET is_deleted = TRUE, updated_at = NOW() WHERE id = :id",
+                Map.of("id", id));
+    }
+
+    /** Сколько услуг в реальных заказах используют это определение. */
+    public long countServicesUsing(Long id) {
+        Long n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM order_item_services WHERE service_def_id = :id",
+                Map.of("id", id), Long.class);
+        return n == null ? 0 : n;
     }
 }

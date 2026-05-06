@@ -2,6 +2,8 @@ package ru.carpet.dto;
 
 import jakarta.validation.constraints.NotBlank;
 
+import java.math.BigDecimal;
+
 public record CreateClientRequest(
         String clientType,
         @NotBlank String name,
@@ -17,5 +19,7 @@ public record CreateClientRequest(
         String comment,
         Boolean isPensioner,
         Boolean isProblem,
-        Boolean isRegular
+        Boolean isRegular,
+        BigDecimal lat,
+        BigDecimal lon
 ) {}

@@ -18,25 +18,12 @@ public class OrderItemRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
+    /**
+     * Все запросы возвращают позицию вместе с item_type_name через JOIN на item_types.
+     * Раньше был отдельный ROW_MAPPER без имени — он не использовался, дублировал логику и
+     * заполнял поле itemTypeName в OrderItem null'ом.
+     */
     private static final RowMapper<OrderItem> ROW_MAPPER = (rs, rowNum) -> new OrderItem(
-            rs.getLong("id"),
-            rs.getLong("order_id"),
-            rs.getLong("item_type_id"),
-            null,
-            rs.getString("description"),
-            rs.getString("defects"),
-            OrderItemStatus.valueOf(rs.getString("status")),
-            rs.getBigDecimal("price"),
-            rs.getBigDecimal("length"),
-            rs.getBigDecimal("width"),
-            rs.getBigDecimal("weight"),
-            rs.getBigDecimal("area"),
-            rs.getBigDecimal("running_meters"),
-            rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
-    );
-
-    private static final RowMapper<OrderItem> ROW_MAPPER_WITH_NAME = (rs, rowNum) -> new OrderItem(
             rs.getLong("id"),
             rs.getLong("order_id"),
             rs.getLong("item_type_id"),
@@ -50,6 +37,7 @@ public class OrderItemRepository {
             rs.getBigDecimal("weight"),
             rs.getBigDecimal("area"),
             rs.getBigDecimal("running_meters"),
+            rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
     );
@@ -61,12 +49,13 @@ public class OrderItemRepository {
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.created_at, oi.updated_at, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.cancellation_reason, " +
+                "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
                 "WHERE oi.order_id = :orderId ORDER BY oi.id",
                 Map.of("orderId", orderId),
-                ROW_MAPPER_WITH_NAME
+                ROW_MAPPER
         );
     }
 
@@ -118,6 +107,19 @@ public class OrderItemRepository {
         );
     }
 
+    /** Установка статуса вместе с причиной отмены. */
+    public void updateStatusWithReason(Long id, OrderItemStatus status, String reason) {
+        var params = new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("status", status.name())
+                .addValue("reason", reason);
+        jdbc.update(
+                "UPDATE order_items SET status = :status, cancellation_reason = :reason, " +
+                "version = version + 1, updated_at = NOW() WHERE id = :id",
+                params
+        );
+    }
+
     public void updatePrice(Long id, BigDecimal price) {
         jdbc.update(
                 "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() WHERE id = :id",
@@ -164,12 +166,13 @@ public class OrderItemRepository {
     public Optional<OrderItem> findById(Long id) {
         List<OrderItem> result = jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.created_at, oi.updated_at, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.cancellation_reason, " +
+                "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
                 "WHERE oi.id = :id",
                 Map.of("id", id),
-                ROW_MAPPER_WITH_NAME
+                ROW_MAPPER
         );
         return result.stream().findFirst();
     }

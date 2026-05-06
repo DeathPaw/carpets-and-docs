@@ -1,4 +1,9 @@
-// Определение района Санкт-Петербурга по адресу через Nominatim (OpenStreetMap)
+// Определение района Санкт-Петербурга по координатам.
+// Используется как fallback для AddressInput, когда DaData не вернула район в подсказке —
+// мы знаем lat/lon из ответа DaData и определяем район по упрощённой bbox-таблице.
+//
+// Раньше здесь была ещё функция geocodeAddress() через Nominatim — после перехода
+// на DaData она больше не нужна и удалена.
 
 // Упрощённые bbox районов Петербурга (lat_min, lat_max, lon_min, lon_max)
 const SPB_DISTRICTS: Record<string, [number, number, number, number]> = {
@@ -22,7 +27,7 @@ const SPB_DISTRICTS: Record<string, [number, number, number, number]> = {
   'Кронштадтский':      [59.98, 60.02, 29.72, 29.80],
 }
 
-function detectDistrictByCoords(lat: number, lon: number): string | null {
+export function detectDistrictByCoords(lat: number, lon: number): string | null {
   // Сначала точное попадание в bbox
   for (const [name, [latMin, latMax, lonMin, lonMax]] of Object.entries(SPB_DISTRICTS)) {
     if (lat >= latMin && lat <= latMax && lon >= lonMin && lon <= lonMax) {
@@ -35,56 +40,13 @@ function detectDistrictByCoords(lat: number, lon: number): string | null {
   for (const [name, [latMin, latMax, lonMin, lonMax]] of Object.entries(SPB_DISTRICTS)) {
     const cLat = (latMin + latMax) / 2
     const cLon = (lonMin + lonMax) / 2
-    const dist = Math.sqrt((lat - cLat) ** 2 + ((lon - cLon) * 0.55) ** 2) // 0.55 — коррекция долготы для широты ~60
+    // 0.55 — коррекция долготы для широты ~60°
+    const dist = Math.sqrt((lat - cLat) ** 2 + ((lon - cLon) * 0.55) ** 2)
     if (dist < minDist) {
       minDist = dist
       nearest = name
     }
   }
-  // Только если достаточно близко (не за пределами города)
+  // Возвращаем только если действительно близко — не дальше чем за пределами города.
   return minDist < 0.15 ? nearest : null
-}
-
-export interface GeocodeResult {
-  found: boolean
-  lat?: number
-  lon?: number
-  district?: string | null
-  displayName?: string
-  isSPB?: boolean
-}
-
-export async function geocodeAddress(address: string): Promise<GeocodeResult> {
-  const query = `Санкт-Петербург, ${address}`
-  const url = `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=1`
-
-  try {
-    const response = await fetch(url, {
-      headers: { 'User-Agent': 'CarpetOrderApp/1.0' },
-    })
-    if (!response.ok) return { found: false }
-
-    const data = await response.json()
-    if (!data || data.length === 0) return { found: false }
-
-    const result = data[0]
-    const lat = parseFloat(result.lat)
-    const lon = parseFloat(result.lon)
-
-    // Проверяем, что адрес в Петербурге (широта ~59.6-60.2, долгота ~29.4-30.7)
-    const isSPB = lat >= 59.6 && lat <= 60.2 && lon >= 29.4 && lon <= 30.7
-
-    const district = isSPB ? detectDistrictByCoords(lat, lon) : null
-
-    return {
-      found: true,
-      lat,
-      lon,
-      district,
-      displayName: result.display_name,
-      isSPB,
-    }
-  } catch {
-    return { found: false }
-  }
 }

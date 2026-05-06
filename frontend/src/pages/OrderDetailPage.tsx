@@ -3,37 +3,38 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, payOrder, createWarrantyOrder,
-  addOrderItem, setOrderItemPrice, updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
+  setOrderItemPrice, updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
   updateOrderComment,
-  updateOrderDetails,
+  updateOrderDetails, updateActualDates,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient,
-  getItemPhotos, uploadItemPhoto, deleteItemPhoto,
+  getItemPhotos, uploadItemPhoto, deleteItemPhoto, getAllOrderPhotos,
+  type ItemPhoto,
 } from '../api/orders'
-import { getItemServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
-import { getItemTypes, getEmployees, getItemType, getPriceModifiers } from '../api/references'
+import { getItemServices, getAllOrderServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
+import { getItemTypes, getEmployees, getItemType, getPriceModifiers, getEmployeeRoles } from '../api/references'
 import { getClient, getClientModifiers, getClientEvents, addClientEvent } from '../api/clients'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
+import CancelReasonModal from '../components/CancelReasonModal'
+import StatusLegend from '../components/StatusLegend'
+import DistrictSelect from '../components/DistrictSelect'
+import AddressInput from '../components/AddressInput'
+import MapMarkers, { type MapPoint } from '../components/MapMarkers'
+import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal } from '../components/orders/order-detail-modals'
 import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
-  PaymentType, AddOrderItemRequest, PriceListEntry,
-  PriceModifier, OrderModifier, Client,
+  PaymentType, PriceListEntry,
+  PriceModifier, OrderModifier, Client, EmployeeRole,
 } from '../types'
 
-const ORDER_STATUS_LABELS: Record<string, string> = {
-  LEAD: 'Лид', CREATED: 'Создан', FOR_PICKUP: 'К забору', IN_PROGRESS: 'В работе',
-  PARTIALLY_DONE: 'Частично готов', DONE: 'Готов', DELIVERED: 'Доставлен', CANCELLED: 'Отменен',
-}
-const ITEM_STATUS_LABELS: Record<string, string> = {
-  CREATED: 'Создана', IN_PROGRESS: 'В работе', PARTIALLY_DONE: 'Частично готова', DONE: 'Готова', CANCELLED: 'Отменена',
-}
-const SERVICE_STATUS_LABELS: Record<string, string> = {
-  CREATED: 'Создана', IN_PROGRESS: 'В работе', DONE: 'Готова', CANCELLED: 'Отменена',
-}
-const PAYMENT_LABELS: Record<string, string> = {
-  TRANSFER: 'Перевод', CARD: 'Карта', CASH: 'Наличные',
-}
+// Подписи статусов и оплаты — общие, см. constants/statuses.ts
+import {
+  ORDER_STATUS_LABELS,
+  ITEM_STATUS_LABELS,
+  SERVICE_STATUS_LABELS,
+  PAYMENT_LABELS,
+} from '../constants/statuses'
 
 // Ручные переходы статусов заказа.
 // IN_PROGRESS, PARTIALLY_DONE, DONE — автоматически из позиций.
@@ -45,7 +46,9 @@ const ALLOWED_TRANSITIONS: Record<string, OrderStatus[]> = {
   IN_PROGRESS: ['CANCELLED'],
   PARTIALLY_DONE: ['CANCELLED'],
   DONE: ['DELIVERED'],
+  // DELIVERED → COMPLETED делается через оплату, не вручную
   DELIVERED: [],
+  COMPLETED: [],   // финальный — никаких изменений
   CANCELLED: [],
 }
 
@@ -53,152 +56,8 @@ function Badge({ status, labels }: { status: string; labels: Record<string, stri
   return <span className={`badge badge-${status.toLowerCase()}`}>{labels[status] ?? status}</span>
 }
 
-function formatOrderNumber(id: number, createdAt: string): string {
-  const num = String(id).padStart(5, '0')
-  const date = new Date(createdAt).toLocaleDateString('ru')
-  return `${num} от ${date}`
-}
-
-// ---- Warranty Modal ----
-function WarrantyModal({
-  items,
-  onClose,
-  onConfirm,
-}: {
-  items: OrderItem[]
-  onClose: () => void
-  onConfirm: (itemIds: number[], comment: string) => void
-}) {
-  const [selectedIds, setSelectedIds] = useState<number[]>(items.map(i => i.id))
-  const [comment, setComment] = useState('')
-  const [error, setError] = useState('')
-
-  const toggle = (id: number) => {
-    setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
-  }
-
-  const submit = () => {
-    if (selectedIds.length === 0) { setError('Выберите хотя бы одну позицию'); return }
-    if (!comment.trim()) { setError('Укажите причину гарантийного возврата'); return }
-    onConfirm(selectedIds, comment.trim())
-  }
-
-  return (
-    <div className="modal-overlay" onClick={() => { if (confirm('Отменить создание гарантийного возврата?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
-        <h2>Гарантийный возврат</h2>
-        <p style={{ color: '#666', marginBottom: 12 }}>Выберите позиции для возврата:</p>
-        <div style={{ maxHeight: 200, overflowY: 'auto', marginBottom: 12 }}>
-          {items.map(item => (
-            <label key={item.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                style={{ width: 'auto' }}
-                checked={selectedIds.includes(item.id)}
-                onChange={() => toggle(item.id)}
-              />
-              {item.item_type_name ?? `Позиция #${item.id}`}
-              {item.description ? ` — ${item.description}` : ''}
-            </label>
-          ))}
-        </div>
-        <div className="form-group">
-          <label>Причина гарантийного возврата *</label>
-          <textarea
-            rows={3}
-            value={comment}
-            onChange={e => setComment(e.target.value)}
-            placeholder="Опишите причину возврата..."
-          />
-        </div>
-        {error && <div className="error-msg">{error}</div>}
-        <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>Отмена</button>
-          <button className="btn-warning" onClick={submit}>Создать гарантийный заказ</button>
-        </div>
-      </div>
-    </div>
-  )
-}
-function AddItemModal({
-  orderId, itemTypes, onClose, onAdded,
-}: {
-  orderId: number
-  itemTypes: ItemType[]
-  onClose: () => void
-  onAdded: (item: OrderItem) => void
-}) {
-  // Исключаем типы "по умолчанию" — они добавляются автоматически
-  const selectableTypes = itemTypes.filter(t => !t.is_default)
-  const [form, setForm] = useState<AddOrderItemRequest>({ item_type_id: selectableTypes[0]?.id ?? 0, description: '' })
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-
-  const submit = async () => {
-    if (!form.item_type_id) { setError('Выберите тип позиции'); return }
-    setLoading(true)
-    try {
-      const item = await addOrderItem(orderId, form)
-      onAdded(item)
-    } catch {
-      setError('Ошибка при добавлении позиции')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="modal-overlay" onClick={() => { if (confirm('Отменить добавление позиции?')) onClose() }}>
-      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto' }}>
-        <h2>Добавить позицию</h2>
-        <div className="form-group">
-          <label>Тип позиции *</label>
-          <select value={form.item_type_id} onChange={e => setForm(f => ({ ...f, item_type_id: Number(e.target.value) }))}>
-            {selectableTypes.length === 0
-              ? <option value="">Нет доступных типов</option>
-              : selectableTypes.map(t => <option key={t.id} value={t.id}>{t.name}</option>)
-            }
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Описание</label>
-          <textarea rows={2} value={form.description ?? ''} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
-        </div>
-        {error && <div className="error-msg">{error}</div>}
-        <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" onClick={submit} disabled={loading || selectableTypes.length === 0}>
-            {loading ? 'Добавление...' : 'Добавить'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// ---- Pay Modal ----
-function PayModal({ onClose, onPay }: { onClose: () => void; onPay: (pt: PaymentType) => void }) {
-  const [paymentType, setPaymentType] = useState<PaymentType>('CARD')
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
-        <h2>Оплата заказа</h2>
-        <div className="form-group">
-          <label>Тип оплаты</label>
-          <select value={paymentType} onChange={e => setPaymentType(e.target.value as PaymentType)}>
-            <option value="CARD">Карта</option>
-            <option value="CASH">Наличные</option>
-            <option value="TRANSFER">Перевод</option>
-          </select>
-        </div>
-        <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>Отмена</button>
-          <button className="btn-success" onClick={() => onPay(paymentType)}>Оплатить</button>
-        </div>
-      </div>
-    </div>
-  )
-}
+// formatOrderNumber теперь общая — см. utils/format.ts
+import { formatOrderNumber } from '../utils/format'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
 function checkDimensionsForPricing(pricingType: string | null | undefined, item: OrderItem): { ok: boolean; missing: string } {
@@ -219,14 +78,25 @@ function checkDimensionsForPricing(pricingType: string | null | undefined, item:
 
 // ---- Services Panel ----
 function ServicesPanel({
-  orderId, item, itemTypeId, employees, onRefresh, isEditable,
+  orderId, item, itemTypeId, employees, roles, onRefresh, isEditable, onOpenDimensions, isDefaultType,
 }: {
   orderId: number
   item: OrderItem
   itemTypeId: number
   employees: Employee[]
+  /** Все роли (для фильтрации исполнителей по типу позиции). Если undefined — фильтрация пропускается. */
+  roles: EmployeeRole[]
   onRefresh: () => void
   isEditable: boolean
+  /** Открыть форму редактирования размеров позиции (вызывается из модалки «Заполните размеры»). */
+  onOpenDimensions: () => void
+  /**
+   * Тип позиции — дефолтный (доставка/оформление). У таких услуг цена не показывается:
+   * фактическая стоимость уже отображена на самой позиции (default_price /
+   * free_threshold-логика), а дублирование цены услуги вводит в заблуждение
+   * («200 на позиции + 200 на услуге = 400» → нет, это одна и та же сумма).
+   */
+  isDefaultType: boolean
 }) {
   const { showToast } = useToast()
   const itemId = item.id
@@ -240,7 +110,20 @@ function ServicesPanel({
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [priceValue, setPriceValue] = useState('')
   const [dimWarning, setDimWarning] = useState('')
-  const [showDimModal, setShowDimModal] = useState<{serviceDefId: number, missing: string} | null>(null)
+  const [showDimModal, setShowDimModal] = useState<{
+    serviceDefId: number
+    missing: string
+    pricingType: string | null | undefined
+  } | null>(null)
+  // Поля для ввода размеров прямо в модалке добавления услуги.
+  // Сбрасываются при открытии модалки.
+  const [dimInputs, setDimInputs] = useState<{ length: string; width: string; weight: string; runningMeters: string }>({
+    length: '', width: '', weight: '', runningMeters: '',
+  })
+  // Модалка «Заполните размеры» при попытке перевести услугу в работу/готова без размеров.
+  // Раньше блок приходил из бэка как 422-ошибка с тостом — оператор не сразу понимал что делать.
+  // Теперь спрашиваем заранее и предлагаем кнопку «Заполнить размеры».
+  const [statusBlockModal, setStatusBlockModal] = useState<{serviceId: number, missing: string} | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -262,12 +145,46 @@ function ServicesPanel({
 
   useEffect(() => { void load() }, [orderId, itemId, itemTypeId])
 
+  const [cancelServiceId, setCancelServiceId] = useState<number | null>(null)
+
   const changeStatus = async (serviceId: number, status: ServiceStatus) => {
+    // Отмена — спросим причину в модалке.
+    if (status === 'CANCELLED') {
+      setCancelServiceId(serviceId)
+      return
+    }
+    // Превентивная проверка размеров. Бэк тоже валидирует и вернёт 422,
+    // но фронт может сразу показать понятное окно с кнопкой «Заполнить».
+    if (status === 'IN_PROGRESS' || status === 'DONE') {
+      const svc = services.find(s => s.id === serviceId)
+      const svcDef = availableServices.find(a => a.id === svc?.service_def_id)
+      const check = checkDimensionsForPricing(svcDef?.pricing_type, item)
+      if (!check.ok) {
+        setStatusBlockModal({ serviceId, missing: check.missing })
+        return
+      }
+    }
     try {
       await updateServiceStatus(orderId, itemId, serviceId, { status })
       await load()
       onRefresh()
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка смены статуса услуги'; showToast(msg, 'error') }
+  }
+
+  const confirmCancelService = async (reason: string) => {
+    if (cancelServiceId === null) return
+    try {
+      await updateServiceStatus(orderId, itemId, cancelServiceId, {
+        status: 'CANCELLED',
+        cancellation_reason: reason,
+      })
+      setCancelServiceId(null)
+      await load()
+      onRefresh()
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка отмены услуги'
+      showToast(msg, 'error')
+    }
   }
 
   const openAssign = (serviceId: number, current: Employee[]) => {
@@ -289,7 +206,14 @@ function ServicesPanel({
     const svc = availableServices.find(s => s.id === serviceDefId)
     const check = checkDimensionsForPricing(svc?.pricing_type, item)
     if (!check.ok) {
-      setShowDimModal({ serviceDefId, missing: check.missing })
+      // Открываем модалку — внутри предложим заполнить размеры или пропустить.
+      setDimInputs({
+        length: item.length?.toString() || '',
+        width: item.width?.toString() || '',
+        weight: item.weight?.toString() || '',
+        runningMeters: item.running_meters?.toString() || '',
+      })
+      setShowDimModal({ serviceDefId, missing: check.missing, pricingType: svc?.pricing_type })
       return
     }
     void doAddService(serviceDefId)
@@ -322,12 +246,25 @@ function ServicesPanel({
 
   if (loading) return <div className="loading">Загрузка услуг...</div>
 
-  const usedServiceIds = services.map(s => s.service_def_id)
-  const unusedServices = availableServices.filter(s => !usedServiceIds.includes(s.id))
-
-  const filteredEmployees = employees.filter(e =>
-    e.name.toLowerCase().includes(employeeSearch.toLowerCase())
+  // Дубли запрещены, но отменённая услуга освобождает слот — её можно добавить заново.
+  const activeServiceDefIds = new Set(
+    services.filter(s => s.status !== 'CANCELLED').map(s => s.service_def_id)
   )
+  const unusedServices = availableServices.filter(s => !activeServiceDefIds.has(s.id))
+
+  // Фильтрация по ролям: показываем только тех, чья роль включает тип позиции,
+  // ИЛИ кто без роли (универсалы). Если ролей нет вообще — показываем всех.
+  // Это reflects бизнес-правило «Вася работает только с коврами».
+  const itemTypeIdNum = item.item_type_id
+  const suitableByRole = (e: Employee): boolean => {
+    if (e.role_id == null) return true
+    const role = roles.find(r => r.id === e.role_id)
+    if (!role) return true
+    return role.item_type_ids.includes(itemTypeIdNum)
+  }
+  const filteredEmployees = employees
+    .filter(suitableByRole)
+    .filter(e => e.name.toLowerCase().includes(employeeSearch.toLowerCase()))
 
   // Определяем, заблокирована ли услуга по размерам (pricing_type vs item dimensions)
   const isServiceBlocked = (s: OrderItemService): boolean => {
@@ -364,19 +301,27 @@ function ServicesPanel({
       {services.length === 0 ? (
         <div className="empty">Нет услуг</div>
       ) : (
-        <table>
+        <table className="services-table">
           <thead>
             <tr>
               <th>Услуга</th>
-              <th>Статус</th>
-              <th>Стоимость</th>
-              <th>Исполнители</th>
-              {isEditable && <th>Действия</th>}
+              <th style={{ width: 110 }}>Статус</th>
+              {/* Колонка «Стоимость» — только для НЕ дефолтных типов. У доставки/оформления
+                  стоимость задаётся самой позицией (default_price), услуги её не определяют. */}
+              {!isDefaultType && <th style={{ width: 110, textAlign: 'right' }}>Стоимость</th>}
+              <th style={{ width: 170 }}>Исполнители</th>
+              {/* 280 вместо 220 — раньше кнопка «Исполнители» обрезалась справа,
+                  потому что select(115) + gap + button(~120px) ≈ 250px не помещались. */}
+              {isEditable && <th style={{ width: 280, textAlign: 'right' }}>Действия</th>}
             </tr>
           </thead>
           <tbody>
             {services.map(s => {
               const blocked = isServiceBlocked(s)
+              const noAssignees = !s.assignees || s.assignees.length === 0
+              // Подсказку «Назначьте исполнителя» помещаем в колонку «Исполнители» —
+              // чтобы колонка «Действия» во всех строках имела одинаковый layout (select + кнопка).
+              const showAssignHint = noAssignees && s.status === 'CREATED' && !blocked
               return (
                 <tr key={s.id} style={blocked ? { background: '#fff3cd' } : undefined}>
                   <td>
@@ -387,10 +332,23 @@ function ServicesPanel({
                       </div>
                     )}
                   </td>
-                  <td><Badge status={s.status} labels={SERVICE_STATUS_LABELS} /></td>
                   <td>
+                    <Badge status={s.status} labels={SERVICE_STATUS_LABELS} />
+                    {s.status === 'CANCELLED' && s.cancellation_reason && (
+                      <div
+                        style={{ fontSize: '0.78em', color: '#888', marginTop: 2, lineHeight: 1.3, whiteSpace: 'normal' }}
+                        title={s.cancellation_reason}
+                      >
+                        {s.cancellation_reason}
+                      </div>
+                    )}
+                  </td>
+                  {/* \u041A\u043E\u043B\u043E\u043D\u043A\u0430 \u00AB\u0421\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u00BB \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u041D\u0415 \u0434\u0435\u0444\u043E\u043B\u0442\u043D\u044B\u0445. \u0414\u043B\u044F \u0434\u0435\u0444\u043E\u043B\u0442\u043E\u0432 <td> \u0432\u043E\u043E\u0431\u0449\u0435
+                      \u043D\u0435 \u0432\u044B\u0432\u043E\u0434\u0438\u043C, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u043F\u043B\u043E\u0434\u0438\u0442\u044C \u043F\u0443\u0441\u0442\u044B\u0435 \u044F\u0447\u0435\u0439\u043A\u0438. */}
+                  {!isDefaultType && (
+                  <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {isEditable && editingPrice === s.id ? (
-                      <div style={{ display: 'flex', gap: 4 }}>
+                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
                         <input
                           value={priceValue}
                           onChange={e => setPriceValue(e.target.value)}
@@ -400,7 +358,7 @@ function ServicesPanel({
                         <button className="btn-secondary btn-sm" onClick={() => setEditingPrice(null)}>&#10005;</button>
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
                         <span
                           style={{ cursor: isEditable ? 'pointer' : 'default' }}
                           onClick={() => isEditable && openPriceEdit(s.id, s.price)}
@@ -412,43 +370,42 @@ function ServicesPanel({
                             (ручная)
                           </span>
                         )}
-                      </div>
+                      </span>
                     )}
                   </td>
-                  <td>{s.assignees?.map(e => e.name).join(', ') || '—'}</td>
+                  )}
+                  <td>
+                    {!noAssignees ? (
+                      s.assignees!.map(e => e.name).join(', ')
+                    ) : showAssignHint ? (
+                      <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }}>
+                        Назначьте исполнителя
+                      </span>
+                    ) : (
+                      <span style={{ color: '#aaa' }}>—</span>
+                    )}
+                  </td>
                   {isEditable && (
-                    <td>
-                      <div className="actions">
-                        {blocked ? (
-                          <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }} title="Заполните размеры позиции">
-                            Заблокировано
-                          </span>
-                        ) : (!s.assignees || s.assignees.length === 0) && s.status === 'CREATED' ? (
-                          <div>
-                            <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }}>
-                              Назначьте исполнителя
-                            </span>
-                            <select
-                              value={s.status}
-                              onChange={e => changeStatus(s.id, e.target.value as ServiceStatus)}
-                              style={{ width: 'auto', marginLeft: 4 }}
-                            >
-                              <option value="CREATED">Создана</option>
-                              <option value="CANCELLED">Отменена</option>
-                            </select>
-                          </div>
-                        ) : (
-                          <select
-                            value={s.status}
-                            onChange={e => changeStatus(s.id, e.target.value as ServiceStatus)}
-                            style={{ width: 'auto' }}
-                          >
-                            <option value="CREATED">Создана</option>
-                            <option value="IN_PROGRESS">В работе</option>
-                            <option value="DONE">Готова</option>
-                            <option value="CANCELLED">Отменена</option>
-                          </select>
-                        )}
+                    <td style={{ textAlign: 'right' }}>
+                      <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
+                        {/* Селект показываем всегда. Если размеры не заполнены — попытка перевести
+                            в IN_PROGRESS/DONE откроет модалку «Заполните размеры», а не молча
+                            заблокирует. Селект подсвечен оранжевым, чтобы оператор понимал почему. */}
+                        <select
+                          value={s.status}
+                          onChange={e => changeStatus(s.id, e.target.value as ServiceStatus)}
+                          style={{
+                            width: 115,
+                            fontSize: '0.9em',
+                            ...(blocked ? { borderColor: '#e67e22', background: '#fff3cd' } : {}),
+                          }}
+                          title={blocked ? 'Размеры позиции не заполнены — попытка перевести в работу откроет окно подсказки' : undefined}
+                        >
+                          <option value="CREATED">Создана</option>
+                          {!showAssignHint && <option value="IN_PROGRESS">В работе</option>}
+                          {!showAssignHint && <option value="DONE">Готова</option>}
+                          <option value="CANCELLED">Отменена</option>
+                        </select>
                         <button className="btn-secondary btn-sm" onClick={() => openAssign(s.id, s.assignees ?? [])}>
                           Исполнители
                         </button>
@@ -462,59 +419,200 @@ function ServicesPanel({
         </table>
       )}
 
-      {/* Модалка предупреждения при добавлении услуги без размеров */}
-      {showDimModal && (
-        <div className="modal-overlay" onClick={() => setShowDimModal(null)}>
+      {/* Модалка-блокер при попытке перевести услугу в работу/готова без размеров.
+          Раньше была только подсказка в tooltip. Теперь — явная модалка
+          с прямой кнопкой «Заполнить размеры», которая открывает форму редактирования. */}
+      {statusBlockModal && (
+        <div className="modal-overlay" onClick={() => setStatusBlockModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>Не заполнены размеры</h2>
-            <p>Для этой услуги необходимо указать <strong>{showDimModal.missing}</strong> в позиции заказа.</p>
-            <p>Услуга будет добавлена, но её нельзя будет перевести в работу, пока размеры не заполнены.</p>
+            <h2>Заполните размеры позиции</h2>
+            <p>
+              Чтобы перевести услугу в работу, нужно указать <strong>{statusBlockModal.missing}</strong>.
+            </p>
             <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => setShowDimModal(null)}>Отмена</button>
-              <button className="btn-warning" onClick={() => {
-                const sid = showDimModal.serviceDefId
-                setShowDimModal(null)
-                setDimWarning('Заполните размеры позиции, чтобы услуга могла быть выполнена')
-                void doAddService(sid)
-              }}>Добавить всё равно</button>
+              <button className="btn-secondary" onClick={() => setStatusBlockModal(null)}>Закрыть</button>
+              <button className="btn-primary" onClick={() => {
+                setStatusBlockModal(null)
+                onOpenDimensions()
+              }}>Заполнить размеры</button>
             </div>
           </div>
         </div>
       )}
 
-      {assignModal !== null && (
-        <div className="modal-overlay" onClick={() => setAssignModal(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()}>
-            <h2>Назначить исполнителей</h2>
-            <div className="form-group">
-              <input
-                value={employeeSearch}
-                onChange={e => setEmployeeSearch(e.target.value)}
-                placeholder="Поиск по имени..."
-              />
-            </div>
-            <div style={{ maxHeight: 240, overflowY: 'auto' }}>
-              {filteredEmployees.map(emp => (
-                <label key={emp.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}>
-                  <input
-                    type="checkbox"
-                    style={{ width: 'auto' }}
-                    checked={selectedEmployees.includes(emp.id)}
-                    onChange={e => {
-                      if (e.target.checked) setSelectedEmployees(prev => [...prev, emp.id])
-                      else setSelectedEmployees(prev => prev.filter(id => id !== emp.id))
-                    }}
-                  />
-                  {emp.name}
-                </label>
-              ))}
-            </div>
-            <div className="modal-actions">
-              <button className="btn-secondary" onClick={() => setAssignModal(null)}>Отмена</button>
-              <button className="btn-primary" onClick={saveAssign}>Сохранить</button>
+      {/* Модалка добавления услуги без размеров — теперь даёт сразу заполнить нужные поля.
+          Какие поля показывать, зависит от pricing_type выбранной услуги. */}
+      {showDimModal && (() => {
+        const pt = showDimModal.pricingType
+        const showLengthWidth = pt === 'BY_AREA' || pt === 'BY_PERIMETER'
+        const showWeight = pt === 'BY_WEIGHT'
+        const showRunningMeters = pt === 'BY_PERIMETER'
+
+        const submitWithDimensions = async () => {
+          const sid = showDimModal.serviceDefId
+          // Что-то ввели — сохраняем размеры, потом добавляем услугу.
+          const length = dimInputs.length.trim() ? Number(dimInputs.length) : null
+          const width = dimInputs.width.trim() ? Number(dimInputs.width) : null
+          const weight = dimInputs.weight.trim() ? Number(dimInputs.weight) : null
+          const rm = dimInputs.runningMeters.trim() ? Number(dimInputs.runningMeters) : null
+          try {
+            await updateOrderItemDimensions(orderId, item.id, {
+              length: length ?? undefined,
+              width: width ?? undefined,
+              weight: weight ?? undefined,
+              running_meters: rm ?? undefined,
+            })
+          } catch (e: unknown) {
+            showToast((e as any)?.response?.data?.message || 'Ошибка сохранения размеров', 'error')
+            return
+          }
+          setShowDimModal(null)
+          await doAddService(sid)
+        }
+
+        const skipAndAdd = async () => {
+          const sid = showDimModal.serviceDefId
+          setShowDimModal(null)
+          setDimWarning('Заполните размеры позиции, чтобы услуга могла быть выполнена')
+          await doAddService(sid)
+        }
+
+        return (
+          <div className="modal-overlay" onClick={() => setShowDimModal(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Не заполнены размеры</h2>
+              <p>Для этой услуги нужны: <strong>{showDimModal.missing}</strong>.</p>
+              <p style={{ color: '#7f8c8d', fontSize: '0.9em' }}>
+                Можно указать прямо сейчас или пропустить — услуга будет добавлена, но её нельзя
+                будет перевести в работу, пока размеры не заполнены.
+              </p>
+
+              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
+                {showLengthWidth && (
+                  <>
+                    <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
+                      <label>Длина, м</label>
+                      <input type="number" min={0} step="0.01"
+                             value={dimInputs.length}
+                             onChange={e => setDimInputs(d => ({...d, length: e.target.value}))}
+                             placeholder="0.00" />
+                    </div>
+                    <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
+                      <label>Ширина, м</label>
+                      <input type="number" min={0} step="0.01"
+                             value={dimInputs.width}
+                             onChange={e => setDimInputs(d => ({...d, width: e.target.value}))}
+                             placeholder="0.00" />
+                    </div>
+                  </>
+                )}
+                {showWeight && (
+                  <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
+                    <label>Вес, кг</label>
+                    <input type="number" min={0} step="0.01"
+                           value={dimInputs.weight}
+                           onChange={e => setDimInputs(d => ({...d, weight: e.target.value}))}
+                           placeholder="0.00" />
+                  </div>
+                )}
+                {showRunningMeters && (
+                  <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
+                    <label>Погонные метры</label>
+                    <input type="number" min={0} step="0.01"
+                           value={dimInputs.runningMeters}
+                           onChange={e => setDimInputs(d => ({...d, runningMeters: e.target.value}))}
+                           placeholder="0.00" />
+                  </div>
+                )}
+              </div>
+
+              <div className="modal-actions">
+                <button className="btn-secondary" onClick={() => setShowDimModal(null)}>Отмена</button>
+                <button className="btn-warning" onClick={() => void skipAndAdd()}>Пропустить и добавить</button>
+                <button className="btn-primary" onClick={() => void submitWithDimensions()}>Сохранить и добавить</button>
+              </div>
             </div>
           </div>
-        </div>
+        )
+      })()}
+
+      {assignModal !== null && (() => {
+        // Подсказка: какие роли подходят для этого типа позиции — оператор должен
+        // понимать, почему список исполнителей в одной услуге отличается от другой.
+        // Показываем имена ролей, у которых текущий item_type_id входит в их список.
+        const matchingRoles = roles.filter(r => r.item_type_ids.includes(item.item_type_id))
+        const itemTypeName = item.item_type_name || `тип #${item.item_type_id}`
+        return (
+          <div className="modal-overlay" onClick={() => setAssignModal(null)}>
+            <div className="modal" onClick={e => e.stopPropagation()}>
+              <h2>Назначить исполнителей</h2>
+              <div className="notice notice-info" style={{ fontSize: '0.85em' }}>
+                <div><strong>Тип позиции:</strong> {itemTypeName}</div>
+                <div style={{ marginTop: 4 }}>
+                  <strong>Видны исполнители:</strong>{' '}
+                  {matchingRoles.length > 0 ? (
+                    <>с ролью {matchingRoles.map(r => `«${r.name}»`).join(', ')} или без роли (универсалы)</>
+                  ) : (
+                    <>только без роли (универсалы) — ни одна роль не включает этот тип</>
+                  )}
+                </div>
+              </div>
+              <div className="form-group">
+                <input
+                  value={employeeSearch}
+                  onChange={e => setEmployeeSearch(e.target.value)}
+                  placeholder="Поиск по имени..."
+                />
+              </div>
+              <div style={{ maxHeight: 240, overflowY: 'auto' }}>
+                {filteredEmployees.length === 0 && (
+                  <div className="empty">Нет подходящих исполнителей</div>
+                )}
+                {filteredEmployees.map(emp => {
+                  const role = emp.role_id != null ? roles.find(r => r.id === emp.role_id) : null
+                  return (
+                    <label key={emp.id} style={{ display: 'flex', gap: 8, alignItems: 'center', padding: '4px 0' }}>
+                      <input
+                        type="checkbox"
+                        style={{ width: 'auto' }}
+                        checked={selectedEmployees.includes(emp.id)}
+                        onChange={e => {
+                          if (e.target.checked) setSelectedEmployees(prev => [...prev, emp.id])
+                          else setSelectedEmployees(prev => prev.filter(id => id !== emp.id))
+                        }}
+                      />
+                      <span>{emp.name}</span>
+                      {/* Бейдж роли — оператор сразу видит, почему именно этот исполнитель подходит. */}
+                      {role
+                        ? <span style={{
+                            fontSize: '0.78em', padding: '1px 6px', borderRadius: 8,
+                            background: '#ecf0f1', color: '#7f8c8d',
+                          }}>{role.name}</span>
+                        : <span style={{ fontSize: '0.78em', color: '#aaa', fontStyle: 'italic' }}>универсал</span>
+                      }
+                    </label>
+                  )
+                })}
+              </div>
+              <div className="modal-actions">
+                <button className="btn-secondary" onClick={() => setAssignModal(null)}>Отмена</button>
+                <button className="btn-primary" onClick={saveAssign}>Сохранить</button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {cancelServiceId !== null && (
+        <CancelReasonModal
+          title="Отмена услуги"
+          subject={(() => {
+            const s = services.find(s => s.id === cancelServiceId)
+            return s ? `Услуга «${s.service_def_name}» будет отменена.` : undefined
+          })()}
+          onCancel={() => setCancelServiceId(null)}
+          onConfirm={confirmCancelService}
+        />
       )}
     </div>
   )
@@ -522,23 +620,32 @@ function ServicesPanel({
 
 // ---- Item Row ----
 function ItemRow({
-  item, index, orderId, employees, onRefresh, isEditable,
+  item, index, orderId, employees, roles, onRefresh, isEditable, initialPhotos, isDefaultType,
 }: {
   item: OrderItem
   index: number
   orderId: number
   employees: Employee[]
+  roles: EmployeeRole[]
   onRefresh: () => void
   isEditable: boolean
+  /** Фото, переданные из родителя (батч-fetch). Если не передано — компонент сам подгрузит. */
+  initialPhotos?: ItemPhoto[]
+  /** Дефолтный тип (доставка/оформление) — пробрасывается в ServicesPanel,
+      чтобы тот скрыл цены услуг (они входят в стоимость позиции). */
+  isDefaultType: boolean
 }) {
   const { showToast } = useToast()
   const [expanded, setExpanded] = useState(false)
   const [editPrice, setEditPrice] = useState(false)
   const [editDimensions, setEditDimensions] = useState(false)
   const [editDesc, setEditDesc] = useState(false)
-  const [photos, setPhotos] = useState<{id: number, filename: string, content_type: string, data: string}[]>([])
+  const [photos, setPhotos] = useState<{id: number, filename: string, content_type: string, data: string}[]>(
+    initialPhotos ? initialPhotos.map(p => ({ id: p.id, filename: p.filename, content_type: p.content_type, data: p.data })) : []
+  )
   const [photoPreview, setPhotoPreview] = useState<string | null>(null)
   const [uploadingPhoto, setUploadingPhoto] = useState(false)
+  const [photosEditMode, setPhotosEditMode] = useState(false)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [descValue, setDescValue] = useState(item.description || '')
   const [defectsValue, setDefectsValue] = useState(item.defects || '')
@@ -551,11 +658,15 @@ function ItemRow({
     running_meters: item.running_meters?.toString() || '',
   })
 
+  // Загружаем фото при монтировании только если родитель не передал initialPhotos —
+  // обычно фото приходят батчем из OrderDetailPage. Fallback нужен для standalone-использования.
   useEffect(() => {
-    if (expanded) {
-      getItemPhotos(orderId, item.id).then(setPhotos).catch(() => {})
+    if (initialPhotos) {
+      setPhotos(initialPhotos.map(p => ({ id: p.id, filename: p.filename, content_type: p.content_type, data: p.data })))
+      return
     }
-  }, [expanded, orderId, item.id])
+    getItemPhotos(orderId, item.id).then(setPhotos).catch(() => {})
+  }, [orderId, item.id, initialPhotos])
 
   const handlePhotoUpload = async (file: File) => {
     setUploadingPhoto(true)
@@ -594,6 +705,28 @@ function ItemRow({
   }
 
   const saveDimensions = async () => {
+    // Валидация: только положительные числа в разумных пределах. Защищает от опечаток
+    // (длина 9999, отрицательный вес и т.п.) которые потом сломают расчёт цены.
+    const fields: { key: keyof typeof dimensions; label: string; max: number }[] = [
+      { key: 'length',         label: 'Длина',     max: 50 },     // м
+      { key: 'width',          label: 'Ширина',    max: 50 },     // м
+      { key: 'weight',         label: 'Вес',       max: 500 },    // кг
+      { key: 'area',           label: 'Площадь',   max: 2500 },   // м²
+      { key: 'running_meters', label: 'Пог.метры', max: 1000 },   // м
+    ]
+    for (const f of fields) {
+      const raw = dimensions[f.key]
+      if (!raw) continue
+      const n = Number(raw)
+      if (!Number.isFinite(n) || n <= 0) {
+        showToast(`${f.label}: укажите положительное число`, 'error')
+        return
+      }
+      if (n > f.max) {
+        showToast(`${f.label}: значение слишком большое (максимум ${f.max})`, 'error')
+        return
+      }
+    }
     try {
       await updateOrderItemDimensions(orderId, item.id, {
         length: dimensions.length ? Number(dimensions.length) : undefined,
@@ -620,7 +753,23 @@ function ItemRow({
           </button>
           #{index}
         </td>
-        <td>{item.item_type_name ?? `Тип #${item.item_type_id}`}</td>
+        <td>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            {photos.length > 0 && (
+              <img
+                src={`data:${photos[0].content_type};base64,${photos[0].data}`}
+                alt=""
+                onClick={e => { e.stopPropagation(); setPhotoPreview(`data:${photos[0].content_type};base64,${photos[0].data}`) }}
+                style={{
+                  width: 40, height: 40, objectFit: 'cover', borderRadius: 4,
+                  border: '1px solid #ddd', cursor: 'pointer', flexShrink: 0,
+                }}
+                title={photos.length > 1 ? `+${photos.length - 1} фото` : ''}
+              />
+            )}
+            <span>{item.item_type_name ?? `Тип #${item.item_type_id}`}</span>
+          </div>
+        </td>
         <td>
           {isEditable && editDesc ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
@@ -660,18 +809,21 @@ function ItemRow({
             <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
+                  type="number" min={0} step="0.01"
                   placeholder="Длина"
                   value={dimensions.length}
                   onChange={e => setDimensions(d => ({...d, length: e.target.value}))}
                   style={{ width: 60 }}
                 />
                 <input
+                  type="number" min={0} step="0.01"
                   placeholder="Ширина"
                   value={dimensions.width}
                   onChange={e => setDimensions(d => ({...d, width: e.target.value}))}
                   style={{ width: 60 }}
                 />
                 <input
+                  type="number" min={0} step="0.01"
                   placeholder="Вес"
                   value={dimensions.weight}
                   onChange={e => setDimensions(d => ({...d, weight: e.target.value}))}
@@ -680,12 +832,14 @@ function ItemRow({
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
+                  type="number" min={0} step="0.01"
                   placeholder="Площадь"
                   value={dimensions.area}
                   onChange={e => setDimensions(d => ({...d, area: e.target.value}))}
                   style={{ width: 60 }}
                 />
                 <input
+                  type="number" min={0} step="0.01"
                   placeholder="Пог.м"
                   value={dimensions.running_meters}
                   onChange={e => setDimensions(d => ({...d, running_meters: e.target.value}))}
@@ -711,9 +865,9 @@ function ItemRow({
           )}
         </td>
         <td><Badge status={item.status} labels={ITEM_STATUS_LABELS} /></td>
-        <td>
+        <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
           {isEditable && editPrice ? (
-            <div style={{ display: 'flex', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
               <input value={price} onChange={e => setPrice(e.target.value)} style={{ width: 80 }} />
               <button className="btn-success btn-sm" onClick={savePrice}>&#10003;</button>
               <button className="btn-secondary btn-sm" onClick={() => setEditPrice(false)}>&#10005;</button>
@@ -727,12 +881,10 @@ function ItemRow({
             </span>
           )}
         </td>
-        <td>
-          <Badge status={item.status} labels={ITEM_STATUS_LABELS} />
-          {isEditable && (
+        {isEditable && (
+          <td style={{ textAlign: 'right' }}>
             <button
               className="btn-secondary btn-sm"
-              style={{ marginLeft: 8 }}
               onClick={async () => {
                 try {
                   await duplicateItem(orderId, item.id)
@@ -741,12 +893,12 @@ function ItemRow({
               }}
               title="Дублировать позицию"
             >Дубль</button>
-          )}
-        </td>
+          </td>
+        )}
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={7} style={{ background: '#f8f9fa', padding: '12px 20px' }}>
+          <td colSpan={isEditable ? 7 : 6} style={{ background: '#f8f9fa', padding: '12px 20px' }}>
             {/* Photo section */}
             <div style={{ marginBottom: 12 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
@@ -775,30 +927,55 @@ function ItemRow({
                 )}
               </div>
               {photos.length > 0 && (
-                <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
-                  {photos.map(p => (
-                    <div key={p.id} style={{ position: 'relative', flexShrink: 0 }}>
-                      <img
-                        src={`data:${p.content_type};base64,${p.data}`}
-                        alt={p.filename}
-                        style={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 4, cursor: 'pointer', border: '1px solid #ddd' }}
-                        onClick={() => setPhotoPreview(`data:${p.content_type};base64,${p.data}`)}
-                      />
-                      {isEditable && (
-                        <button
-                          onClick={() => void handlePhotoDelete(p.id)}
-                          style={{
-                            position: 'absolute', top: -6, right: -6,
-                            width: 20, height: 20, borderRadius: '50%',
-                            background: '#e74c3c', color: '#fff', border: 'none',
-                            cursor: 'pointer', fontSize: 12, lineHeight: '20px',
-                            padding: 0, textAlign: 'center',
-                          }}
-                        >&times;</button>
+                <>
+                  {isEditable && (
+                    <div style={{ marginBottom: 6 }}>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        onClick={() => setPhotosEditMode(m => !m)}
+                        style={photosEditMode ? { background: '#e67e22', color: '#fff' } : undefined}
+                      >
+                        {photosEditMode ? 'Готово' : '✏️ Редактировать фото'}
+                      </button>
+                      {photosEditMode && (
+                        <span style={{ marginLeft: 8, color: '#e67e22', fontSize: '0.85em' }}>
+                          Нажмите ✕ на фото — удалит. Нажмите «Готово» когда закончили.
+                        </span>
                       )}
                     </div>
-                  ))}
-                </div>
+                  )}
+                  <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
+                    {photos.map(p => (
+                      <div key={p.id} style={{ position: 'relative', flexShrink: 0 }}>
+                        <img
+                          src={`data:${p.content_type};base64,${p.data}`}
+                          alt={p.filename}
+                          style={{
+                            width: 80, height: 80, objectFit: 'cover', borderRadius: 4,
+                            cursor: 'pointer',
+                            border: photosEditMode ? '2px solid #e67e22' : '1px solid #ddd',
+                          }}
+                          onClick={() => setPhotoPreview(`data:${p.content_type};base64,${p.data}`)}
+                        />
+                        {isEditable && photosEditMode && (
+                          <button
+                            onClick={() => void handlePhotoDelete(p.id)}
+                            title="Удалить фото"
+                            style={{
+                              position: 'absolute', top: -6, right: -6,
+                              width: 22, height: 22, borderRadius: '50%',
+                              background: '#e74c3c', color: '#fff', border: '2px solid #fff',
+                              cursor: 'pointer', fontSize: 13, lineHeight: '18px',
+                              padding: 0, textAlign: 'center',
+                              boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
+                            }}
+                          >&times;</button>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
             </div>
             {photoPreview && (
@@ -819,7 +996,7 @@ function ItemRow({
                 </div>
               </div>
             )}
-            <ServicesPanel orderId={orderId} item={item} itemTypeId={item.item_type_id} employees={employees} onRefresh={onRefresh} isEditable={isEditable} />
+            <ServicesPanel orderId={orderId} item={item} itemTypeId={item.item_type_id} employees={employees} roles={roles} onRefresh={onRefresh} isEditable={isEditable} onOpenDimensions={() => setEditDimensions(true)} isDefaultType={isDefaultType} />
           </td>
         </tr>
       )}
@@ -836,12 +1013,18 @@ export default function OrderDetailPage() {
 
   const [order, setOrder] = useState<Order | null>(null)
   const [items, setItems] = useState<OrderItem[]>([])
+  // Все фото по заказу одним батчем — раздаём в ItemRow через initialPhotos.
+  // До этого ItemRow сам fetch'ил фото на mount → N запросов на N позиций.
+  const [photosByItemId, setPhotosByItemId] = useState<Map<number, ItemPhoto[]>>(new Map())
   const [history, setHistory] = useState<OrderStatusHistory[]>([])
   const [itemTypes, setItemTypes] = useState<ItemType[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
+  // Роли — для фильтрации списка исполнителей при назначении услуги (по типу позиции).
+  const [roles, setRoles] = useState<EmployeeRole[]>([])
   const [loading, setLoading] = useState(true)
   const [showAddItem, setShowAddItem] = useState(false)
   const [showPay, setShowPay] = useState(false)
+  const [showDeliverAndPay, setShowDeliverAndPay] = useState(false)
   const [showWarranty, setShowWarranty] = useState(false)
   const [error, setError] = useState('')
   const [orderModifiers, setOrderModifiers] = useState<OrderModifier[]>([])
@@ -853,6 +1036,7 @@ export default function OrderDetailPage() {
   const [editComment, setEditComment] = useState(false)
   const [commentValue, setCommentValue] = useState('')
   const [editDetails, setEditDetails] = useState(false)
+  const [mapVisible, setMapVisible] = useState(false)
   const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void} | null>(null)
   const [details, setDetails] = useState({
     pickup_address: '',
@@ -864,18 +1048,31 @@ export default function OrderDetailPage() {
     delivery_time_slot: '',
     pickup_district: '',
     delivery_district: '',
+    pickup_lat: null as number | null,
+    pickup_lon: null as number | null,
+    delivery_lat: null as number | null,
+    delivery_lon: null as number | null,
   })
 
   const loadOrder = async () => {
     try {
-      const [o, its, hist] = await Promise.all([
+      const [o, its, hist, allPhotos] = await Promise.all([
         getOrder(orderId),
         getOrderItems(orderId),
         getOrderHistory(orderId),
+        getAllOrderPhotos(orderId).catch(() => [] as ItemPhoto[]),
       ])
       setOrder(o)
       setItems(its)
       setHistory(hist)
+      // Раскладываем фото по позициям в Map<itemId, photos[]> — один проход вместо N fetch.
+      const grouped = new Map<number, ItemPhoto[]>()
+      allPhotos.forEach(p => {
+        const arr = grouped.get(p.order_item_id) || []
+        arr.push(p)
+        grouped.set(p.order_item_id, arr)
+      })
+      setPhotosByItemId(grouped)
       getOrderModifiers(orderId).then(setOrderModifiers).catch(() => {})
       setCommentValue(o.comment ?? '')
       setDetails({
@@ -888,6 +1085,10 @@ export default function OrderDetailPage() {
         delivery_time_slot: o.delivery_time_slot ?? '',
         pickup_district: o.pickup_district ?? '',
         delivery_district: o.delivery_district ?? '',
+        pickup_lat: o.pickup_lat,
+        pickup_lon: o.pickup_lon,
+        delivery_lat: o.delivery_lat,
+        delivery_lon: o.delivery_lon,
       })
     } catch {
       setError('Ошибка загрузки заказа')
@@ -900,17 +1101,58 @@ export default function OrderDetailPage() {
       loadOrder(),
       getItemTypes().then(setItemTypes),
       getEmployees().then(setEmployees),
+      getEmployeeRoles().then(setRoles).catch(() => {}),
       getPriceModifiers().then(setAllModifiers).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [orderId])
 
+  const [showCancelOrderModal, setShowCancelOrderModal] = useState(false)
+
   const changeOrderStatus = async (status: OrderStatus) => {
+    if (status === 'CANCELLED') {
+      setShowCancelOrderModal(true)
+      return
+    }
     try {
       const updated = await updateOrderStatus(orderId, { status })
       setOrder(updated)
       const hist = await getOrderHistory(orderId)
       setHistory(hist)
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка смены статуса'; showToast(msg, 'error') }
+  }
+
+  const confirmCancelOrder = async (reason: string) => {
+    try {
+      const updated = await updateOrderStatus(orderId, { status: 'CANCELLED', cancellation_reason: reason })
+      setOrder(updated)
+      const hist = await getOrderHistory(orderId)
+      setHistory(hist)
+      setShowCancelOrderModal(false)
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка отмены заказа'
+      showToast(msg, 'error')
+    }
+  }
+
+  const handleDeliverAndPay = async (data: { date: string; slot: string; paymentType: PaymentType }) => {
+    try {
+      // 1. Назначаем фактическую дату/слот доставки.
+      await updateActualDates(orderId, {
+        actual_delivery_date: data.date,
+        actual_delivery_time_slot: data.slot || null,
+      })
+      // 2. Переводим в DELIVERED. Бэк проверит, что actual_delivery_date указана — теперь да.
+      await updateOrderStatus(orderId, { status: 'DELIVERED' })
+      // 3. Оплачиваем — бэк сам переведёт в COMPLETED.
+      const updated = await payOrder(orderId, { payment_type: data.paymentType })
+      setOrder(updated)
+      setShowDeliverAndPay(false)
+      const hist = await getOrderHistory(orderId)
+      setHistory(hist)
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Не удалось принять оплату'
+      showToast(msg, 'error')
+    }
   }
 
   const handlePay = async (paymentType: PaymentType) => {
@@ -936,6 +1178,16 @@ export default function OrderDetailPage() {
   }
 
   const saveDetails = async () => {
+    // Валидация дат: забор не в прошлом, доставка >= забора.
+    const today = new Date().toISOString().slice(0, 10)
+    if (details.pickup_date && details.pickup_date < today) {
+      showToast('Дата забора не может быть в прошлом', 'error')
+      return
+    }
+    if (details.pickup_date && details.delivery_date && details.delivery_date < details.pickup_date) {
+      showToast('Дата доставки не может быть раньше даты забора', 'error')
+      return
+    }
     try {
       const updated = await updateOrderDetails(orderId, {
         pickup_address: details.pickup_address || null,
@@ -947,6 +1199,10 @@ export default function OrderDetailPage() {
         delivery_time_slot: details.delivery_time_slot || null,
         pickup_district: details.pickup_district || null,
         delivery_district: details.delivery_district || null,
+        pickup_lat: details.pickup_lat,
+        pickup_lon: details.pickup_lon,
+        delivery_lat: details.delivery_lat,
+        delivery_lon: details.delivery_lon,
       })
       setOrder(updated)
       setEditDetails(false)
@@ -1010,15 +1266,19 @@ export default function OrderDetailPage() {
       return `<tr><td style="padding:4px 8px">${m.modifier_name} (${m.percent > 0 ? '+' : ''}${m.percent}%)</td><td style="padding:4px 8px;text-align:right">${sign}${amount.toFixed(2)} руб.</td></tr>`
     }).join('')
 
-    // Загружаем услуги для всех позиций
-    const allItemServices = await Promise.all(
-      items.map(it => getItemServices(orderId, it.id).catch(() => []))
-    )
+    // Загружаем услуги для всех позиций ОДНИМ батч-запросом (раньше было N запросов).
+    const allFlat = await getAllOrderServices(orderId).catch(() => [])
+    const servicesByItem = new Map<number, typeof allFlat>()
+    allFlat.forEach(s => {
+      const arr = servicesByItem.get(s.order_item_id) || []
+      arr.push(s)
+      servicesByItem.set(s.order_item_id, arr)
+    })
 
     const defaultTypeIds = new Set(itemTypes.filter(t => t.is_default).map(t => t.id))
     const itemRows = items.map((it, idx) => {
       const isDefault = defaultTypeIds.has(it.item_type_id)
-      const svcList = allItemServices[idx] || []
+      const svcList = servicesByItem.get(it.id) || []
       const svcRows = svcList.map(s =>
         `<tr style="background:#fafafa;font-size:11px">
           <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.service_def_name || 'Услуга #' + s.service_def_id}
@@ -1057,7 +1317,15 @@ export default function OrderDetailPage() {
   .sig-block { width: 45%; }
   .sig-line { border-bottom: 1px solid #333; margin-top: 40px; margin-bottom: 4px; }
   .sig-label { font-size: 11px; color: #666; }
-  @media print { body { margin: 15px; } }
+  /* Запрещаем разрывы страницы внутри строк таблицы и подписных блоков —
+     иначе строка позиции/услуги может разломиться пополам между листами. */
+  tr, .sig-block, .info-row, .total-row { page-break-inside: avoid; break-inside: avoid; }
+  table thead { display: table-header-group; }
+  h2 { page-break-after: avoid; break-after: avoid; }
+  @media print {
+    body { margin: 15px; }
+    @page { margin: 12mm; }
+  }
 </style></head><body>
 <div class="header">
   <div class="company">КОВРОВОЕ ПРОИЗВОДСТВО</div>
@@ -1100,7 +1368,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
 </table>
 
 <div style="margin-top:8px">
-  <span class="label">Оплата:</span> ${order.paid ? 'Оплачен (' + (PAYMENT_LABELS[order.payment_type ?? ''] || order.payment_type || '') + ')' : 'Не оплачен'}
+  <span class="label">Оплата:</span> ${order.paid ? 'Оплачен (' + (order.payment_type ? PAYMENT_LABELS[order.payment_type] : '') + ')' : 'Не оплачен'}
 </div>
 
 <div class="signatures">
@@ -1141,7 +1409,11 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
   if (loading) return <div className="loading">Загрузка...</div>
   if (!order) return <div className="error-msg">{error || 'Заказ не найден'}</div>
 
-  const isEditable = order.status !== 'DELIVERED' && order.status !== 'CANCELLED'
+  // Заказ нельзя редактировать в финальных статусах. DELIVERED ещё можно править
+  // (оператор может уточнить дату доставки и оплатить), а COMPLETED/CANCELLED — нет.
+  const isEditable = order.status !== 'DELIVERED'
+                  && order.status !== 'COMPLETED'
+                  && order.status !== 'CANCELLED'
 
   return (
     <div>
@@ -1162,12 +1434,18 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           <div>
             <div style={{ marginBottom: 8 }}>
               <strong>Статус:</strong> <Badge status={order.status} labels={ORDER_STATUS_LABELS} />
+              <StatusLegend />
+              {order.status === 'CANCELLED' && order.cancellation_reason && (
+                <div style={{ fontSize: '0.85em', color: '#888', marginTop: 4 }}>
+                  <strong style={{ color: '#c0392b' }}>Причина отмены:</strong> {order.cancellation_reason}
+                </div>
+              )}
             </div>
             <div style={{ marginBottom: 8 }}><strong>Сумма:</strong> {Number(order.total_amount).toFixed(2)} &#8381;</div>
             {order.discount_percent > 0 && (
               <div style={{ marginBottom: 8 }}><strong>Скидка:</strong> {order.discount_percent}%</div>
             )}
-            <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${PAYMENT_LABELS[order.payment_type ?? ''] ?? order.payment_type})` : 'Нет'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${order.payment_type ? PAYMENT_LABELS[order.payment_type] : ''})` : 'Нет'}</div>
             <div style={{ marginBottom: 8 }}>
               <strong>Клиент:</strong>{' '}
               <button className="btn-secondary btn-sm" onClick={openClientCard} style={{ marginLeft: 4 }}>
@@ -1205,26 +1483,72 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               <button className="btn-secondary btn-sm" onClick={() => setEditDetails(true)}>Редактировать</button>
             )}
           </div>
+          {/* Подсветка: для перевода в DELIVERED обязательна фактическая дата доставки.
+              Если её ещё нет — даём подсказку с понятным следующим шагом. */}
+          {order.status === 'DONE' && !order.actual_delivery_date && (
+            <div style={{
+              marginBottom: 10, padding: '8px 12px', borderRadius: 5,
+              background: '#fef5e7', borderLeft: '4px solid #e67e22', fontSize: '0.9em',
+            }}>
+              <strong style={{ color: '#d35400' }}>Дата доставки (факт) не указана.</strong>
+              {' '}Чтобы перевести заказ в «Доставлен» — отметьте дату в Логистике (drag&nbsp;and&nbsp;drop)
+              или нажмите «Принять оплату» — там можно сделать обе операции сразу.
+            </div>
+          )}
           {editDetails ? (
             <div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div className="form-group" style={{ flex: '1 1 250px', marginBottom: 4 }}>
                   <label>Адрес забора</label>
-                  <input value={details.pickup_address} onChange={e => setDetails(d => ({...d, pickup_address: e.target.value}))} />
+                  <AddressInput
+                    value={details.pickup_address}
+                    // Ручное изменение — координаты обнуляем, иначе на карте останется
+                    // точка от предыдущего адреса.
+                    onChange={v => setDetails(d => ({...d, pickup_address: v, pickup_lat: null, pickup_lon: null}))}
+                    onResolved={(r) => setDetails(d => ({
+                      ...d,
+                      pickup_address: r.address,
+                      pickup_district: r.district || d.pickup_district,
+                      pickup_lat: r.lat,
+                      pickup_lon: r.lon,
+                    }))}
+                    // Загруженный из БД заказ уже имеет координаты — не пугаем оператора
+                    // бейджем «не подтверждён» при открытии существующего заказа.
+                    externallyConfirmed={details.pickup_lat != null && details.pickup_lon != null}
+                  />
                 </div>
-                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
+                <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
                   <label>Район забора</label>
-                  <input value={details.pickup_district} onChange={e => setDetails(d => ({...d, pickup_district: e.target.value}))} />
+                  <DistrictSelect
+                    value={details.pickup_district}
+                    onChange={v => setDetails(d => ({...d, pickup_district: v}))}
+                    width="100%"
+                  />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div className="form-group" style={{ flex: '1 1 250px', marginBottom: 4 }}>
                   <label>Адрес доставки</label>
-                  <input value={details.delivery_address} onChange={e => setDetails(d => ({...d, delivery_address: e.target.value}))} />
+                  <AddressInput
+                    value={details.delivery_address}
+                    onChange={v => setDetails(d => ({...d, delivery_address: v, delivery_lat: null, delivery_lon: null}))}
+                    onResolved={(r) => setDetails(d => ({
+                      ...d,
+                      delivery_address: r.address,
+                      delivery_district: r.district || d.delivery_district,
+                      delivery_lat: r.lat,
+                      delivery_lon: r.lon,
+                    }))}
+                    externallyConfirmed={details.delivery_lat != null && details.delivery_lon != null}
+                  />
                 </div>
-                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
+                <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
                   <label>Район доставки</label>
-                  <input value={details.delivery_district} onChange={e => setDetails(d => ({...d, delivery_district: e.target.value}))} />
+                  <DistrictSelect
+                    value={details.delivery_district}
+                    onChange={v => setDetails(d => ({...d, delivery_district: v}))}
+                    width="100%"
+                  />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -1291,6 +1615,60 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           )}
         </div>
 
+        {/* Карта забора и доставки — по умолчанию свёрнута, разворачивается по клику. */}
+        {(() => {
+          const points: MapPoint[] = []
+          if (order.pickup_lat != null && order.pickup_lon != null) {
+            points.push({
+              lat: Number(order.pickup_lat), lon: Number(order.pickup_lon),
+              kind: 'pickup',
+              title: 'Забор',
+              description: order.pickup_address || undefined,
+            })
+          }
+          if (order.delivery_lat != null && order.delivery_lon != null) {
+            const samePoint = order.pickup_lat != null
+              && Number(order.delivery_lat) === Number(order.pickup_lat)
+              && Number(order.delivery_lon) === Number(order.pickup_lon)
+            if (!samePoint) {
+              points.push({
+                lat: Number(order.delivery_lat), lon: Number(order.delivery_lon),
+                kind: 'delivery',
+                title: 'Доставка',
+                description: order.delivery_address || undefined,
+              })
+            }
+          }
+          if (points.length === 0) return null
+          return (
+            <div style={{ marginTop: 12 }}>
+              {!mapVisible ? (
+                <button
+                  className="btn-secondary"
+                  onClick={() => setMapVisible(true)}
+                  title="Показать адреса на карте"
+                >
+                  Показать карту
+                </button>
+              ) : (
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <div style={{ color: '#666', fontSize: '0.9em' }}>
+                      <span style={{ display: 'inline-block', width: 10, height: 10, background: '#2980b9', borderRadius: 5, marginRight: 4 }} /> Забор
+                      <span style={{ display: 'inline-block', width: 10, height: 10, background: '#27ae60', borderRadius: 5, marginLeft: 16, marginRight: 4 }} /> Доставка
+                    </div>
+                    <button
+                      onClick={() => setMapVisible(false)}
+                      className="btn-secondary btn-sm"
+                    >Свернуть карту</button>
+                  </div>
+                  <MapMarkers points={points} height={280} />
+                </div>
+              )}
+            </div>
+          )
+        })()}
+
         {/* Comment section - always visible */}
         <div style={{ marginTop: 12, marginBottom: 12 }}>
           <strong>Комментарий:</strong>
@@ -1310,7 +1688,9 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           ) : (
             <div style={{ marginTop: 4 }}>
               <span>{order.comment || '(нет)'}</span>
-              {isEditable && (
+              {/* Комментарий редактируется всегда — это единственное поле,
+                  которое не блокируется в COMPLETED/CANCELLED. */}
+              {order.status !== 'CANCELLED' && (
                 <button className="btn-secondary btn-sm" onClick={() => setEditComment(true)} style={{ marginLeft: 8 }}>
                   Изменить
                 </button>
@@ -1334,10 +1714,19 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               </select>
             </div>
           )}
-          {!order.paid && order.status === 'DONE' && (
-            <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить</button>
+          {/* Оплата возможна только когда заказ доставлен. После оплаты заказ становится «Завершённым». */}
+          {!order.paid && order.status === 'DELIVERED' && (
+            <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить и завершить</button>
           )}
-          {order.status === 'DELIVERED' && (
+          {/* В статусе DONE — клиент пришёл забрать сам и хочет сразу заплатить.
+              Кнопка делает три операции одной транзакцией клиента: отмечаем доставку,
+              переводим в DELIVERED, открываем PayModal — после оплаты заказ становится COMPLETED. */}
+          {!order.paid && order.status === 'DONE' && (
+            <button className="btn-success" onClick={() => setShowDeliverAndPay(true)}>
+              Принять оплату
+            </button>
+          )}
+          {(order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
           )}
           <button className="btn-secondary" onClick={() => {
@@ -1364,20 +1753,21 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             <button className="btn-primary" onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
           )}
         </div>
-        <table>
+        <table className="items-table">
           <thead>
             <tr>
-              <th>#</th>
-              <th>Тип</th>
+              <th style={{ width: 100 }}>#</th>
+              <th style={{ width: 180 }}>Тип</th>
               <th>Описание / Дефекты</th>
-              <th>Размеры</th>
-              <th>Статус</th>
-              <th>Стоимость</th>
+              <th style={{ width: 160 }}>Размеры</th>
+              <th style={{ width: 120 }}>Статус</th>
+              <th style={{ width: 120, textAlign: 'right' }}>Стоимость</th>
+              {isEditable && <th style={{ width: 80, textAlign: 'right' }}>Действия</th>}
             </tr>
           </thead>
           <tbody>
             {items.length === 0 ? (
-              <tr><td colSpan={7} className="empty">Нет позиций</td></tr>
+              <tr><td colSpan={isEditable ? 7 : 6} className="empty">Нет позиций</td></tr>
             ) : (() => {
                 const defaultTypeIds = new Set(itemTypes.filter(t => t.is_default).map(t => t.id))
                 const sorted = [
@@ -1391,8 +1781,11 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                     index={idx + 1}
                     orderId={orderId}
                     employees={employees}
+                    roles={roles}
                     onRefresh={loadOrder}
                     isEditable={isEditable}
+                    initialPhotos={photosByItemId.get(item.id) || []}
+                    isDefaultType={defaultTypeIds.has(item.item_type_id)}
                   />
                 ))
               })()
@@ -1500,6 +1893,15 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
         />
       )}
       {showPay && <PayModal onClose={() => setShowPay(false)} onPay={handlePay} />}
+      {showDeliverAndPay && <DeliverAndPayModal onClose={() => setShowDeliverAndPay(false)} onSubmit={handleDeliverAndPay} />}
+      {showCancelOrderModal && (
+        <CancelReasonModal
+          title="Отмена заказа"
+          subject={`Заказ #${String(order.id).padStart(5, '0')} будет отменён.`}
+          onCancel={() => setShowCancelOrderModal(false)}
+          onConfirm={confirmCancelOrder}
+        />
+      )}
       {showWarranty && (
         <WarrantyModal
           items={items}

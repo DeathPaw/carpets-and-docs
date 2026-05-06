@@ -1,6 +1,7 @@
 package ru.carpet.service;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.dto.ItemTypeWithServices;
 import ru.carpet.dto.PriceListEntryDto;
 import ru.carpet.exception.EntityNotFoundException;
@@ -46,18 +47,25 @@ public class ItemTypeService {
         );
     }
 
+    @Transactional
     public ItemType create(String name, boolean isDefault, BigDecimal defaultPrice, BigDecimal freeThreshold) {
         ItemType newItemType = repository.save(name, isDefault, defaultPrice, freeThreshold);
         priceListService.seedForItemType(newItemType.id());
         return newItemType;
     }
 
+    @Transactional
     public ItemType update(Long id, String name, boolean isDefault, BigDecimal defaultPrice, BigDecimal freeThreshold) {
         repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("ItemType not found: " + id));
         return repository.update(id, name, isDefault, defaultPrice, freeThreshold);
     }
 
+    /**
+     * Soft-delete: тип помечается удалённым (is_deleted=true) и исчезает из форм создания,
+     * но исторические заказы продолжают ссылаться на него по FK. Никаких ошибок не возвращаем.
+     */
+    @Transactional
     public void delete(Long id) {
         repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("ItemType not found: " + id));

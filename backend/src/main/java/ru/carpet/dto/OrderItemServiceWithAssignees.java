@@ -16,6 +16,7 @@ public record OrderItemServiceWithAssignees(
         BigDecimal price,
         Boolean isManualPrice,
         List<Employee> assignees,
+        String cancellationReason,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {}

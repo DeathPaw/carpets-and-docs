@@ -35,7 +35,7 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div key={t.id} style={{
             padding: '12px 20px', borderRadius: 8, color: '#fff', fontSize: '0.9em', fontWeight: 500,
             boxShadow: '0 4px 12px rgba(0,0,0,0.2)', minWidth: 250, maxWidth: 400,
-            background: t.type === 'success' ? '#27ae60' : t.type === 'error' ? '#e74c3c' : '#f39c12',
+            background: t.type === 'success' ? 'var(--c-success)' : t.type === 'error' ? '#e74c3c' : 'var(--c-warning)',
             animation: 'fadeIn 0.3s ease',
           }}>
             {t.message}

@@ -1,12 +1,29 @@
 package ru.carpet.repository;
 
+import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import ru.carpet.dto.AnalyticsDto;
 
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
+import static ru.carpet.repository.AnalyticsHelpers.longOrZero;
+import static ru.carpet.repository.AnalyticsHelpers.nz;
+
+/**
+ * Общая аналитика (карточки разделов, графики страницы Аналитика).
+ *
+ * <p>Раньше был один большой репозиторий на 500+ строк. После разбивки тут остались
+ * методы, которые не относятся ни к дашборду главной, ни к производственной очереди,
+ * ни к доходности — это сводки для графиков (по статусам, типам, районам, выручка
+ * по месяцам, гарантия, маржа). См. также:
+ * <ul>
+ *   <li>{@link DashboardRepository} — виджеты главной страницы;</li>
+ *   <li>{@link ProductionRepository} — производственная очередь (заказ/позиция/услуга);</li>
+ *   <li>{@link ProfitabilityRepository} — доходность по разрезам;</li>
+ *   <li>{@link AnalyticsHelpers} — общие SQL-фрагменты (COST_EXPR, dateFilter и т.п.).</li>
+ * </ul>
+ */
 @Repository
 public class AnalyticsRepository {
 
@@ -16,70 +33,85 @@ public class AnalyticsRepository {
         this.jdbc = jdbc;
     }
 
-    public List<Map<String, Object>> ordersByDistrict() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.DistrictCount> ordersByDistrict() {
+        return jdbc.query(
             "SELECT COALESCE(delivery_district, pickup_district, 'Не указан') as district, " +
             "COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total " +
             "FROM orders WHERE status NOT IN ('CANCELLED') " +
             "GROUP BY district ORDER BY count DESC",
-            Map.of()
+            (RowMapper<AnalyticsDto.DistrictCount>) (rs, n) -> new AnalyticsDto.DistrictCount(
+                rs.getString("district"), longOrZero(rs, "count"), nz(rs.getBigDecimal("total"))
+            )
         );
     }
 
-    public List<Map<String, Object>> ordersByStatus() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.StatusCount> ordersByStatus() {
+        // «Активные» = всё, что НЕ в финальных состояниях. COMPLETED — финальное
+        // (заказ выдан и закрыт), его не считаем активным; раньше попадал в график.
+        return jdbc.query(
             "SELECT status, COUNT(*) as count " +
-            "FROM orders WHERE status NOT IN ('DELIVERED', 'CANCELLED') " +
+            "FROM orders WHERE status NOT IN ('DELIVERED', 'COMPLETED', 'CANCELLED') " +
             "GROUP BY status ORDER BY count DESC",
-            Map.of()
+            (RowMapper<AnalyticsDto.StatusCount>) (rs, n) -> new AnalyticsDto.StatusCount(
+                rs.getString("status"), longOrZero(rs, "count")
+            )
         );
     }
 
-    public List<Map<String, Object>> itemsByType() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.TypeCount> itemsByType() {
+        return jdbc.query(
             "SELECT it.name as type_name, COUNT(*) as count " +
             "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
             "WHERE it.is_default = false " +
             "GROUP BY it.name ORDER BY count DESC",
-            Map.of()
+            (RowMapper<AnalyticsDto.TypeCount>) (rs, n) -> new AnalyticsDto.TypeCount(
+                rs.getString("type_name"), longOrZero(rs, "count")
+            )
         );
     }
 
-    public List<Map<String, Object>> employeeStats() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.EmployeeStat> employeeStats() {
+        return jdbc.query(
             "SELECT e.name, COUNT(*) as services_done, COALESCE(SUM(ois.price), 0) as total_earned " +
             "FROM service_assignees sa " +
             "JOIN employees e ON e.id = sa.employee_id " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id " +
             "WHERE ois.status = 'DONE' " +
             "GROUP BY e.name ORDER BY services_done DESC",
-            Map.of()
+            (RowMapper<AnalyticsDto.EmployeeStat>) (rs, n) -> new AnalyticsDto.EmployeeStat(
+                rs.getString("name"), longOrZero(rs, "services_done"), nz(rs.getBigDecimal("total_earned"))
+            )
         );
     }
 
-    public List<Map<String, Object>> revenueByMonth() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.MonthRevenue> revenueByMonth() {
+        return jdbc.query(
             "SELECT TO_CHAR(created_at, 'YYYY-MM') as month, " +
             "COUNT(*) as orders_count, COALESCE(SUM(total_amount), 0) as revenue " +
             "FROM orders WHERE paid = true " +
             "GROUP BY month ORDER BY month DESC LIMIT 12",
-            Map.of()
+            (RowMapper<AnalyticsDto.MonthRevenue>) (rs, n) -> new AnalyticsDto.MonthRevenue(
+                rs.getString("month"), longOrZero(rs, "orders_count"), nz(rs.getBigDecimal("revenue"))
+            )
         );
     }
 
-    public List<Map<String, Object>> topClients() {
-        return jdbc.queryForList(
-            "SELECT c.name, c.client_type, COUNT(o.id) as orders_count, " +
+    public List<AnalyticsDto.TopClient> topClients() {
+        return jdbc.query(
+            "SELECT c.id as client_id, c.name, c.client_type, COUNT(o.id) as orders_count, " +
             "COALESCE(SUM(o.total_amount), 0) as total_spent " +
             "FROM clients c JOIN orders o ON o.client_id = c.id " +
             "WHERE o.status NOT IN ('CANCELLED') " +
             "GROUP BY c.id, c.name, c.client_type ORDER BY total_spent DESC LIMIT 10",
-            Map.of()
+            (RowMapper<AnalyticsDto.TopClient>) (rs, n) -> new AnalyticsDto.TopClient(
+                rs.getLong("client_id"), rs.getString("name"), rs.getString("client_type"),
+                longOrZero(rs, "orders_count"), nz(rs.getBigDecimal("total_spent"))
+            )
         );
     }
 
-    public List<Map<String, Object>> marginAnalysis() {
-        return jdbc.queryForList(
+    public List<AnalyticsDto.MarginRow> marginAnalysis() {
+        return jdbc.query(
             "SELECT sd.name as service_name, " +
             "COUNT(ois.id) as count, " +
             "COALESCE(SUM(ois.price), 0) as revenue, " +
@@ -93,13 +125,16 @@ public class AnalyticsRepository {
             "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
             "WHERE ois.status = 'DONE' " +
             "GROUP BY sd.name ORDER BY revenue DESC",
-            Map.of()
+            (RowMapper<AnalyticsDto.MarginRow>) (rs, n) -> new AnalyticsDto.MarginRow(
+                rs.getString("service_name"), longOrZero(rs, "count"),
+                nz(rs.getBigDecimal("revenue")), nz(rs.getBigDecimal("cost"))
+            )
         );
     }
 
-    public List<Map<String, Object>> warrantyStats() {
-        return jdbc.queryForList(
-            "SELECT c.name as client_name, " +
+    public List<AnalyticsDto.WarrantyStat> warrantyStats() {
+        return jdbc.query(
+            "SELECT c.id as client_id, c.name as client_name, " +
             "COUNT(DISTINCT o.id) as total_orders, " +
             "COUNT(DISTINCT wo.id) as warranty_orders, " +
             "ROUND(COUNT(DISTINCT wo.id)::numeric / NULLIF(COUNT(DISTINCT o.id), 0) * 100, 1) as warranty_percent " +
@@ -108,61 +143,11 @@ public class AnalyticsRepository {
             "LEFT JOIN orders wo ON wo.client_id = c.id AND wo.is_warranty = true " +
             "GROUP BY c.id, c.name HAVING COUNT(DISTINCT o.id) > 0 " +
             "ORDER BY warranty_percent DESC NULLS LAST LIMIT 20",
-            Map.of()
-        );
-    }
-
-    public Map<String, Object> dashboard() {
-        Map<String, Object> result = new HashMap<>();
-
-        result.put("today_pickups", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE actual_pickup_date = CURRENT_DATE AND status IN ('LEAD','CREATED','FOR_PICKUP')",
-            Map.of(), Long.class));
-
-        result.put("today_deliveries", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE actual_delivery_date = CURRENT_DATE AND status = 'DONE'",
-            Map.of(), Long.class));
-
-        result.put("in_progress", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE status IN ('IN_PROGRESS','PARTIALLY_DONE')",
-            Map.of(), Long.class));
-
-        result.put("ready_for_delivery", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE status = 'DONE' AND paid = false",
-            Map.of(), Long.class));
-
-        result.put("overdue", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE delivery_date < CURRENT_DATE AND status NOT IN ('DELIVERED','CANCELLED')",
-            Map.of(), Long.class));
-
-        result.put("total_active", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE status NOT IN ('DELIVERED','CANCELLED')",
-            Map.of(), Long.class));
-
-        result.put("today_revenue", jdbc.queryForObject(
-            "SELECT COALESCE(SUM(total_amount), 0) FROM orders WHERE payment_date::date = CURRENT_DATE",
-            Map.of(), java.math.BigDecimal.class));
-
-        result.put("today_leads", jdbc.queryForObject(
-            "SELECT COUNT(*) FROM orders WHERE status = 'LEAD' AND created_at::date = CURRENT_DATE",
-            Map.of(), Long.class));
-
-        return result;
-    }
-
-    public List<Map<String, Object>> productionQueue() {
-        return jdbc.queryForList(
-            "SELECT o.id as order_id, o.client_name, o.status, o.created_at, o.total_amount, " +
-            "o.pickup_district, o.delivery_district, " +
-            "COUNT(DISTINCT oi.id) as items_count, " +
-            "COUNT(DISTINCT ois.id) as services_count, " +
-            "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done " +
-            "FROM orders o " +
-            "LEFT JOIN order_items oi ON oi.order_id = o.id " +
-            "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id " +
-            "WHERE o.status IN ('FOR_PICKUP','IN_PROGRESS','PARTIALLY_DONE') " +
-            "GROUP BY o.id ORDER BY o.created_at ASC",
-            Map.of()
+            (RowMapper<AnalyticsDto.WarrantyStat>) (rs, n) -> new AnalyticsDto.WarrantyStat(
+                rs.getLong("client_id"), rs.getString("client_name"),
+                longOrZero(rs, "total_orders"), longOrZero(rs, "warranty_orders"),
+                nz(rs.getBigDecimal("warranty_percent"))
+            )
         );
     }
 }

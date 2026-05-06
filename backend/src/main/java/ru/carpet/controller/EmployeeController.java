@@ -37,16 +37,26 @@ public class EmployeeController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Employee create(@Valid @RequestBody EmployeeRequest request) {
-        Employee emp = service.create(request.name(), request.contact());
+        Employee emp = service.create(request.name(), request.contact(), request.roleId());
         auditLogService.log("EMPLOYEE", emp.id(), "CREATE", "Создан сотрудник: " + emp.name());
         return emp;
     }
 
     @PutMapping("/{id}")
     public Employee update(@PathVariable Long id, @Valid @RequestBody EmployeeRequest request) {
-        Employee emp = service.update(id, request.name(), request.contact());
+        Employee emp = service.update(id, request.name(), request.contact(), request.roleId());
         auditLogService.log("EMPLOYEE", id, "UPDATE", "Обновлён сотрудник: " + emp.name());
         return emp;
+    }
+
+    /**
+     * Сотрудники, способные выполнять услуги для указанного типа позиции.
+     * Используется в форме «Назначить исполнителей»: фильтрует по роли,
+     * чтобы оператор не мог выбрать «Васю-чистильщика» на стирку тюлей.
+     */
+    @GetMapping("/suitable-for")
+    public List<Employee> suitableFor(@RequestParam Long itemTypeId) {
+        return service.findSuitableForItemType(itemTypeId);
     }
 
     @DeleteMapping("/{id}")

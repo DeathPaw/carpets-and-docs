@@ -1,526 +1,31 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getOrders, createOrder, updateOrderDetails } from '../api/orders'
-import { searchClients, createClient } from '../api/clients'
-import { geocodeAddress } from '../api/geocode'
+import * as XLSX from 'xlsx'
+import { getOrdersQuery } from '../api/orders'
 import { useToast } from '../components/Toast'
-import type { Order, OrderStatus, CreateOrderRequest, Client } from '../types'
+import MultiSelectFilter from '../components/MultiSelectFilter'
+import CreateOrderModal from '../components/orders/CreateOrderModal'
+import type { Order, OrderStatus } from '../types'
 
-const STATUS_LABELS: Record<string, string> = {
-  LEAD: 'Лид',
-  CREATED: 'Создан',
-  FOR_PICKUP: 'К забору',
-  IN_PROGRESS: 'В работе',
-  PARTIALLY_DONE: 'Частично готов',
-  DONE: 'Готов',
-  DELIVERED: 'Доставлен',
-  CANCELLED: 'Отменен',
-}
-
-const PAYMENT_LABELS: Record<string, string> = {
-  TRANSFER: 'Перевод',
-  CARD: 'Карта',
-  CASH: 'Наличные',
-}
-
-const ALL_STATUSES: OrderStatus[] = ['LEAD', 'CREATED', 'FOR_PICKUP', 'IN_PROGRESS', 'PARTIALLY_DONE', 'DONE', 'DELIVERED', 'CANCELLED']
-
-function formatOrderNumber(id: number, createdAt: string): string {
-  const num = String(id).padStart(5, '0')
-  const date = new Date(createdAt).toLocaleDateString('ru')
-  return `${num} от ${date}`
-}
+// Подписи и список статусов теперь общие — см. constants/statuses.ts
+import {
+  ORDER_STATUS_LABELS as STATUS_LABELS,
+  ALL_ORDER_STATUSES as ALL_STATUSES,
+  PAYMENT_LABELS,
+} from '../constants/statuses'
+import { formatOrderNumber } from '../utils/format'
 
 function StatusBadge({ status }: { status: string }) {
+  // STATUS_LABELS типизирован Record<OrderStatus, string>; даже если status из API
+  // окажется неизвестным — упадём на сам код вместо runtime-ошибки.
+  const label = (STATUS_LABELS as Record<string, string>)[status] ?? status
   return (
     <span className={`badge badge-${status.toLowerCase()}`}>
-      {STATUS_LABELS[status] ?? status}
+      {label}
     </span>
   )
 }
 
-function CreateOrderModal({ onClose, onCreated }: { onClose: () => void; onCreated: (o: Order) => void }) {
-  const [form, setForm] = useState<CreateOrderRequest>({ client_name: '', comment: '' })
-  const [clients, setClients] = useState<Client[]>([])
-  const [clientSearch, setClientSearch] = useState('')
-  const [selectedClientId, setSelectedClientId] = useState<number | null>(null)
-  const [selectedClientName, setSelectedClientName] = useState('')
-  const [showNewClient, setShowNewClient] = useState(false)
-  const [newClientType, setNewClientType] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>('INDIVIDUAL')
-  const [newClientData, setNewClientData] = useState({
-    name: '',
-    first_name: '',
-    last_name: '',
-    phone: '',
-    extra_phone: '',
-    address: '',
-    district: '',
-    inn: '',
-    contact_person: '',
-    contact_person_phone: '',
-    comment: '',
-  })
-  const [showExtraPhone, setShowExtraPhone] = useState(false)
-  const [showInn, setShowInn] = useState(false)
-  const [customAddress, setCustomAddress] = useState(false)
-  const [sameAddress, setSameAddress] = useState(true)
-  const [pickupAddress, setPickupAddress] = useState('')
-  const [deliveryAddress, setDeliveryAddress] = useState('')
-  const [pickupDistrict, setPickupDistrict] = useState('')
-  const [deliveryDistrict, setDeliveryDistrict] = useState('')
-  const [pickupDistrictAuto, setPickupDistrictAuto] = useState(false)
-  const [deliveryDistrictAuto, setDeliveryDistrictAuto] = useState(false)
-  const [pickupGeoWarn, setPickupGeoWarn] = useState('')
-  const [deliveryGeoWarn, setDeliveryGeoWarn] = useState('')
-  const [legacyId, setLegacyId] = useState('')
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [searchTimer, setSearchTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
-  const [geoTimer, setGeoTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
-
-  const doClientSearch = (q: string) => {
-    setClientSearch(q)
-    setSelectedClientId(null)
-    setSelectedClientName('')
-    if (searchTimer) clearTimeout(searchTimer)
-    if (!q.trim()) { setClients([]); return }
-    const timer = setTimeout(async () => {
-      try {
-        const results = await searchClients(q.trim())
-        setClients(results)
-      } catch { /* ignore */ }
-    }, 300)
-    setSearchTimer(timer)
-  }
-
-  const selectClient = (c: Client) => {
-    setSelectedClientId(c.id)
-    setSelectedClientName(c.name)
-    setClientSearch(c.name)
-    setClients([])
-  }
-
-  const doGeocode = useCallback(async (address: string, type: 'pickup' | 'delivery') => {
-    if (!address.trim()) return
-    const setDistrict = type === 'pickup' ? setPickupDistrict : setDeliveryDistrict
-    const setAuto = type === 'pickup' ? setPickupDistrictAuto : setDeliveryDistrictAuto
-    const setWarn = type === 'pickup' ? setPickupGeoWarn : setDeliveryGeoWarn
-
-    const result = await geocodeAddress(address)
-    if (!result.found) {
-      setWarn('Адрес не найден. Укажите район вручную.')
-      setAuto(false)
-      return
-    }
-    if (!result.isSPB) {
-      setWarn('Адрес не в Санкт-Петербурге. Укажите район вручную.')
-      setAuto(false)
-      return
-    }
-    if (!result.district) {
-      setWarn('Не удалось определить район. Укажите вручную.')
-      setAuto(false)
-      return
-    }
-    setDistrict(result.district)
-    setAuto(true)
-    setWarn('')
-  }, [])
-
-  const handlePickupAddressChange = (val: string) => {
-    setPickupAddress(val)
-    setPickupDistrictAuto(false)
-    setPickupGeoWarn('')
-    if (geoTimer) clearTimeout(geoTimer)
-    if (val.trim().length > 5) {
-      const t = setTimeout(() => void doGeocode(val, 'pickup'), 1000)
-      setGeoTimer(t)
-    }
-  }
-
-  const handleDeliveryAddressChange = (val: string) => {
-    setDeliveryAddress(val)
-    setDeliveryDistrictAuto(false)
-    setDeliveryGeoWarn('')
-    if (geoTimer) clearTimeout(geoTimer)
-    if (val.trim().length > 5) {
-      const t = setTimeout(() => void doGeocode(val, 'delivery'), 1000)
-      setGeoTimer(t)
-    }
-  }
-
-  const submit = async () => {
-    setLoading(true)
-    try {
-      let clientId = selectedClientId
-      let clientName = ''
-
-      if (showNewClient) {
-        if (newClientType === 'INDIVIDUAL') {
-          if (!newClientData.first_name.trim() && !newClientData.name.trim()) {
-            setError('Имя клиента обязательно')
-            setLoading(false)
-            return
-          }
-        } else {
-          if (!newClientData.name.trim()) {
-            setError('Название организации обязательно')
-            setLoading(false)
-            return
-          }
-        }
-
-        const resolvedName = newClientType === 'INDIVIDUAL'
-          ? `${newClientData.last_name} ${newClientData.first_name}`.trim() || newClientData.name.trim()
-          : newClientData.name.trim()
-
-        let newClient: Client
-        try {
-          newClient = await createClient({
-            client_type: newClientType,
-            name: resolvedName,
-            first_name: newClientData.first_name.trim() || undefined,
-            last_name: newClientData.last_name.trim() || undefined,
-            phone: newClientData.phone.trim() || undefined,
-            extra_phone: newClientData.extra_phone.trim() || undefined,
-            address: newClientData.address.trim() || undefined,
-            district: newClientData.district.trim() || undefined,
-            inn: newClientData.inn.trim() || undefined,
-            contact_person: newClientData.contact_person.trim() || undefined,
-            contact_person_phone: newClientData.contact_person_phone.trim() || undefined,
-            comment: newClientData.comment.trim() || undefined,
-          })
-        } catch {
-          setError('Ошибка при создании клиента')
-          setLoading(false)
-          return
-        }
-        clientId = newClient.id
-        clientName = newClient.name
-        if (newClient.address && !pickupAddress) setPickupAddress(newClient.address)
-        if (newClient.address && !deliveryAddress) setDeliveryAddress(newClient.address)
-      } else {
-        if (!selectedClientId) {
-          setError('Введите имя клиента и выберите из списка')
-          setLoading(false)
-          return
-        }
-        clientName = selectedClientName
-      }
-
-      // Адреса: если customAddress — берём из полей, иначе из адреса клиента
-      const clientAddr = showNewClient ? newClientData.address.trim() : (clients.find(c => c.id === clientId)?.address || '')
-      const clientDist = showNewClient ? newClientData.district.trim() : ''
-
-      const finalPickupAddress = customAddress ? pickupAddress.trim() : clientAddr
-      const finalPickupDistrict = customAddress ? pickupDistrict.trim() : clientDist
-      const finalDeliveryAddress = customAddress ? (sameAddress ? pickupAddress.trim() : deliveryAddress.trim()) : clientAddr
-      const finalDeliveryDistrict = customAddress ? (sameAddress ? pickupDistrict.trim() : deliveryDistrict.trim()) : clientDist
-
-      // Валидация районов (только если адрес заполнен)
-      if (finalPickupAddress && !finalPickupDistrict) {
-        setError('Укажите район (не удалось определить автоматически)')
-        setLoading(false)
-        return
-      }
-      if (finalDeliveryAddress && !finalDeliveryDistrict && finalDeliveryAddress !== finalPickupAddress) {
-        setError('Укажите район доставки (не удалось определить автоматически)')
-        setLoading(false)
-        return
-      }
-
-      const orderData: CreateOrderRequest = {
-        client_id: clientId,
-        client_name: clientName,
-        comment: form.comment || null,
-        pickup_address: finalPickupAddress || null,
-        delivery_address: finalDeliveryAddress || null,
-        legacy_id: legacyId ? Number(legacyId) : null,
-      }
-
-      const order = await createOrder(orderData)
-      // Установить районы через updateDetails
-      if (finalPickupDistrict || finalDeliveryDistrict) {
-        await updateOrderDetails(order.id, {
-          pickup_address: finalPickupAddress || null,
-          delivery_address: finalDeliveryAddress || null,
-          pickup_district: finalPickupDistrict || null,
-          delivery_district: finalDeliveryDistrict || finalPickupDistrict || null,
-        })
-      }
-      onCreated(order)
-    } catch {
-      setError('Ошибка при создании заказа')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  return (
-    <div className="modal-overlay">
-      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
-        <button
-          onClick={onClose}
-          style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', fontSize: '1.5em', cursor: 'pointer', color: '#888', lineHeight: 1 }}
-          title="Закрыть"
-        >&times;</button>
-        <h2>Новый заказ</h2>
-
-        <div className="form-group">
-          <label>Клиент</label>
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-            <button
-              type="button"
-              className={!showNewClient ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
-              onClick={() => setShowNewClient(false)}
-            >
-              Выбрать существующего
-            </button>
-            <button
-              type="button"
-              className={showNewClient ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
-              onClick={() => setShowNewClient(true)}
-            >
-              Создать нового
-            </button>
-          </div>
-
-          {!showNewClient ? (
-            <div style={{ position: 'relative' }}>
-              <input
-                value={clientSearch}
-                onChange={e => doClientSearch(e.target.value)}
-                placeholder="Начните вводить имя, телефон, организацию..."
-                autoComplete="off"
-              />
-              {clients.length > 0 && !selectedClientId && (
-                <div style={{
-                  position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 10,
-                  background: '#fff', border: '1px solid #ddd', borderRadius: 4,
-                  maxHeight: 200, overflowY: 'auto', boxShadow: '0 4px 12px rgba(0,0,0,0.15)'
-                }}>
-                  {clients.map(c => (
-                    <div
-                      key={c.id}
-                      onClick={() => selectClient(c)}
-                      style={{ padding: '8px 12px', cursor: 'pointer', borderBottom: '1px solid #f0f0f0' }}
-                      onMouseEnter={e => (e.currentTarget.style.background = '#f0f6ff')}
-                      onMouseLeave={e => (e.currentTarget.style.background = '#fff')}
-                    >
-                      <div><strong>{c.name}</strong>{c.client_type === 'LEGAL_ENTITY' ? ' (юр.)' : ''}</div>
-                      <div style={{ fontSize: '0.85em', color: '#666' }}>
-                        {c.phone || ''}{c.address ? ` · ${c.address}` : ''}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-              {selectedClientId && (
-                <div style={{ marginTop: 4, fontSize: '0.9em', color: '#27ae60' }}>
-                  Выбран: {selectedClientName} (#{selectedClientId})
-                </div>
-              )}
-            </div>
-          ) : (
-            <div>
-              <div className="form-group">
-                <label>Тип клиента</label>
-                <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                  <button type="button" className={newClientType === 'INDIVIDUAL' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'} onClick={() => setNewClientType('INDIVIDUAL')}>Физ. лицо</button>
-                  <button type="button" className={newClientType === 'LEGAL_ENTITY' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'} onClick={() => setNewClientType('LEGAL_ENTITY')}>Юр. лицо</button>
-                </div>
-              </div>
-
-              {newClientType === 'INDIVIDUAL' ? (
-                <>
-                  <div className="form-group">
-                    <label>Фамилия</label>
-                    <input value={newClientData.last_name} onChange={e => setNewClientData(d => ({ ...d, last_name: e.target.value }))} placeholder="Фамилия" />
-                  </div>
-                  <div className="form-group">
-                    <label>Имя *</label>
-                    <input value={newClientData.first_name} onChange={e => setNewClientData(d => ({ ...d, first_name: e.target.value }))} placeholder="Имя" />
-                  </div>
-                  <div className="form-group">
-                    <label>Телефон</label>
-                    <input value={newClientData.phone} onChange={e => setNewClientData(d => ({ ...d, phone: e.target.value }))} placeholder="Телефон" />
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="form-group">
-                    <label>Название организации *</label>
-                    <input value={newClientData.name} onChange={e => setNewClientData(d => ({ ...d, name: e.target.value }))} placeholder="Название организации" />
-                  </div>
-                  <div className="form-group">
-                    <label>Контактное лицо</label>
-                    <input value={newClientData.contact_person} onChange={e => setNewClientData(d => ({ ...d, contact_person: e.target.value }))} placeholder="ФИО контактного лица" />
-                  </div>
-                  <div className="form-group">
-                    <label>Телефон контактного лица</label>
-                    <input value={newClientData.contact_person_phone} onChange={e => setNewClientData(d => ({ ...d, contact_person_phone: e.target.value }))} placeholder="Телефон контактного лица" />
-                  </div>
-                  <div className="form-group">
-                    <label>Телефон организации</label>
-                    <input value={newClientData.phone} onChange={e => setNewClientData(d => ({ ...d, phone: e.target.value }))} placeholder="Телефон организации" />
-                  </div>
-                  <div style={{ marginBottom: 8 }}>
-                    <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                      <input type="checkbox" style={{ width: 'auto' }} checked={showInn} onChange={e => setShowInn(e.target.checked)} />
-                      Указать ИНН
-                    </label>
-                  </div>
-                  {showInn && (
-                    <div className="form-group">
-                      <label>ИНН</label>
-                      <input value={newClientData.inn} onChange={e => setNewClientData(d => ({ ...d, inn: e.target.value }))} placeholder="ИНН" />
-                    </div>
-                  )}
-                </>
-              )}
-
-              <div style={{ marginBottom: 8 }}>
-                <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                  <input type="checkbox" style={{ width: 'auto' }} checked={showExtraPhone} onChange={e => setShowExtraPhone(e.target.checked)} />
-                  Дополнительный телефон
-                </label>
-              </div>
-              {showExtraPhone && (
-                <div className="form-group">
-                  <label>Доп. телефон</label>
-                  <input value={newClientData.extra_phone} onChange={e => setNewClientData(d => ({ ...d, extra_phone: e.target.value }))} placeholder="Дополнительный телефон" />
-                </div>
-              )}
-
-              <div className="form-group">
-                <label>Адрес</label>
-                <textarea rows={2} value={newClientData.address} onChange={e => setNewClientData(d => ({ ...d, address: e.target.value }))} placeholder="Адрес" />
-              </div>
-              <div className="form-group">
-                <label>Район</label>
-                <input value={newClientData.district} onChange={e => setNewClientData(d => ({ ...d, district: e.target.value }))} placeholder="Район" />
-              </div>
-              <div className="form-group">
-                <label>Комментарий</label>
-                <textarea rows={2} value={newClientData.comment} onChange={e => setNewClientData(d => ({ ...d, comment: e.target.value }))} placeholder="Комментарий" />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginBottom: 8 }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" style={{ width: 'auto' }} checked={customAddress} onChange={e => {
-              setCustomAddress(e.target.checked)
-              if (!e.target.checked) {
-                // Сбрасываем адреса заказа — будут браться из клиента
-                setPickupAddress('')
-                setPickupDistrict('')
-                setPickupDistrictAuto(false)
-                setPickupGeoWarn('')
-                setDeliveryAddress('')
-                setDeliveryDistrict('')
-                setDeliveryDistrictAuto(false)
-                setDeliveryGeoWarn('')
-                setSameAddress(true)
-              }
-            }} />
-            Указать другие адреса для заказа
-          </label>
-        </div>
-        {customAddress && (
-          <>
-            <div className="form-group">
-              <label>Адрес забора</label>
-              <input
-                value={pickupAddress}
-                onChange={e => {
-                  handlePickupAddressChange(e.target.value)
-                  if (sameAddress) handleDeliveryAddressChange(e.target.value)
-                }}
-                placeholder="Введите улицу и дом..."
-              />
-              <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
-                <input
-                  value={pickupDistrict}
-                  onChange={e => {
-                    setPickupDistrict(e.target.value); setPickupDistrictAuto(false); setPickupGeoWarn('')
-                    if (sameAddress) { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }
-                  }}
-                  placeholder="Район"
-                  style={{ width: 180 }}
-                />
-                {pickupDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
-              </div>
-              {pickupGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{pickupGeoWarn}</div>}
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={!sameAddress} onChange={e => {
-                  const diff = e.target.checked
-                  setSameAddress(!diff)
-                  if (!diff) {
-                    setDeliveryAddress(pickupAddress)
-                    setDeliveryDistrict(pickupDistrict)
-                    setDeliveryDistrictAuto(pickupDistrictAuto)
-                    setDeliveryGeoWarn('')
-                  }
-                }} />
-                Адреса забора и доставки отличаются
-              </label>
-            </div>
-            {!sameAddress && (
-              <div className="form-group">
-                <label>Адрес доставки</label>
-                <input
-                  value={deliveryAddress}
-                  onChange={e => handleDeliveryAddressChange(e.target.value)}
-                  placeholder="Введите улицу и дом..."
-                />
-                <div style={{ display: 'flex', gap: 8, marginTop: 4, alignItems: 'center' }}>
-                  <input
-                    value={deliveryDistrict}
-                    onChange={e => { setDeliveryDistrict(e.target.value); setDeliveryDistrictAuto(false); setDeliveryGeoWarn('') }}
-                    placeholder="Район"
-                    style={{ width: 180 }}
-                  />
-                  {deliveryDistrictAuto && <span style={{ fontSize: '0.8em', color: '#27ae60' }}>определён автоматически</span>}
-                </div>
-                {deliveryGeoWarn && <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>{deliveryGeoWarn}</div>}
-              </div>
-            )}
-          </>
-        )}
-        <div className="form-group">
-          <label>Legacy ID</label>
-          <input
-            type="number"
-            value={legacyId}
-            onChange={e => setLegacyId(e.target.value)}
-            placeholder="ID из старой системы (необязательно)"
-          />
-        </div>
-
-        <div className="form-group">
-          <label>Комментарий</label>
-          <textarea
-            rows={3}
-            value={form.comment ?? ''}
-            onChange={e => setForm(f => ({ ...f, comment: e.target.value }))}
-            placeholder="Необязательный комментарий"
-          />
-        </div>
-        {error && <div className="error-msg">{error}</div>}
-        <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>Отмена</button>
-          <button className="btn-primary" onClick={submit} disabled={loading}>
-            {loading ? 'Создание...' : 'Создать'}
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
 
 export default function OrdersPage() {
   const navigate = useNavigate()
@@ -528,85 +33,185 @@ export default function OrdersPage() {
   const [searchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [totalElements, setTotalElements] = useState(0)
-  const [statusFilter, setStatusFilter] = useState<OrderStatus | ''>(searchParams.get('status') as OrderStatus || '')
-  const [paymentFilter, setPaymentFilter] = useState('')
+
+  // Парсим из URL: ?statuses=A,B,C или ?status=A
+  const initialStatuses = (() => {
+    const multi = searchParams.get('statuses')
+    if (multi) return multi.split(',').filter(Boolean) as OrderStatus[]
+    const single = searchParams.get('status')
+    return single ? [single as OrderStatus] : []
+  })()
+  const [statusFilters, setStatusFilters] = useState<OrderStatus[]>(initialStatuses)
+
+  const initialClientId = searchParams.get('clientId')
+  const [clientIdFilter, setClientIdFilter] = useState<number | null>(
+    initialClientId ? Number(initialClientId) : null
+  )
+  const [clientFilterLabel, setClientFilterLabel] = useState<string>(
+    searchParams.get('clientName') || ''
+  )
+
+  // Флаги-фильтры с дашборда (точечный переход по виджету «Проблемные заказы» и т.п.):
+  // ?noCoords=true       — есть адрес, но нет координат
+  // ?overdueActual=true  — просрочена фактическая дата
+  // ?badAddress=true     — пора забирать/доставлять, но адреса нет
+  const [noCoordsFilter, setNoCoordsFilter] = useState<boolean>(
+    searchParams.get('noCoords') === 'true'
+  )
+  const [overdueActualFilter, setOverdueActualFilter] = useState<boolean>(
+    searchParams.get('overdueActual') === 'true'
+  )
+  const [badAddressFilter, setBadAddressFilter] = useState<boolean>(
+    searchParams.get('badAddress') === 'true'
+  )
+  const [paymentFilters, setPaymentFilters] = useState<string[]>([])
   const [orderIdSearch, setOrderIdSearch] = useState('')
   const [legacyIdSearch, setLegacyIdSearch] = useState('')
   const [clientPhoneSearch, setClientPhoneSearch] = useState('')
   const [clientNameSearch, setClientNameSearch] = useState('')
+  // Поле даты для фильтра — операторам часто нужно искать «доставки на этой неделе»,
+  // не «созданные на этой неделе». Через select оператор выбирает по какому полю фильтровать.
+  const [dateField, setDateField] = useState<'created_at' | 'pickup_date' | 'delivery_date'>('created_at')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
-  const [sortBy, setSortBy] = useState('id')
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+  // Мульти-сортировка: массив пар (поле, направление). Первый — главный, потом тай-брейкер.
+  const [sortKeys, setSortKeys] = useState<{ field: string; dir: 'asc' | 'desc' }[]>([
+    { field: 'id', dir: 'desc' },
+  ])
   const PAGE_SIZE = 20
 
-  // Синхронизация фильтра статуса из URL при навигации
+  // Синхронизация фильтра статуса/клиента из URL при навигации (открытие страницы из другого места)
   useEffect(() => {
-    const s = searchParams.get('status')
-    if (s) setStatusFilter(s as OrderStatus)
+    const multi = searchParams.get('statuses')
+    if (multi) {
+      setStatusFilters(multi.split(',').filter(Boolean) as OrderStatus[])
+    } else {
+      const s = searchParams.get('status')
+      if (s) setStatusFilters([s as OrderStatus])
+    }
+    const cid = searchParams.get('clientId')
+    if (cid) setClientIdFilter(Number(cid))
+    const cname = searchParams.get('clientName')
+    if (cname) setClientFilterLabel(cname)
+    setNoCoordsFilter(searchParams.get('noCoords') === 'true')
+    setOverdueActualFilter(searchParams.get('overdueActual') === 'true')
+    setBadAddressFilter(searchParams.get('badAddress') === 'true')
   }, [searchParams])
 
-  const toggleSort = (col: string) => {
-    if (sortBy === col) {
-      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
-    } else {
-      setSortBy(col)
-      setSortDir('desc')
-    }
+  /**
+   * Клик по заголовку колонки. Поведение:
+   * - Обычный click: оставляет только эту колонку, цикл направлений ↓ → ↑ → нет → ↓ …
+   * - Shift+click: добавляет колонку в мульти-сортировку (или переключает направление, если уже добавлена).
+   * - Ctrl/Cmd+click: удаляет эту колонку из сортировки (если она там есть).
+   */
+  const toggleSort = (col: string, mode: 'replace' | 'add' | 'remove' = 'replace') => {
+    setSortKeys(prev => {
+      const existingIdx = prev.findIndex(k => k.field === col)
+      if (mode === 'remove') {
+        return existingIdx >= 0 ? prev.filter((_, i) => i !== existingIdx) : prev
+      }
+      if (mode === 'add') {
+        if (existingIdx >= 0) {
+          // переключаем направление
+          return prev.map((k, i) => i === existingIdx ? { ...k, dir: k.dir === 'desc' ? 'asc' : 'desc' } : k)
+        }
+        return [...prev, { field: col, dir: 'desc' }]
+      }
+      // mode === 'replace' (обычный клик)
+      if (existingIdx === 0 && prev.length === 1) {
+        if (prev[0].dir === 'desc') return [{ field: col, dir: 'asc' }]
+        return [] // третий клик снимает сортировку
+      }
+      return [{ field: col, dir: 'desc' }]
+    })
     setPage(0)
   }
 
-  const exportCSV = () => {
-    const headers = ['Номер', 'Клиент', 'Статус', 'Сумма', 'Оплачен', 'Создан']
+  const sortIndicator = (col: string) => {
+    const idx = sortKeys.findIndex(k => k.field === col)
+    if (idx < 0) return ''
+    const k = sortKeys[idx]
+    const arrow = k.dir === 'asc' ? '↑' : '↓'
+    return sortKeys.length > 1 ? ` ${arrow}${idx + 1}` : ` ${arrow}`
+  }
+
+  /** Определяет режим клика по модификаторам клавиатуры. */
+  const sortMode = (e: React.MouseEvent): 'replace' | 'add' | 'remove' => {
+    if (e.ctrlKey || e.metaKey) return 'remove'
+    if (e.shiftKey) return 'add'
+    return 'replace'
+  }
+
+  const exportXLSX = () => {
+    const headers = ['Номер', 'Клиент', 'Статус', 'Сумма, ₽', 'Оплачен', 'Тип оплаты', 'Гарантийный', 'Создан']
     const rows = orders.map(o => [
       o.id,
       o.client_name,
       STATUS_LABELS[o.status] || o.status,
-      Number(o.total_amount).toFixed(2),
+      Number(o.total_amount),
       o.paid ? 'Да' : 'Нет',
-      new Date(o.created_at).toLocaleDateString('ru'),
+      o.paid ? ((o.payment_type ? PAYMENT_LABELS[o.payment_type] : '') ?? '') : '',
+      o.is_warranty ? 'Да' : '',
+      new Date(o.created_at),
     ])
-    const csv = [headers, ...rows].map(r => r.map(c => `"${c}"`).join(';')).join('\n')
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `orders_${new Date().toISOString().slice(0,10)}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+
+    // \u0428\u0438\u0440\u0438\u043D\u044B \u043A\u043E\u043B\u043E\u043D\u043E\u043A (\u0432 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u0445)
+    ws['!cols'] = [
+      { wch: 8 },   // \u041D\u043E\u043C\u0435\u0440
+      { wch: 32 },  // \u041A\u043B\u0438\u0435\u043D\u0442
+      { wch: 16 },  // \u0421\u0442\u0430\u0442\u0443\u0441
+      { wch: 12 },  // \u0421\u0443\u043C\u043C\u0430
+      { wch: 10 },  // \u041E\u043F\u043B\u0430\u0447\u0435\u043D
+      { wch: 12 },  // \u0422\u0438\u043F \u043E\u043F\u043B\u0430\u0442\u044B
+      { wch: 12 },  // \u0413\u0430\u0440\u0430\u043D\u0442\u0438\u0439\u043D\u044B\u0439
+      { wch: 12 },  // \u0421\u043E\u0437\u0434\u0430\u043D
+    ]
+
+    // \u0424\u043E\u0440\u043C\u0430\u0442 \u0434\u0435\u043D\u0435\u0436\u043D\u043E\u0439 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \u0438 \u0434\u0430\u0442\u044B
+    for (let i = 0; i < rows.length; i++) {
+      const r = i + 1 // \u0441\u0442\u0440\u043E\u043A\u0430 \u0441 \u0434\u0430\u043D\u043D\u044B\u043C\u0438 (\u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A \u2014 0)
+      const sumCell = ws[XLSX.utils.encode_cell({ r, c: 3 })]
+      if (sumCell) { sumCell.t = 'n'; sumCell.z = '#,##0.00' }
+      const dateCell = ws[XLSX.utils.encode_cell({ r, c: 7 })]
+      if (dateCell) { dateCell.t = 'd'; dateCell.z = 'dd.mm.yyyy' }
+    }
+
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, '\u0417\u0430\u043A\u0430\u0437\u044B')
+    XLSX.writeFile(wb, `orders_${new Date().toISOString().slice(0, 10)}.xlsx`)
   }
 
   const load = async () => {
     setLoading(true)
     try {
-      const data = await getOrders(
-        statusFilter || undefined,
+      const data = await getOrdersQuery({
+        statuses: statusFilters.length > 0 ? statusFilters : undefined,
         page,
-        PAGE_SIZE,
-        dateFrom || undefined,
-        dateTo || undefined,
-        legacyIdSearch ? Number(legacyIdSearch) : undefined,
-        paymentFilter || undefined,
-        orderIdSearch ? Number(orderIdSearch) : undefined,
-        clientPhoneSearch || undefined,
-        clientNameSearch || undefined,
-        sortBy,
-        sortDir,
-      )
-      // Support both paginated and array responses
-      if (Array.isArray(data)) {
-        setOrders(data as unknown as Order[])
-        setTotalElements(0)
-        setHasMore((data as unknown as Order[]).length === PAGE_SIZE)
-      } else {
-        setOrders(data.content)
-        setTotalElements(data.total_elements)
-        setHasMore(data.content.length === PAGE_SIZE)
-      }
+        size: PAGE_SIZE,
+        dateFrom: dateFrom || undefined,
+        dateField: dateField,
+        dateTo: dateTo || undefined,
+        legacyId: legacyIdSearch ? Number(legacyIdSearch) : undefined,
+        // Бэк принимает paymentType как одно значение или CSV ("CARD,CASH").
+        paymentType: paymentFilters.length > 0 ? paymentFilters.join(',') : undefined,
+        orderId: orderIdSearch ? Number(orderIdSearch) : undefined,
+        clientPhone: clientPhoneSearch || undefined,
+        clientName: clientNameSearch || undefined,
+        clientId: clientIdFilter || undefined,
+        sortBy: sortKeys.map(k => k.field),
+        sortDir: sortKeys.map(k => k.dir),
+        noCoords: noCoordsFilter || undefined,
+        overdueActual: overdueActualFilter || undefined,
+        badAddress: badAddressFilter || undefined,
+      })
+      setOrders(data.content)
+      setTotalElements(data.total_elements)
+      setHasMore(data.content.length === PAGE_SIZE)
     } catch (e: unknown) {
       const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки заказов'
       showToast(msg, 'error')
@@ -615,7 +220,7 @@ export default function OrdersPage() {
     }
   }
 
-  useEffect(() => { void load() }, [statusFilter, paymentFilter, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, page, sortBy, sortDir])
+  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter])
 
   const handleCreated = (order: Order) => {
     setShowCreate(false)
@@ -627,21 +232,68 @@ export default function OrdersPage() {
       <div className="page-header">
         <h1>Заказы</h1>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-secondary" onClick={exportCSV}>Экспорт CSV</button>
+          <button className="btn-secondary" onClick={exportXLSX}>Экспорт Excel</button>
           <button className="btn-primary" onClick={() => setShowCreate(true)}>+ Новый заказ</button>
         </div>
       </div>
 
+      {/* Чипы-индикаторы активных «дашбордных» фильтров. Снимаются кнопкой,
+          query-param чистится в URL. Описание подсказывает оператору, почему
+          список такой короткий. */}
+      {(() => {
+        const removeFlag = (key: string, setter: (v: boolean) => void) => () => {
+          setter(false)
+          const sp = new URLSearchParams(searchParams)
+          sp.delete(key)
+          navigate(`/orders${sp.toString() ? '?' + sp.toString() : ''}`, { replace: true })
+        }
+        const flagNotice = (text: string, onRemove: () => void, key: string) => (
+          <div key={key} className="notice notice-warning" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <span>{text}</span>
+            <button className="btn-secondary btn-sm" onClick={onRemove}>Снять фильтр</button>
+          </div>
+        )
+        return (
+          <>
+            {noCoordsFilter && flagNotice(
+              'Показаны только заказы с адресом, но без координат — их не видно на карте логистики.',
+              removeFlag('noCoords', setNoCoordsFilter), 'noCoords'
+            )}
+            {overdueActualFilter && flagNotice(
+              'Показаны только заказы с просроченной фактической датой забора или доставки.',
+              removeFlag('overdueActual', setOverdueActualFilter), 'overdueActual'
+            )}
+            {badAddressFilter && flagNotice(
+              'Показаны только заказы со статусами «к забору» или «готов», у которых не заполнен адрес.',
+              removeFlag('badAddress', setBadAddressFilter), 'badAddress'
+            )}
+          </>
+        )
+      })()}
+
       <div className="filters">
         <div className="form-group">
           <label>Статус</label>
-          <select value={statusFilter} onChange={e => { setStatusFilter(e.target.value as OrderStatus | ''); setPage(0) }}>
-            <option value="">Все статусы</option>
-            {ALL_STATUSES.map(s => (
-              <option key={s} value={s}>{STATUS_LABELS[s]}</option>
-            ))}
-          </select>
+          <MultiSelectFilter
+            options={ALL_STATUSES.map(s => ({ value: s, label: STATUS_LABELS[s] || s }))}
+            value={statusFilters}
+            onChange={vals => { setStatusFilters(vals as OrderStatus[]); setPage(0) }}
+            placeholder="Все статусы"
+          />
         </div>
+        {clientIdFilter && (
+          <div className="form-group">
+            <label>Клиент</label>
+            <button
+              type="button"
+              onClick={() => { setClientIdFilter(null); setClientFilterLabel(''); setPage(0) }}
+              style={{ padding: '6px 10px', border: '1px solid #ccc', borderRadius: 4, background: '#fef9e7', cursor: 'pointer' }}
+              title="Снять фильтр по клиенту"
+            >
+              {clientFilterLabel || `ID ${clientIdFilter}`} ✕
+            </button>
+          </div>
+        )}
         <div className="form-group">
           <label>Номер заказа</label>
           <input
@@ -654,12 +306,18 @@ export default function OrdersPage() {
         </div>
         <div className="form-group">
           <label>Тип оплаты</label>
-          <select value={paymentFilter} onChange={e => { setPaymentFilter(e.target.value); setPage(0) }}>
-            <option value="">Все</option>
-            <option value="CARD">Карта</option>
-            <option value="CASH">Наличные</option>
-            <option value="TRANSFER">Перевод</option>
-          </select>
+          <MultiSelectFilter
+            options={[
+              { value: 'CARD',     label: 'Карта' },
+              { value: 'CASH',     label: 'Наличные' },
+              { value: 'TRANSFER', label: 'Перевод' },
+            ]}
+            searchable
+            value={paymentFilters}
+            onChange={vals => { setPaymentFilters(vals); setPage(0) }}
+            placeholder="Все"
+            width={170}
+          />
         </div>
         <div className="form-group">
           <label>Legacy ID</label>
@@ -690,6 +348,14 @@ export default function OrdersPage() {
           />
         </div>
         <div className="form-group">
+          <label>Поле даты</label>
+          <select value={dateField} onChange={e => { setDateField(e.target.value as typeof dateField); setPage(0) }}>
+            <option value="created_at">Создан</option>
+            <option value="pickup_date">Забор (план)</option>
+            <option value="delivery_date">Доставка (план)</option>
+          </select>
+        </div>
+        <div className="form-group">
           <label>Дата с</label>
           <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
         </div>
@@ -703,25 +369,40 @@ export default function OrdersPage() {
         <div className="loading">Загрузка...</div>
       ) : (
         <>
-          {totalElements > 0 && (
-            <div style={{ marginBottom: 8, color: '#666', fontSize: '0.9em' }}>
-              Показано {orders.length} из {totalElements}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            marginBottom: 6, color: '#666', fontSize: '0.85em', gap: 12, flexWrap: 'wrap',
+          }}>
+            <div>
+              {totalElements > 0 && <>Показано {orders.length} из {totalElements} · </>}
+              Сортировка: клик — направление (третий снимает),
+              Shift+клик — добавить колонку, Ctrl/Cmd+клик — убрать.
             </div>
-          )}
+            {sortKeys.length > 0 && (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={() => { setSortKeys([]); setPage(0) }}
+                title="Снять всю сортировку"
+              >
+                Сбросить сортировку
+              </button>
+            )}
+          </div>
           <table>
             <thead>
               <tr>
-                <th onClick={() => toggleSort('id')} style={{ cursor: 'pointer' }}>
-                  # {sortBy === 'id' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                <th onClick={e => toggleSort('id', sortMode(e))} style={{ cursor: 'pointer' }}>
+                  #{sortIndicator('id')}
                 </th>
-                <th onClick={() => toggleSort('client_name')} style={{ cursor: 'pointer' }}>
-                  Клиент {sortBy === 'client_name' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                <th onClick={e => toggleSort('client_name', sortMode(e))} style={{ cursor: 'pointer' }}>
+                  Клиент{sortIndicator('client_name')}
                 </th>
-                <th onClick={() => toggleSort('status')} style={{ cursor: 'pointer' }}>
-                  Статус {sortBy === 'status' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                <th onClick={e => toggleSort('status', sortMode(e))} style={{ cursor: 'pointer' }}>
+                  Статус{sortIndicator('status')}
                 </th>
-                <th onClick={() => toggleSort('total_amount')} style={{ cursor: 'pointer' }}>
-                  Сумма {sortBy === 'total_amount' && (sortDir === 'asc' ? '\u2191' : '\u2193')}
+                <th onClick={e => toggleSort('total_amount', sortMode(e))} style={{ cursor: 'pointer' }}>
+                  Сумма{sortIndicator('total_amount')}
                 </th>
                 <th>Оплачен</th>
                 <th>Гарантийный</th>
@@ -736,7 +417,7 @@ export default function OrdersPage() {
                   <td>{o.client_name}</td>
                   <td><StatusBadge status={o.status} /></td>
                   <td>{Number(o.total_amount).toFixed(2)} &#8381;</td>
-                  <td>{o.paid ? (PAYMENT_LABELS[o.payment_type ?? ''] ?? 'Да') : '—'}</td>
+                  <td>{o.paid ? ((o.payment_type ? PAYMENT_LABELS[o.payment_type] : '') ?? 'Да') : '—'}</td>
                   <td>{o.is_warranty ? 'Да' : '—'}</td>
                 </tr>
               ))}

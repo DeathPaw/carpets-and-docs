@@ -17,6 +17,7 @@ public record OrderItem(
         BigDecimal weight,
         BigDecimal area,
         BigDecimal runningMeters,
+        String cancellationReason,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {}

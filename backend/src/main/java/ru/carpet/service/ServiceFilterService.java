@@ -22,6 +22,7 @@ public class ServiceFilterService {
             ServiceStatus.valueOf(rs.getString("status")),
             rs.getBigDecimal("price"),
             rs.getBoolean("is_manual_price"),
+            rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
     );
@@ -36,7 +37,7 @@ public class ServiceFilterService {
     ) {
         var params = new MapSqlParameterSource();
         var sql = new StringBuilder(
-                "SELECT DISTINCT ois.id, ois.order_item_id, ois.service_def_id, ois.status, ois.price, ois.is_manual_price, ois.created_at, ois.updated_at " +
+                "SELECT DISTINCT ois.id, ois.order_item_id, ois.service_def_id, ois.status, ois.price, ois.is_manual_price, ois.cancellation_reason, ois.created_at, ois.updated_at " +
                 "FROM order_item_services ois " +
                 "JOIN order_items oi ON oi.id = ois.order_item_id "
         );

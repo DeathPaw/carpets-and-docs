@@ -1,6 +1,7 @@
 package ru.carpet.service;
 
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.dto.PriceListEntryDto;
 import ru.carpet.model.PriceListEntry;
 import ru.carpet.model.ServiceDefinition;
@@ -35,6 +36,7 @@ public class PriceListService {
         return priceListRepository.findByItemTypeId(itemTypeId).stream().map(this::toDto).toList();
     }
 
+    @Transactional
     public PriceListEntryDto updatePrice(Long entryId, BigDecimal price, BigDecimal costPrice) {
         priceListRepository.updatePrice(entryId, price, costPrice);
         PriceListEntry entry = priceListRepository.findAll().stream()
@@ -42,10 +44,12 @@ public class PriceListService {
         return toDto(entry);
     }
 
+    @Transactional
     public void seedForItemType(Long itemTypeId) {
         priceListRepository.seedForItemType(itemTypeId);
     }
 
+    @Transactional
     public void seedForServiceDef(Long serviceDefId) {
         priceListRepository.seedForServiceDef(serviceDefId);
     }

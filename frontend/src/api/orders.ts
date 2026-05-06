@@ -6,24 +6,67 @@ import type {
 } from '../types'
 
 // Orders
-export const getOrders = (status?: string, page = 0, size = 20, dateFrom?: string, dateTo?: string, legacyId?: number, paymentType?: string, orderId?: number, clientPhone?: string, clientName?: string, sortBy?: string, sortDir?: string) => {
-  const params = new URLSearchParams()
-  if (status) params.append('status', status)
-  if (dateFrom) params.append('dateFrom', dateFrom)
-  if (dateTo) params.append('dateTo', dateTo)
-  if (legacyId) params.append('legacyId', legacyId.toString())
-  if (paymentType) params.append('paymentType', paymentType)
-  if (orderId) params.append('orderId', orderId.toString())
-  if (clientPhone) params.append('clientPhone', clientPhone)
-  if (clientName) params.append('clientName', clientName)
-  if (sortBy) params.append('sortBy', sortBy)
-  if (sortDir) params.append('sortDir', sortDir)
-  params.append('page', page.toString())
-  params.append('size', size.toString())
-
-  const query = params.toString() ? `?${params.toString()}` : ''
-  return client.get<{content: Order[], total_elements: number, page: number, size: number}>(`/api/orders${query}`).then(r => r.data)
+export interface OrdersQuery {
+  statuses?: string[]      // множественный фильтр по статусу (передаётся как несколько ?statuses=...)
+  status?: string          // одиночный (legacy / совместимость)
+  page?: number
+  size?: number
+  dateFrom?: string
+  dateTo?: string
+  /** По какому полю фильтровать диапазон дат. Допустимо:
+   *  created_at | pickup_date | delivery_date | actual_pickup_date | actual_delivery_date.
+   *  По умолчанию — created_at. */
+  dateField?: string
+  legacyId?: number
+  paymentType?: string
+  orderId?: number
+  clientPhone?: string
+  clientName?: string
+  clientId?: number
+  sortBy?: string[]        // мульти-сортировка
+  sortDir?: ('asc' | 'desc')[]
+  /** true = только заказы с адресом, но без координат (для перехода с дашборда). */
+  noCoords?: boolean
+  /** true = просрочка по фактической дате (для виджета на главной). */
+  overdueActual?: boolean
+  /** true = пора забирать/доставлять, но адрес не заполнен. */
+  badAddress?: boolean
 }
+
+export const getOrdersQuery = (q: OrdersQuery = {}) => {
+  const params = new URLSearchParams()
+  if (q.statuses && q.statuses.length > 0) {
+    q.statuses.forEach(s => params.append('statuses', s))
+  } else if (q.status) {
+    params.append('status', q.status)
+  }
+  if (q.dateFrom) params.append('dateFrom', q.dateFrom)
+  if (q.dateTo) params.append('dateTo', q.dateTo)
+  if (q.dateField) params.append('dateField', q.dateField)
+  if (q.legacyId) params.append('legacyId', q.legacyId.toString())
+  if (q.paymentType) params.append('paymentType', q.paymentType)
+  if (q.orderId) params.append('orderId', q.orderId.toString())
+  if (q.clientPhone) params.append('clientPhone', q.clientPhone)
+  if (q.clientName) params.append('clientName', q.clientName)
+  if (q.clientId) params.append('clientId', q.clientId.toString())
+  if (q.sortBy && q.sortBy.length > 0) q.sortBy.forEach(s => params.append('sortBy', s))
+  if (q.sortDir && q.sortDir.length > 0) q.sortDir.forEach(d => params.append('sortDir', d))
+  if (q.noCoords) params.append('noCoords', 'true')
+  if (q.overdueActual) params.append('overdueActual', 'true')
+  if (q.badAddress) params.append('badAddress', 'true')
+  params.append('page', String(q.page ?? 0))
+  params.append('size', String(q.size ?? 20))
+
+  return client.get<{content: Order[], total_elements: number, page: number, size: number}>(`/api/orders?${params.toString()}`).then(r => r.data)
+}
+
+// Старая позиционная сигнатура — оставлена для обратной совместимости.
+export const getOrders = (status?: string, page = 0, size = 20, dateFrom?: string, dateTo?: string, legacyId?: number, paymentType?: string, orderId?: number, clientPhone?: string, clientName?: string, sortBy?: string, sortDir?: string) =>
+  getOrdersQuery({
+    status, page, size, dateFrom, dateTo, legacyId, paymentType, orderId, clientPhone, clientName,
+    sortBy: sortBy ? [sortBy] : undefined,
+    sortDir: sortDir ? [sortDir as 'asc' | 'desc'] : undefined,
+  })
 
 export const getOrder = (id: number) =>
   client.get<Order>(`/api/orders/${id}`).then(r => r.data)
@@ -83,6 +126,10 @@ export const updateOrderDetails = (id: number, data: {
   delivery_time_slot?: string | null
   pickup_district?: string | null
   delivery_district?: string | null
+  pickup_lat?: number | null
+  pickup_lon?: number | null
+  delivery_lat?: number | null
+  delivery_lon?: number | null
 }) =>
   client.patch<Order>(`/api/orders/${id}/details`, data).then(r => r.data)
 
@@ -108,9 +155,52 @@ export const pushModifiersToClient = (orderId: number) =>
   client.post(`/api/orders/${orderId}/modifiers/push-to-client`)
 
 // Employee Earnings
+// Получить одну позицию по id (без orderId)
+export const getOrderItemById = (itemId: number) =>
+  client.get<OrderItem>(`/api/order-items/${itemId}`).then(r => r.data)
+
 // Item Photos
+export interface ItemPhoto {
+  id: number
+  order_item_id: number
+  filename: string
+  content_type: string
+  data: string
+  created_at: string
+}
+export interface ItemPhotoMeta {
+  id: number
+  order_item_id: number
+  filename: string
+  content_type: string
+  created_at: string
+}
+
 export const getItemPhotos = (orderId: number, itemId: number) =>
-  client.get<{id: number, order_item_id: number, filename: string, content_type: string, data: string, created_at: string}[]>(`/api/orders/${orderId}/items/${itemId}/photos`).then(r => r.data)
+  client.get<ItemPhoto[]>(`/api/orders/${orderId}/items/${itemId}/photos`).then(r => r.data)
+
+/** Все фото по всем позициям заказа одним запросом — устраняет N+1. */
+export const getAllOrderPhotos = (orderId: number) =>
+  client.get<ItemPhoto[]>(`/api/orders/${orderId}/photos`).then(r => r.data)
+
+/** Метаданные фото (без base64-data) для списка позиций — для превью-плейсхолдеров. */
+export const getItemsPhotosMeta = (itemIds: number[]) => {
+  if (itemIds.length === 0) return Promise.resolve([] as ItemPhotoMeta[])
+  const sp = new URLSearchParams()
+  itemIds.forEach(id => sp.append('itemIds', String(id)))
+  return client.get<ItemPhotoMeta[]>(`/api/items/photos?${sp.toString()}`).then(r => r.data)
+}
+
+/**
+ * Первое фото каждой позиции из списка — с base64-data для отрисовки превью.
+ * Заменяет N запросов от ItemThumb одним запросом.
+ */
+export const getItemsFirstPhotos = (itemIds: number[]) => {
+  if (itemIds.length === 0) return Promise.resolve([] as ItemPhoto[])
+  const sp = new URLSearchParams()
+  itemIds.forEach(id => sp.append('itemIds', String(id)))
+  return client.get<ItemPhoto[]>(`/api/items/photos?${sp.toString()}`).then(r => r.data)
+}
 
 export const uploadItemPhoto = (orderId: number, itemId: number, file: File) => {
   return new Promise<void>((resolve, reject) => {

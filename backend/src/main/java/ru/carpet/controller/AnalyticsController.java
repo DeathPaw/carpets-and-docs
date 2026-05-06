@@ -1,68 +1,145 @@
 package ru.carpet.controller;
 
 import org.springframework.web.bind.annotation.*;
+import ru.carpet.dto.AnalyticsDto;
 import ru.carpet.repository.AnalyticsRepository;
+import ru.carpet.repository.DashboardRepository;
+import ru.carpet.repository.ProductionRepository;
+import ru.carpet.repository.ProfitabilityRepository;
 
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Аналитические эндпоинты — на чтение, без бизнес-логики.
+ *
+ * <p>Раньше всё возвращалось как {@code List<Map<String,Object>>} — нет типобезопасности,
+ * Swagger не мог документировать схему. Теперь — типизированные record DTO из {@link AnalyticsDto},
+ * Jackson сериализует их в snake_case согласно глобальной конфигурации.
+ */
 @RestController
 @RequestMapping("/api/analytics")
 public class AnalyticsController {
 
     private final AnalyticsRepository repository;
+    private final DashboardRepository dashboardRepository;
+    private final ProductionRepository productionRepository;
+    private final ProfitabilityRepository profitabilityRepository;
 
-    public AnalyticsController(AnalyticsRepository repository) {
+    public AnalyticsController(AnalyticsRepository repository,
+                               DashboardRepository dashboardRepository,
+                               ProductionRepository productionRepository,
+                               ProfitabilityRepository profitabilityRepository) {
         this.repository = repository;
+        this.dashboardRepository = dashboardRepository;
+        this.productionRepository = productionRepository;
+        this.profitabilityRepository = profitabilityRepository;
     }
 
     @GetMapping("/orders-by-district")
-    public List<Map<String, Object>> ordersByDistrict() {
+    public List<AnalyticsDto.DistrictCount> ordersByDistrict() {
         return repository.ordersByDistrict();
     }
 
     @GetMapping("/orders-by-status")
-    public List<Map<String, Object>> ordersByStatus() {
+    public List<AnalyticsDto.StatusCount> ordersByStatus() {
         return repository.ordersByStatus();
     }
 
     @GetMapping("/items-by-type")
-    public List<Map<String, Object>> itemsByType() {
+    public List<AnalyticsDto.TypeCount> itemsByType() {
         return repository.itemsByType();
     }
 
     @GetMapping("/employee-stats")
-    public List<Map<String, Object>> employeeStats() {
+    public List<AnalyticsDto.EmployeeStat> employeeStats() {
         return repository.employeeStats();
     }
 
     @GetMapping("/revenue-by-month")
-    public List<Map<String, Object>> revenueByMonth() {
+    public List<AnalyticsDto.MonthRevenue> revenueByMonth() {
         return repository.revenueByMonth();
     }
 
     @GetMapping("/top-clients")
-    public List<Map<String, Object>> topClients() {
+    public List<AnalyticsDto.TopClient> topClients() {
         return repository.topClients();
     }
 
     @GetMapping("/margin")
-    public List<Map<String, Object>> margin() {
+    public List<AnalyticsDto.MarginRow> margin() {
         return repository.marginAnalysis();
     }
 
     @GetMapping("/warranty-stats")
-    public List<Map<String, Object>> warrantyStats() {
+    public List<AnalyticsDto.WarrantyStat> warrantyStats() {
         return repository.warrantyStats();
     }
 
     @GetMapping("/dashboard")
     public Map<String, Object> dashboard() {
-        return repository.dashboard();
+        // Дашборд намеренно остаётся плоским Map — набор виджетов меняется чаще,
+        // чем DTO успевал бы переписываться, и фронт TS-сторого типизирован.
+        return dashboardRepository.dashboard();
     }
 
     @GetMapping("/production-queue")
-    public List<Map<String, Object>> productionQueue() {
-        return repository.productionQueue();
+    public List<AnalyticsDto.ProductionQueueOrder> productionQueue() {
+        return productionRepository.productionQueue();
+    }
+
+    @GetMapping("/production-queue-items")
+    public List<AnalyticsDto.ProductionQueueItem> productionQueueItems() {
+        return productionRepository.productionQueueItems();
+    }
+
+    @GetMapping("/production-queue-services")
+    public List<AnalyticsDto.ProductionQueueService> productionQueueServices() {
+        return productionRepository.productionQueueServices();
+    }
+
+    // ────────── Доходность ──────────
+    @GetMapping("/profit/by-item-type")
+    public List<AnalyticsDto.ProfitByItemType> profitByItemType(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return profitabilityRepository.profitByItemType(dateFrom, dateTo);
+    }
+
+    @GetMapping("/profit/by-client")
+    public List<AnalyticsDto.ProfitByClient> profitByClient(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return profitabilityRepository.profitByClient(dateFrom, dateTo);
+    }
+
+    @GetMapping("/profit/by-employee")
+    public List<AnalyticsDto.ProfitByEmployee> profitByEmployee(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return profitabilityRepository.profitByEmployee(dateFrom, dateTo);
+    }
+
+    @GetMapping("/profit/by-employee/{employeeId}/services")
+    public List<AnalyticsDto.ProfitByEmployeeService> profitByEmployeeServices(
+            @PathVariable Long employeeId,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return profitabilityRepository.profitByEmployeeServices(employeeId, dateFrom, dateTo);
+    }
+
+    @GetMapping("/profit/by-district")
+    public List<AnalyticsDto.ProfitByDistrict> profitByDistrict(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return profitabilityRepository.profitByDistrict(dateFrom, dateTo);
+    }
+
+    @GetMapping("/profit/by-order")
+    public List<AnalyticsDto.ProfitByOrder> profitByOrder(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(required = false) Long clientId) {
+        return profitabilityRepository.profitByOrder(dateFrom, dateTo, clientId);
     }
 }

@@ -1,6 +1,7 @@
 import client from './client'
 import type {
   OrderItemService,
+  OrderItemPositioned,
   UpdateStatusRequest,
   AssignEmployeesRequest,
   ServiceStatus,
@@ -9,6 +10,13 @@ import type {
 
 export const getItemServices = (orderId: number, itemId: number) =>
   client.get<OrderItemService[]>(`/api/orders/${orderId}/items/${itemId}/services`).then(r => r.data)
+
+/**
+ * Все услуги по заказу одним батчем — устраняет N+1 на странице заказа.
+ * Возвращает плоский список, фронт сам группирует по order_item_id.
+ */
+export const getAllOrderServices = (orderId: number) =>
+  client.get<OrderItemService[]>(`/api/orders/${orderId}/services`).then(r => r.data)
 
 export const updateServiceStatus = (
   orderId: number,
@@ -61,9 +69,10 @@ export interface ServiceFilterParams {
 }
 
 export interface ItemFilterParams {
-  status?: OrderItemStatus
-  itemTypeId?: number
+  statuses?: OrderItemStatus[]
+  itemTypeIds?: number[]
   orderId?: number
+  positionInOrder?: number
   employeeId?: number
   page?: number
   size?: number
@@ -72,5 +81,18 @@ export interface ItemFilterParams {
 export const getFilteredServices = (params: ServiceFilterParams) =>
   client.get<OrderItemService[]>('/api/services', { params }).then(r => r.data)
 
-export const getFilteredItems = (params: ItemFilterParams) =>
-  client.get<import('../types').OrderItem[]>('/api/items', { params }).then(r => r.data)
+export const getFilteredItems = (params: ItemFilterParams) => {
+  const sp = new URLSearchParams()
+  if (params.statuses && params.statuses.length > 0) {
+    params.statuses.forEach(s => sp.append('statuses', s))
+  }
+  if (params.itemTypeIds && params.itemTypeIds.length > 0) {
+    params.itemTypeIds.forEach(id => sp.append('itemTypeIds', String(id)))
+  }
+  if (params.orderId) sp.append('orderId', String(params.orderId))
+  if (params.positionInOrder) sp.append('positionInOrder', String(params.positionInOrder))
+  if (params.employeeId) sp.append('employeeId', String(params.employeeId))
+  if (params.page != null) sp.append('page', String(params.page))
+  if (params.size != null) sp.append('size', String(params.size))
+  return client.get<OrderItemPositioned[]>(`/api/items?${sp.toString()}`).then(r => r.data)
+}

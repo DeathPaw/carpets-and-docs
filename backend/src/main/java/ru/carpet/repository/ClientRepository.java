@@ -7,6 +7,7 @@ import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.stereotype.Repository;
 import ru.carpet.model.Client;
 
+import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -33,6 +34,8 @@ public class ClientRepository {
             rs.getBoolean("is_pensioner"),
             rs.getBoolean("is_problem"),
             rs.getBoolean("is_regular"),
+            rs.getBigDecimal("lat"),
+            rs.getBigDecimal("lon"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
     );
@@ -56,7 +59,8 @@ public class ClientRepository {
     public Client save(String clientType, String name, String firstName, String lastName,
                        String phone, String extraPhone, String address, String district,
                        String inn, String contactPerson, String contactPersonPhone,
-                       String comment, boolean isPensioner, boolean isProblem, boolean isRegular) {
+                       String comment, boolean isPensioner, boolean isProblem, boolean isRegular,
+                       BigDecimal lat, BigDecimal lon) {
         var params = new MapSqlParameterSource()
                 .addValue("clientType", clientType != null ? clientType : "INDIVIDUAL")
                 .addValue("name", name)
@@ -72,13 +76,15 @@ public class ClientRepository {
                 .addValue("comment", comment)
                 .addValue("isPensioner", isPensioner)
                 .addValue("isProblem", isProblem)
-                .addValue("isRegular", isRegular);
+                .addValue("isRegular", isRegular)
+                .addValue("lat", lat)
+                .addValue("lon", lon);
         var keyHolder = new GeneratedKeyHolder();
         jdbc.update(
                 "INSERT INTO clients (client_type, name, first_name, last_name, phone, extra_phone, address, district, " +
-                "inn, contact_person, contact_person_phone, comment, is_pensioner, is_problem, is_regular) " +
+                "inn, contact_person, contact_person_phone, comment, is_pensioner, is_problem, is_regular, lat, lon) " +
                 "VALUES (:clientType, :name, :firstName, :lastName, :phone, :extraPhone, :address, :district, " +
-                ":inn, :contactPerson, :contactPersonPhone, :comment, :isPensioner, :isProblem, :isRegular)",
+                ":inn, :contactPerson, :contactPersonPhone, :comment, :isPensioner, :isProblem, :isRegular, :lat, :lon)",
                 params, keyHolder, new String[]{"id"}
         );
         return findById(keyHolder.getKey().longValue()).orElseThrow();
@@ -87,7 +93,8 @@ public class ClientRepository {
     public Client update(Long id, String clientType, String name, String firstName, String lastName,
                          String phone, String extraPhone, String address, String district,
                          String inn, String contactPerson, String contactPersonPhone,
-                         String comment, boolean isPensioner, boolean isProblem, boolean isRegular) {
+                         String comment, boolean isPensioner, boolean isProblem, boolean isRegular,
+                         BigDecimal lat, BigDecimal lon) {
         var params = new MapSqlParameterSource()
                 .addValue("id", id)
                 .addValue("clientType", clientType != null ? clientType : "INDIVIDUAL")
@@ -104,12 +111,15 @@ public class ClientRepository {
                 .addValue("comment", comment)
                 .addValue("isPensioner", isPensioner)
                 .addValue("isProblem", isProblem)
-                .addValue("isRegular", isRegular);
+                .addValue("isRegular", isRegular)
+                .addValue("lat", lat)
+                .addValue("lon", lon);
         jdbc.update(
                 "UPDATE clients SET client_type=:clientType, name=:name, first_name=:firstName, last_name=:lastName, " +
                 "phone=:phone, extra_phone=:extraPhone, address=:address, district=:district, " +
                 "inn=:inn, contact_person=:contactPerson, contact_person_phone=:contactPersonPhone, " +
                 "comment=:comment, is_pensioner=:isPensioner, is_problem=:isProblem, is_regular=:isRegular, " +
+                "lat=:lat, lon=:lon, " +
                 "updated_at=NOW() WHERE id=:id",
                 params
         );

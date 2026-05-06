@@ -68,12 +68,22 @@ public class OrderItemService {
     /** Ручное изменение статуса позиции — только отмена разрешена вручную,
      *  остальные статусы вычисляются автоматически из услуг */
     public OrderItem updateStatus(Long itemId, OrderItemStatus newStatus) {
+        return updateStatus(itemId, newStatus, null);
+    }
+
+    /** Отмена позиции с причиной (минимум 10 символов после trim). */
+    public OrderItem updateStatus(Long itemId, OrderItemStatus newStatus, String cancellationReason) {
         if (newStatus != OrderItemStatus.CANCELLED) {
             throw new ru.carpet.exception.BusinessRuleException(
                 "Статус позиции меняется автоматически на основе услуг. Вручную можно только отменить.");
         }
+        String reason = cancellationReason == null ? "" : cancellationReason.trim();
+        if (reason.length() < 10) {
+            throw new ru.carpet.exception.BusinessRuleException(
+                "Для отмены позиции укажите причину (минимум 10 символов).");
+        }
         findById(itemId);
-        orderItemRepository.updateStatus(itemId, newStatus);
+        orderItemRepository.updateStatusWithReason(itemId, newStatus, reason);
         OrderItem item = orderItemRepository.findById(itemId).orElseThrow();
         orderService.recalculateOrderStatus(item.orderId());
         return item;
@@ -100,10 +110,12 @@ public class OrderItemService {
                                        BigDecimal area, BigDecimal runningMeters) {
         OrderItem item = findById(itemId);
 
-        // Блокируем редактирование для DELIVERED и CANCELLED заказов
+        // Блокируем редактирование для DELIVERED, COMPLETED и CANCELLED заказов
         Order order = orderRepository.findById(item.orderId())
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + item.orderId()));
-        if (order.status() == OrderStatus.DELIVERED || order.status() == OrderStatus.CANCELLED) {
+        if (order.status() == OrderStatus.DELIVERED
+                || order.status() == OrderStatus.COMPLETED
+                || order.status() == OrderStatus.CANCELLED) {
             throw new ru.carpet.exception.BusinessRuleException(
                     "Нельзя редактировать параметры позиции для заказа в статусе " + order.status());
         }

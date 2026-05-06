@@ -1,16 +1,12 @@
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier, getClientEvents, addClientEvent } from '../api/clients'
 import { getPriceModifiers } from '../api/references'
-import { geocodeAddress } from '../api/geocode'
 import { useToast } from '../components/Toast'
+import { formatPhone } from '../components/PhoneInput'
+import ClientFormFields, { type ClientFormState, emptyClientForm, validateClientForm } from '../components/ClientFormFields'
+import { formatOrderNumber } from '../utils/format'
 import type { Client, Order, CreateClientRequest } from '../types'
-
-function formatOrderNumber(id: number, createdAt: string): string {
-  const num = String(id).padStart(5, '0')
-  const date = new Date(createdAt).toLocaleDateString('ru')
-  return `${num} от ${date}`
-}
 
 function CreateClientModal({
   onClose,
@@ -21,50 +17,38 @@ function CreateClientModal({
   onCreated: (client: Client) => void
   editClient?: Client
 }) {
-  const [clientType, setClientType] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>(editClient?.client_type || 'INDIVIDUAL')
-  const [form, setForm] = useState<CreateClientRequest>({
-    client_type: editClient?.client_type || 'INDIVIDUAL',
-    name: editClient?.name || '',
-    first_name: editClient?.first_name || '',
-    last_name: editClient?.last_name || '',
-    phone: editClient?.phone || '',
-    extra_phone: editClient?.extra_phone || '',
-    address: editClient?.address || '',
-    district: editClient?.district || '',
-    inn: editClient?.inn || '',
-    contact_person: editClient?.contact_person || '',
-    contact_person_phone: editClient?.contact_person_phone || '',
-    comment: editClient?.comment || '',
+  const [form, setForm] = useState<ClientFormState>(() =>
+    editClient
+      ? {
+          client_type: editClient.client_type,
+          first_name: editClient.first_name || '',
+          last_name: editClient.last_name || '',
+          name: editClient.name || '',
+          phone: editClient.phone || '',
+          extra_phone: editClient.extra_phone || '',
+          contact_person: editClient.contact_person || '',
+          contact_person_phone: editClient.contact_person_phone || '',
+          inn: editClient.inn || '',
+          address: editClient.address || '',
+          district: editClient.district || '',
+          comment: editClient.comment || '',
+          lat: editClient.lat,
+          lon: editClient.lon,
+        }
+      : emptyClientForm()
+  )
+  // Флаги (пенсионер / проблемный / постоянный) сохраняем при редактировании, чтобы
+  // не сбросились — UI для них на этой странице исторически не было, в OrdersPage тоже нет.
+  // При создании всегда false. Для управления ими — отдельный экран (по плану).
+  const flags = {
     is_pensioner: editClient?.is_pensioner || false,
     is_problem: editClient?.is_problem || false,
     is_regular: editClient?.is_regular || false,
-  })
-  const [showExtraPhone, setShowExtraPhone] = useState(!!editClient?.extra_phone)
-  const [showInn, setShowInn] = useState(!!editClient?.inn)
-  const [districtAuto, setDistrictAuto] = useState(false)
-  const [geoTimer, setGeoTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
+  }
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [clientMods, setClientMods] = useState<number[]>([])
   const [allMods, setAllMods] = useState<import('../types').PriceModifier[]>([])
-
-  const doGeocode = useCallback(async (address: string) => {
-    const result = await geocodeAddress(address)
-    if (result.found && result.isSPB && result.district) {
-      setForm(f => ({ ...f, district: result.district! }))
-      setDistrictAuto(true)
-    }
-  }, [])
-
-  const handleAddressChange = (val: string) => {
-    setForm(f => ({ ...f, address: val }))
-    setDistrictAuto(false)
-    if (geoTimer) clearTimeout(geoTimer)
-    if (val.trim().length > 5) {
-      const t = setTimeout(() => void doGeocode(val), 1000)
-      setGeoTimer(t)
-    }
-  }
 
   useEffect(() => {
     getPriceModifiers().then(setAllMods).catch(() => {})
@@ -73,32 +57,31 @@ function CreateClientModal({
     }
   }, [editClient])
 
-  const updateType = (type: 'INDIVIDUAL' | 'LEGAL_ENTITY') => {
-    setClientType(type)
-    setForm(f => ({ ...f, client_type: type }))
-  }
-
   const submit = async () => {
-    if (clientType === 'INDIVIDUAL') {
-      if (!form.first_name?.trim() && !form.name?.trim()) {
-        setError('Имя клиента обязательно')
-        return
-      }
-    } else {
-      if (!form.name?.trim()) {
-        setError('Название организации обязательно')
-        return
-      }
-    }
+    const validationError = validateClientForm(form)
+    if (validationError) { setError(validationError); return }
 
     setLoading(true)
     try {
       const data: CreateClientRequest = {
-        ...form,
-        client_type: clientType,
-        name: clientType === 'INDIVIDUAL'
+        client_type: form.client_type,
+        first_name: form.first_name || undefined,
+        last_name: form.last_name || undefined,
+        // Для физлица собираем name из last_name + first_name; для юрлица — это название организации.
+        name: form.client_type === 'INDIVIDUAL'
           ? `${form.last_name || ''} ${form.first_name || ''}`.trim() || form.name
           : form.name,
+        phone: form.phone ? formatPhone(form.phone) : '',
+        extra_phone: form.extra_phone ? formatPhone(form.extra_phone) : '',
+        contact_person: form.contact_person || undefined,
+        contact_person_phone: form.contact_person_phone ? formatPhone(form.contact_person_phone) : '',
+        inn: form.inn || undefined,
+        address: form.address || undefined,
+        district: form.district || undefined,
+        comment: form.comment || undefined,
+        lat: form.lat,
+        lon: form.lon,
+        ...flags,
       }
       const client = editClient
         ? await updateClient(editClient.id, data)
@@ -121,153 +104,7 @@ function CreateClientModal({
         >&times;</button>
         <h2>{editClient ? 'Редактировать клиента' : 'Новый клиент'}</h2>
 
-        <div className="form-group">
-          <label>Тип клиента</label>
-          <div style={{ display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              className={clientType === 'INDIVIDUAL' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
-              onClick={() => updateType('INDIVIDUAL')}
-            >
-              Физ. лицо
-            </button>
-            <button
-              type="button"
-              className={clientType === 'LEGAL_ENTITY' ? 'btn-primary btn-sm' : 'btn-secondary btn-sm'}
-              onClick={() => updateType('LEGAL_ENTITY')}
-            >
-              Юр. лицо
-            </button>
-          </div>
-        </div>
-
-        {clientType === 'INDIVIDUAL' ? (
-          <>
-            <div className="form-group">
-              <label>Фамилия</label>
-              <input
-                value={form.last_name || ''}
-                onChange={e => setForm(f => ({ ...f, last_name: e.target.value }))}
-                placeholder="Фамилия"
-              />
-            </div>
-            <div className="form-group">
-              <label>Имя *</label>
-              <input
-                value={form.first_name || ''}
-                onChange={e => setForm(f => ({ ...f, first_name: e.target.value }))}
-                placeholder="Имя"
-              />
-            </div>
-            <div className="form-group">
-              <label>Телефон</label>
-              <input
-                value={form.phone || ''}
-                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                placeholder="Телефон"
-              />
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="form-group">
-              <label>Название организации *</label>
-              <input
-                value={form.name}
-                onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="Название организации"
-              />
-            </div>
-            <div className="form-group">
-              <label>Контактное лицо</label>
-              <input
-                value={form.contact_person || ''}
-                onChange={e => setForm(f => ({ ...f, contact_person: e.target.value }))}
-                placeholder="ФИО контактного лица"
-              />
-            </div>
-            <div className="form-group">
-              <label>Телефон контактного лица</label>
-              <input
-                value={form.contact_person_phone || ''}
-                onChange={e => setForm(f => ({ ...f, contact_person_phone: e.target.value }))}
-                placeholder="Телефон контактного лица"
-              />
-            </div>
-            <div className="form-group">
-              <label>Телефон</label>
-              <input
-                value={form.phone || ''}
-                onChange={e => setForm(f => ({ ...f, phone: e.target.value }))}
-                placeholder="Телефон организации"
-              />
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-                <input type="checkbox" style={{ width: 'auto' }} checked={showInn} onChange={e => setShowInn(e.target.checked)} />
-                Указать ИНН
-              </label>
-            </div>
-            {showInn && (
-              <div className="form-group">
-                <label>ИНН</label>
-                <input
-                  value={form.inn || ''}
-                  onChange={e => setForm(f => ({ ...f, inn: e.target.value }))}
-                  placeholder="ИНН"
-                />
-              </div>
-            )}
-          </>
-        )}
-
-        <div style={{ marginBottom: 8 }}>
-          <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" style={{ width: 'auto' }} checked={showExtraPhone} onChange={e => setShowExtraPhone(e.target.checked)} />
-            Дополнительный телефон
-          </label>
-        </div>
-        {showExtraPhone && (
-          <div className="form-group">
-            <label>Доп. телефон</label>
-            <input
-              value={form.extra_phone || ''}
-              onChange={e => setForm(f => ({ ...f, extra_phone: e.target.value }))}
-              placeholder="Дополнительный телефон"
-            />
-          </div>
-        )}
-
-        <div className="form-group">
-          <label>Адрес</label>
-          <textarea
-            rows={2}
-            value={form.address || ''}
-            onChange={e => handleAddressChange(e.target.value)}
-            placeholder="Адрес"
-          />
-        </div>
-        <div className="form-group">
-          <label>Район</label>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <input
-              value={form.district || ''}
-              onChange={e => { setForm(f => ({ ...f, district: e.target.value })); setDistrictAuto(false) }}
-              placeholder="Район"
-              style={{ flex: 1 }}
-            />
-            {districtAuto && <span style={{ fontSize: '0.8em', color: '#27ae60', whiteSpace: 'nowrap' }}>определён автоматически</span>}
-          </div>
-        </div>
-        <div className="form-group">
-          <label>Комментарий</label>
-          <textarea
-            rows={2}
-            value={form.comment || ''}
-            onChange={e => setForm(f => ({ ...f, comment: e.target.value }))}
-            placeholder="Комментарий"
-          />
-        </div>
+        <ClientFormFields value={form} onChange={setForm} />
 
         {allMods.length > 0 && (
           <div style={{ marginBottom: 12 }}>
@@ -460,11 +297,11 @@ function ClientCardModal({
               <>
                 <div style={{ marginBottom: 8 }}><strong>ИНН:</strong> {client.inn || 'не указано'}</div>
                 <div style={{ marginBottom: 8 }}><strong>Контактное лицо:</strong> {client.contact_person || 'не указано'}</div>
-                <div style={{ marginBottom: 8 }}><strong>Тел. контакта:</strong> {client.contact_person_phone || 'не указано'}</div>
+                <div style={{ marginBottom: 8 }}><strong>Тел. контакта:</strong> {client.contact_person_phone ? formatPhone(client.contact_person_phone) : 'не указано'}</div>
               </>
             )}
-            <div style={{ marginBottom: 8 }}><strong>Телефон:</strong> {client.phone || 'не указано'}</div>
-            <div style={{ marginBottom: 8 }}><strong>Доп. телефон:</strong> {client.extra_phone || 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Телефон:</strong> {client.phone ? formatPhone(client.phone) : 'не указано'}</div>
+            <div style={{ marginBottom: 8 }}><strong>Доп. телефон:</strong> {client.extra_phone ? formatPhone(client.extra_phone) : 'не указано'}</div>
           </div>
           <div style={{ flex: '1 1 250px' }}>
             <div style={{ marginBottom: 8 }}><strong>Адрес:</strong> {client.address || 'не указано'}</div>
@@ -593,12 +430,12 @@ export default function ClientsPage() {
           <th>Телефон</th>
           <th>Доп. телефон</th>
           <th>Адрес</th>
-          <th>Район</th>
+          {/* Район убрали — у юрлиц его и так нет, для физлиц он в адресе по сути дублируется. */}
         </tr>
       </thead>
       <tbody>
         {list.length === 0 ? (
-          <tr><td colSpan={6} className="empty">Клиенты не найдены</td></tr>
+          <tr><td colSpan={5} className="empty">Клиенты не найдены</td></tr>
         ) : list.map(c => (
           <tr key={c.id} onClick={() => setViewClient(c)} style={{ cursor: 'pointer' }}>
             <td>{c.id}</td>
@@ -609,7 +446,6 @@ export default function ClientsPage() {
             <td>{c.phone || '—'}</td>
             <td>{c.extra_phone || '—'}</td>
             <td>{c.address || '—'}</td>
-            <td>{c.district || '—'}</td>
           </tr>
         ))}
       </tbody>

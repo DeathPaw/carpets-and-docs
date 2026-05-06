@@ -3,6 +3,8 @@ import type {
   ItemType,
   ServiceDefinition,
   Employee,
+  EmployeeRole,
+  CreateEmployeeRoleRequest,
   CreateItemTypeRequest,
   CreateServiceDefinitionRequest,
   CreateEmployeeRequest,
@@ -66,6 +68,27 @@ export const activateEmployee = (id: number) =>
 
 export const getEmployeesAll = (includeInactive?: boolean) =>
   client.get<Employee[]>('/api/employees', { params: includeInactive ? { includeInactive: true } : {} }).then(r => r.data)
+
+/**
+ * Сотрудники, способные работать с указанным типом позиции (по их роли).
+ * Используется в форме «Назначить исполнителей»: фильтрует так,
+ * чтобы оператор не мог поставить «Чистильщика ковров» на стирку тюля.
+ */
+export const getEmployeesSuitableFor = (itemTypeId: number) =>
+  client.get<Employee[]>('/api/employees/suitable-for', { params: { itemTypeId } }).then(r => r.data)
+
+// Employee Roles
+export const getEmployeeRoles = () =>
+  client.get<EmployeeRole[]>('/api/employee-roles').then(r => r.data)
+
+export const createEmployeeRole = (data: CreateEmployeeRoleRequest) =>
+  client.post<EmployeeRole>('/api/employee-roles', data).then(r => r.data)
+
+export const updateEmployeeRole = (id: number, data: CreateEmployeeRoleRequest) =>
+  client.put<EmployeeRole>(`/api/employee-roles/${id}`, data).then(r => r.data)
+
+export const deleteEmployeeRole = (id: number) =>
+  client.delete(`/api/employee-roles/${id}`)
 
 // Price Modifiers
 export const getPriceModifiers = () =>

@@ -1,5 +1,6 @@
 package ru.carpet.model;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record Client(
@@ -19,6 +20,8 @@ public record Client(
         boolean isPensioner,
         boolean isProblem,
         boolean isRegular,
+        BigDecimal lat,
+        BigDecimal lon,
         LocalDateTime createdAt,
         LocalDateTime updatedAt
 ) {}

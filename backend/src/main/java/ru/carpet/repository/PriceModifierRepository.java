@@ -68,4 +68,15 @@ public class PriceModifierRepository {
     public void delete(Long id) {
         jdbc.update("DELETE FROM price_modifiers WHERE id = :id", Map.of("id", id));
     }
+
+    /** Сколько раз модификатор используется в заказах и у клиентов. */
+    public long countUsages(Long id) {
+        Long inOrders = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM order_modifiers WHERE modifier_id = :id",
+                Map.of("id", id), Long.class);
+        Long inClients = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM client_modifiers WHERE modifier_id = :id",
+                Map.of("id", id), Long.class);
+        return (inOrders == null ? 0 : inOrders) + (inClients == null ? 0 : inClients);
+    }
 }

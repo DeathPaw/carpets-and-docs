@@ -48,9 +48,11 @@ public class OrderItemServiceController {
                                                        @PathVariable Long itemId,
                                                        @PathVariable Long serviceId,
                                                        @Valid @RequestBody UpdateServiceStatusRequest request) {
-        OrderItemServiceWithAssignees result = service.updateStatusWithAssignees(serviceId, request.status());
+        OrderItemServiceWithAssignees result = service.updateStatusWithAssignees(serviceId, request.status(), request.cancellationReason());
         auditLogService.log("ORDER_SERVICE", serviceId, "STATUS_CHANGE",
-                "Статус услуги #" + serviceId + " (позиция #" + itemId + ", заказ #" + orderId + "): → " + request.status());
+                "Статус услуги #" + serviceId + " (позиция #" + itemId + ", заказ #" + orderId + "): → " + request.status()
+                        + (request.status() == ru.carpet.model.ServiceStatus.CANCELLED && request.cancellationReason() != null
+                            ? " (причина: " + request.cancellationReason().trim() + ")" : ""));
         return result;
     }
 

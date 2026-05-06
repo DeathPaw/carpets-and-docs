@@ -5,9 +5,11 @@ import {
   getPriceList, updatePriceListEntry,
   getPriceModifiers, createPriceModifier, updatePriceModifier, deletePriceModifier,
 } from '../api/references'
+import { getDistricts, createDistrict, updateDistrict, deleteDistrict } from '../api/districts'
+import { invalidateDistrictCache } from '../components/DistrictSelect'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
-import type { ItemType, ServiceDefinition, PriceListEntry, PriceModifier } from '../types'
+import type { ItemType, ServiceDefinition, PriceListEntry, PriceModifier, District } from '../types'
 
 const pricingLabel = (pt?: string | null) => {
   switch (pt) {
@@ -19,7 +21,16 @@ const pricingLabel = (pt?: string | null) => {
   }
 }
 
-function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: number, price: number | null, costPrice?: number | null) => void }) {
+function PriceCell({ entry, onSave, isDefaultType }: {
+  entry?: PriceListEntry
+  onSave: (id: number, price: number | null, costPrice?: number | null) => void
+  /**
+   * Тип позиции — дефолтный (доставка/оформление). У таких типов цена услуги в прайс-листе
+   * не используется (стоимость берётся из default_price типа), поэтому скрываем
+   * поле «Цена», но себестоимость оставляем — она всё ещё нужна для аналитики.
+   */
+  isDefaultType?: boolean
+}) {
   const [value, setValue] = useState(entry?.price?.toString() ?? '')
   const [costValue, setCostValue] = useState(entry?.cost_price?.toString() ?? '')
   const [saving, setSaving] = useState(false)
@@ -33,7 +44,11 @@ function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: num
 
   const save = async () => {
     const newPrice = value.trim() === '' ? null : Number(value)
-    const newCost = (newPrice !== null && costValue.trim() !== '') ? Number(costValue) : null
+    // Себестоимость — независимое поле. Раньше она показывалась только когда price задан;
+    // теперь оператор может ввести cost_price без price (и наоборот). Бизнес-логика:
+    // если price = null, услуга неактивна для типа; cost_price можно проставить заранее
+    // как «черновик», чтобы не вводить его потом отдельно при активации.
+    const newCost = costValue.trim() === '' ? null : Number(costValue)
     if (newPrice === entry.price && newCost === entry.cost_price) return
     setSaving(true)
     try {
@@ -50,30 +65,64 @@ function PriceCell({ entry, onSave }: { entry?: PriceListEntry; onSave: (id: num
         background: entry.is_active ? '#f0fff4' : '#fafafa',
       }}
     >
-      <input
-        type="number"
-        step="0.01"
-        value={value}
-        onChange={e => setValue(e.target.value)}
-        onBlur={save}
-        onKeyDown={e => { if (e.key === 'Enter') save() }}
-        disabled={saving}
-        style={{ width: 75, textAlign: 'center', fontSize: '0.9em' }}
-        placeholder="Цена"
-      />
-      {entry.is_active && (
+      {isDefaultType ? (
+        // Для дефолтных типов вместо поля «Цена» — чекбокс «доступна»: цена не используется
+        // (стоимость берётся из default_price типа), нужен только сам факт доступности услуги.
+        // is_active в БД управляется через значение price: 0 → активна, null → неактивна.
+        // (Бэкенд читает «price != null» как is_active=true.)
+        <label
+          style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 4, padding: '4px 0', cursor: 'pointer', fontSize: '0.85em',
+          }}
+          title="Доступна ли услуга для этого дефолтного типа. Цена берётся из самого типа позиции."
+        >
+          <input
+            type="checkbox"
+            style={{ width: 'auto', cursor: 'pointer' }}
+            checked={entry.is_active}
+            disabled={saving}
+            onChange={async e => {
+              setSaving(true)
+              try {
+                // 0 = активна, null = неактивна. Цену в default-строках не показываем,
+                // так что конкретное число роли не играет — главное, чтобы было не null.
+                await onSave(entry.id, e.target.checked ? 0 : null, entry.cost_price)
+              } finally {
+                setSaving(false)
+              }
+            }}
+          />
+          <span style={{ color: entry.is_active ? '#27ae60' : '#aaa' }}>
+            {entry.is_active ? 'доступна' : '—'}
+          </span>
+        </label>
+      ) : (
         <input
           type="number"
           step="0.01"
-          value={costValue}
-          onChange={e => setCostValue(e.target.value)}
+          value={value}
+          onChange={e => setValue(e.target.value)}
           onBlur={save}
           onKeyDown={e => { if (e.key === 'Enter') save() }}
           disabled={saving}
-          style={{ width: 75, textAlign: 'center', fontSize: '0.8em', color: '#888', marginTop: 2 }}
-          placeholder="себест."
+          style={{ width: 75, textAlign: 'center', fontSize: '0.9em' }}
+          placeholder="Цена"
         />
       )}
+      {/* Поле себестоимости видно ВСЕГДА (включая дефолтные типы) — оператор может
+          указать её для аналитики маржинальности. */}
+      <input
+        type="number"
+        step="0.01"
+        value={costValue}
+        onChange={e => setCostValue(e.target.value)}
+        onBlur={save}
+        onKeyDown={e => { if (e.key === 'Enter') save() }}
+        disabled={saving}
+        style={{ width: 75, textAlign: 'center', fontSize: '0.8em', color: '#888', marginTop: 2 }}
+        placeholder="себест."
+      />
     </td>
   )
 }
@@ -84,6 +133,12 @@ export default function ReferencesPage() {
   const [types, setTypes] = useState<ItemType[]>([])
   const [priceList, setPriceList] = useState<PriceListEntry[]>([])
   const [modifiers, setModifiers] = useState<PriceModifier[]>([])
+  const [districts, setDistricts] = useState<District[]>([])
+  const [newDistrictName, setNewDistrictName] = useState('')
+  const [editDistrictId, setEditDistrictId] = useState<number | null>(null)
+  const [editDistrictName, setEditDistrictName] = useState('')
+  const [editDistrictActive, setEditDistrictActive] = useState(true)
+  const [districtError, setDistrictError] = useState('')
   const [newModName, setNewModName] = useState('')
   const [newModPercent, setNewModPercent] = useState('')
   const [editModId, setEditModId] = useState<number | null>(null)
@@ -94,11 +149,14 @@ export default function ReferencesPage() {
 
   // Общая загрузка — оба списка всегда синхронны
   const load = async () => {
-    const [ts, ds, pl, mods] = await Promise.all([getItemTypes(), getServiceDefinitions(), getPriceList(), getPriceModifiers()])
+    const [ts, ds, pl, mods, dists] = await Promise.all([
+      getItemTypes(), getServiceDefinitions(), getPriceList(), getPriceModifiers(), getDistricts(false),
+    ])
     setTypes(ts)
     setDefs(ds)
     setPriceList(pl)
     setModifiers(mods)
+    setDistricts(dists)
   }
   useEffect(() => { void load() }, [])
 
@@ -208,10 +266,17 @@ export default function ReferencesPage() {
   }
 
   const handlePriceSave = async (id: number, price: number | null, costPrice?: number | null) => {
+    // Подтверждение убрано: изменение цены в прайс-листе по дизайну никогда не пересчитывает
+    // уже созданные заказы (старые расчёты не должны меняться задним числом). Раньше
+    // показывали об этом модалку каждый раз, но это бесполезно — никаких пересчётов
+    // не происходит, и оператор просто кликал «Продолжить» десятки раз. Сохраняем сразу.
     try {
       await updatePriceListEntry(id, price, costPrice)
       await load()
-    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка обновления цены'; showToast(msg, 'error') }
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка обновления цены'
+      showToast(msg, 'error')
+    }
   }
 
   const createMod = async () => {
@@ -242,6 +307,59 @@ export default function ReferencesPage() {
       danger: true,
       action: async () => {
         try { await deletePriceModifier(id); await load() } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка удаления'; showToast(msg, 'error') }
+      }
+    })
+  }
+
+  // --- Районы ---
+  const createDistrictHandler = async () => {
+    if (!newDistrictName.trim()) { setDistrictError('Введите название района'); return }
+    try {
+      // Сортировка автоматически в конец (max + 10).
+      const maxSort = districts.reduce((m, d) => Math.max(m, d.sort_order), 0)
+      await createDistrict({ name: newDistrictName.trim(), sort_order: maxSort + 10, is_active: true })
+      setNewDistrictName('')
+      setDistrictError('')
+      invalidateDistrictCache()
+      await load()
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка создания района'
+      setDistrictError(msg)
+    }
+  }
+
+  const saveDistrict = async (id: number) => {
+    if (!editDistrictName.trim()) return
+    try {
+      const existing = districts.find(d => d.id === id)
+      await updateDistrict(id, {
+        name: editDistrictName.trim(),
+        sort_order: existing?.sort_order ?? 0,
+        is_active: editDistrictActive,
+      })
+      setEditDistrictId(null)
+      invalidateDistrictCache()
+      await load()
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения'
+      showToast(msg, 'error')
+    }
+  }
+
+  const removeDistrict = (id: number) => {
+    setConfirmAction({
+      title: 'Удалить район',
+      message: 'Удалить район из справочника? У существующих заказов значение района сохранится как текст, но в новых записях его уже не будет.',
+      danger: true,
+      action: async () => {
+        try {
+          await deleteDistrict(id)
+          invalidateDistrictCache()
+          await load()
+        } catch (e: unknown) {
+          const msg = (e as any)?.response?.data?.message || 'Ошибка удаления'
+          showToast(msg, 'error')
+        }
       }
     })
   }
@@ -406,10 +524,12 @@ export default function ReferencesPage() {
         </table>
       </div>
 
-      {/* Прайс-лист */}
+      {/* Прайс-лист — теперь показываем ВСЕ типы позиций, включая дефолтные (доставка/оформление).
+          Раньше дефолтные исключались, но в реальности к доставке тоже бывают услуги
+          (например, «занос на этаж»), и оператор должен иметь возможность настроить цену. */}
       <div className="card">
         <h2>Прайс-лист</h2>
-        {types.filter(t => !t.is_default).length === 0 || defs.length === 0 ? (
+        {types.length === 0 || defs.length === 0 ? (
           <div className="empty">Создайте типы позиций и услуги для формирования прайс-листа</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
@@ -428,15 +548,25 @@ export default function ReferencesPage() {
                 </tr>
               </thead>
               <tbody>
-                {types.filter(t => !t.is_default).map(type => (
+                {types.map(type => (
                   <tr key={type.id}>
-                    <td><strong>{type.name}</strong></td>
+                    <td>
+                      <strong>{type.name}</strong>
+                      {/* Маркер «дефолт» — чтобы оператор видел разницу: эти типы автоматически
+                          добавляются в каждый заказ. Цены задавать всё равно полезно. */}
+                      {type.is_default && (
+                        <span style={{
+                          marginLeft: 6, fontSize: '0.75em', color: '#7f8c8d',
+                          padding: '1px 6px', borderRadius: 8, background: '#ecf0f1',
+                        }}>дефолт</span>
+                      )}
+                    </td>
                     {defs.map(d => {
                       const entry = priceList.find(
                         e => e.item_type_id === type.id && e.service_def_id === d.id
                       )
                       return (
-                        <PriceCell key={d.id} entry={entry} onSave={handlePriceSave} />
+                        <PriceCell key={d.id} entry={entry} onSave={handlePriceSave} isDefaultType={type.is_default} />
                       )
                     })}
                   </tr>
@@ -503,6 +633,67 @@ export default function ReferencesPage() {
                           setEditModPercent(String(m.percent));
                         }}>&#9999;&#65039;</button>
                         <button className="btn-danger btn-sm" onClick={() => void removeMod(m.id)}>&#128465;&#65039;</button>
+                      </>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Районы */}
+      <div className="card">
+        <h2>Районы</h2>
+        <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+          Используются для выбора района в адресах клиентов и заказов. Стандартный набор —
+          18 районов Санкт-Петербурга, можно добавить свои.
+        </div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+          <input
+            value={newDistrictName}
+            onChange={e => setNewDistrictName(e.target.value)}
+            placeholder="Название района"
+            style={{ flex: '1 1 200px' }}
+            onKeyDown={e => { if (e.key === 'Enter') void createDistrictHandler() }}
+          />
+          <button className="btn-primary" onClick={createDistrictHandler} style={{ whiteSpace: 'nowrap' }}>+ Добавить</button>
+        </div>
+        {districtError && <div className="error-msg" style={{ marginBottom: 8 }}>{districtError}</div>}
+        <table>
+          <thead><tr><th>#</th><th>Название</th><th>Активен</th><th>Действия</th></tr></thead>
+          <tbody>
+            {districts.length === 0 ? (
+              <tr><td colSpan={4} className="empty">Нет районов</td></tr>
+            ) : districts.map(d => (
+              <tr key={d.id} style={{ opacity: d.is_active ? 1 : 0.5 }}>
+                <td>{d.id}</td>
+                <td>
+                  {editDistrictId === d.id
+                    ? <input value={editDistrictName} onChange={e => setEditDistrictName(e.target.value)} />
+                    : d.name}
+                </td>
+                <td>
+                  {editDistrictId === d.id
+                    ? <input type="checkbox" checked={editDistrictActive} onChange={e => setEditDistrictActive(e.target.checked)} />
+                    : (d.is_active ? '✓' : '—')}
+                </td>
+                <td>
+                  <div className="actions">
+                    {editDistrictId === d.id ? (
+                      <>
+                        <button className="btn-success btn-sm" onClick={() => void saveDistrict(d.id)}>✓</button>
+                        <button className="btn-secondary btn-sm" onClick={() => setEditDistrictId(null)}>✕</button>
+                      </>
+                    ) : (
+                      <>
+                        <button className="btn-secondary btn-sm" onClick={() => {
+                          setEditDistrictId(d.id)
+                          setEditDistrictName(d.name)
+                          setEditDistrictActive(d.is_active)
+                        }}>✏️</button>
+                        <button className="btn-danger btn-sm" onClick={() => removeDistrict(d.id)}>🗑️</button>
                       </>
                     )}
                   </div>

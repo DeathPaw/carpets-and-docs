@@ -1,3 +1,35 @@
+/* Палитра приложения. Цвета централизованы — раньше были разбросаны inline-стилями.
+   При необходимости смены темы достаточно изменить значения здесь. */
+:root {
+  /* Бренд */
+  --c-primary:        #3498db;
+  --c-primary-dark:   #2980b9;
+  --c-primary-light:  #ebf5fb;
+
+  /* Семантика */
+  --c-success:        #27ae60;
+  --c-success-light:  #eafaf1;
+  --c-warning:        #f39c12;
+  --c-warning-strong: #e67e22;
+  --c-warning-light:  #fef5e7;
+  --c-danger:         #c0392b;
+  --c-danger-light:   #fdedec;
+
+  /* Нейтральные */
+  --c-text:           #2c3e50;
+  --c-text-secondary: #7f8c8d;
+  --c-text-muted:     #95a5a6;
+  --c-border:         #e6e9ec;
+  --c-bg:             #f5f6fa;
+  --c-bg-card:        #ffffff;
+  --c-bg-hover:       #f8f9fa;
+
+  /* Размеры */
+  --radius-sm: 4px;
+  --radius:    6px;
+  --radius-lg: 8px;
+}
+
 *, *::before, *::after {
   box-sizing: border-box;
 }
@@ -7,7 +39,7 @@ body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
   color: #333;
-  background: #f5f6fa;
+  background: var(--c-bg);
 }
 
 h1, h2, h3 { margin: 0 0 16px; }
@@ -50,16 +82,16 @@ button {
 button:hover { opacity: 0.85; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-.btn-primary { background: #3498db; color: white; }
-.btn-success { background: #27ae60; color: white; }
+.btn-primary { background: var(--c-primary); color: white; }
+.btn-success { background: var(--c-success); color: white; }
 .btn-danger { background: #e74c3c; color: white; }
-.btn-warning { background: #f39c12; color: white; }
-.btn-secondary { background: #95a5a6; color: white; }
+.btn-warning { background: var(--c-warning); color: white; }
+.btn-secondary { background: var(--c-text-muted); color: white; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 
 input, select, textarea {
   border: 1px solid #ddd;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 7px 10px;
   font-size: 14px;
   font-family: inherit;
@@ -69,7 +101,7 @@ input, select, textarea {
 }
 
 input:focus, select:focus, textarea:focus {
-  border-color: #3498db;
+  border-color: var(--c-primary);
 }
 
 .form-group {
@@ -113,6 +145,7 @@ input:focus, select:focus, textarea:focus {
 .badge-partially_done { background: #fff3cd; color: #856404; }
 .badge-done { background: #d4edda; color: #155724; }
 .badge-delivered { background: #cce5ff; color: #004085; }
+.badge-completed { background: #2c3e50; color: #fff; }
 .badge-cancelled { background: #f8d7da; color: #721c24; }
 .badge-for_pickup { background-color: #17a2b8; color: white; }
 
@@ -180,9 +213,119 @@ input:focus, select:focus, textarea:focus {
 .loading { color: #888; padding: 20px 0; text-align: center; }
 .empty { color: #aaa; padding: 20px 0; text-align: center; font-style: italic; }
 
-.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+/* Кнопки-иконки в .actions выравниваются по фиксированному размеру — раньше эмодзи
+   ✏️ и 🗑️ давали разную ширину, и колонка действий «прыгала» между строк/таблиц. */
+.actions .btn-sm {
+  min-width: 32px;
+  height: 28px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
+
+/* Универсальный блок-уведомление: используется для подсказок, варнингов и инфо.
+   Раньше дублировался inline в OrderDetailPage / OrdersPage / DashboardPage. */
+.notice {
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  font-size: 0.9em;
+  border-left: 4px solid var(--c-text-muted);
+  background: var(--c-bg-hover);
+  color: var(--c-text);
+  margin-bottom: 12px;
+}
+.notice.notice-info    { border-color: var(--c-primary);        background: var(--c-primary-light); }
+.notice.notice-success { border-color: var(--c-success);        background: var(--c-success-light); }
+.notice.notice-warning { border-color: var(--c-warning-strong); background: var(--c-warning-light); }
+.notice.notice-danger  { border-color: var(--c-danger);         background: var(--c-danger-light); }
 
 @keyframes fadeIn {
   from { opacity: 0; transform: translateY(20px); }
   to { opacity: 1; transform: translateY(0); }
+}
+
+/* Таблица позиций заказа — фиксированная сетка, ячейки выравниваются по центру.
+   Без этого превью фото 40px в одной строке толкает остальные ячейки вверх. */
+.items-table { table-layout: fixed; }
+.items-table td,
+.items-table th { vertical-align: middle; }
+
+/* Таблица услуг внутри развёрнутой позиции — фиксированные ширины и middle-выравнивание,
+   чтобы строки выглядели одинаково независимо от количества назначенных исполнителей. */
+.services-table { table-layout: fixed; width: 100%; }
+.services-table td,
+.services-table th { vertical-align: middle; }
+
+/* На странице Логистики расширяем main-content до 1500px — нужна ширина под
+   двухколоночный layout (дни + sticky-сводка справа).
+   Селектор смотрит на потомка — если на странице есть .logistics-layout, родительский
+   .main-content становится шире. */
+.main-content:has(.logistics-layout) { max-width: 1500px; }
+
+/* Сетка дней недели в Логистике: 7 одинаковых колонок, зазор между ними.
+   На узких экранах (< 1100px) переходит в стек — колонка под колонкой. */
+.logistics-week-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  align-items: start;
+}
+@media (max-width: 1100px) {
+  .logistics-week-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Логистика: двухколоночный layout с sticky-сводкой справа.
+   Компактный режим — узкая боковая колонка с цифрами по районам.
+   Развёрнутый — широкая колонка с полной таблицей.
+   На узких экранах — фолбэк в одну колонку (сводка переезжает вниз). */
+.logistics-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.logistics-main { flex: 1 1 auto; min-width: 0; }
+.logistics-aside {
+  flex: 0 0 200px;
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  transition: flex-basis 0.2s ease;
+}
+.logistics-aside.expanded { flex: 0 0 360px; }
+@media (max-width: 1100px) {
+  .logistics-layout { flex-direction: column; }
+  .logistics-aside,
+  .logistics-aside.expanded { position: static; flex: 1 1 auto; max-height: none; }
+}
+
+/* Круговая диаграмма Recharts: при наведении сектор слегка увеличивается и подсвечивается. */
+.recharts-pie-sector path {
+  transform-origin: center;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+.recharts-pie-sector:hover path {
+  transform: scale(1.05);
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.18)) brightness(1.05);
+}
+
+/* Подсказка над меткой карты — чистая, без рамки и тени Leaflet по умолчанию. */
+.leaflet-tooltip.map-tooltip {
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: inherit;
+  font-size: 0.9em;
+  color: #333;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  white-space: nowrap;
+}
+.leaflet-tooltip.map-tooltip::before {
+  border-top-color: #ddd;
 }

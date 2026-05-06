@@ -31,10 +31,12 @@ public class ItemTypeRepository {
     }
 
     public List<ItemType> findAll() {
-        return jdbc.query("SELECT id, name, is_default, default_price, free_threshold, created_at, updated_at FROM item_types ORDER BY id", Map.of(), ROW_MAPPER);
+        return jdbc.query("SELECT id, name, is_default, default_price, free_threshold, created_at, updated_at FROM item_types WHERE is_deleted = FALSE ORDER BY id", Map.of(), ROW_MAPPER);
     }
 
     public Optional<ItemType> findById(Long id) {
+        // findById намеренно не фильтрует по is_deleted: исторические заказы должны
+        // отображать имя типа даже после soft-delete. Для форм создания используется findAll().
         List<ItemType> result = jdbc.query(
                 "SELECT id, name, is_default, default_price, free_threshold, created_at, updated_at FROM item_types WHERE id = :id",
                 Map.of("id", id),
@@ -74,13 +76,27 @@ public class ItemTypeRepository {
         return findById(id).orElseThrow();
     }
 
+    /**
+     * Soft-delete: помечаем тип как удалённый. Жёсткое удаление невозможно из-за FK
+     * на order_items. Тип исчезает из форм создания, но остаётся виден в исторических
+     * заказах через findById().
+     */
     public void delete(Long id) {
-        jdbc.update("DELETE FROM item_types WHERE id = :id", Map.of("id", id));
+        jdbc.update("UPDATE item_types SET is_deleted = TRUE, updated_at = NOW() WHERE id = :id",
+                Map.of("id", id));
+    }
+
+    /** Количество позиций заказов, использующих этот тип. Для проверки перед удалением. */
+    public long countItemsUsing(Long id) {
+        Long n = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM order_items WHERE item_type_id = :id",
+                Map.of("id", id), Long.class);
+        return n == null ? 0 : n;
     }
 
     public List<ItemType> findDefaults() {
         return jdbc.query(
-                "SELECT id, name, is_default, default_price, free_threshold, created_at, updated_at FROM item_types WHERE is_default = TRUE ORDER BY id",
+                "SELECT id, name, is_default, default_price, free_threshold, created_at, updated_at FROM item_types WHERE is_deleted = FALSE AND is_default = TRUE ORDER BY id",
                 Map.of(),
                 ROW_MAPPER
         );

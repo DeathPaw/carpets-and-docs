@@ -77,12 +77,17 @@ public class OrderRepository {
                 rs.getString("delivery_time_slot"),
                 rs.getString("pickup_district"),
                 rs.getString("delivery_district"),
+                rs.getBigDecimal("pickup_lat"),
+                rs.getBigDecimal("pickup_lon"),
+                rs.getBigDecimal("delivery_lat"),
+                rs.getBigDecimal("delivery_lon"),
                 actualPickupDate,
                 rs.getString("actual_pickup_time_slot"),
                 actualDeliveryDate,
                 rs.getString("actual_delivery_time_slot"),
                 baseAmount,
                 discountPercent,
+                rs.getString("cancellation_reason"),
                 version,
                 rs.getTimestamp("created_at").toLocalDateTime(),
                 rs.getTimestamp("updated_at").toLocalDateTime()
@@ -93,28 +98,11 @@ public class OrderRepository {
         this.jdbc = jdbc;
     }
 
-    public List<Order> findAll(OrderStatus status, int page, int size) {
-        return findAll(status, null, null, null, null, null, null, null, page, size);
-    }
-
-    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, int page, int size) {
-        return findAll(status, dateFrom, dateTo, null, null, null, null, null, page, size);
-    }
-
-    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, int page, int size) {
-        return findAll(status, dateFrom, dateTo, legacyId, null, null, null, null, page, size);
-    }
-
-    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
-                               Long orderId, String paymentType,
-                               String clientPhone, String clientName, int page, int size) {
-        return findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, null, null, page, size);
-    }
-
-    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
-                               Long orderId, String paymentType,
-                               String clientPhone, String clientName,
-                               String sortBy, String sortDir, int page, int size) {
+    /**
+     * Универсальная выборка заказов через {@link OrderQuery}.
+     * Все остальные перегрузки {@code findAll(...)} ниже — тонкие обёртки для обратной совместимости.
+     */
+    public List<Order> findAll(OrderQuery query, int page, int size) {
         Map<String, Object> params = new HashMap<>();
         params.put("limit", size);
         params.put("offset", (long) page * size);
@@ -122,67 +110,155 @@ public class OrderRepository {
         StringBuilder sql = new StringBuilder(
                 "SELECT o.*, c.address as client_address FROM orders o LEFT JOIN clients c ON c.id = o.client_id WHERE 1=1 ");
 
-        appendWhereClause(sql, params, status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+        appendWhereClause(sql, params, query);
 
-        String orderBy = switch (sortBy != null ? sortBy : "id") {
-            case "total_amount" -> "o.total_amount";
-            case "created_at" -> "o.created_at";
-            case "status" -> "o.status";
-            case "client_name" -> "o.client_name";
-            default -> "o.id";
-        };
-        String dir = "asc".equalsIgnoreCase(sortDir) ? "ASC" : "DESC";
-        sql.append("ORDER BY ").append(orderBy).append(" ").append(dir).append(" LIMIT :limit OFFSET :offset");
+        sql.append("ORDER BY ").append(buildOrderBy(query.sortBy(), query.sortDir()))
+                .append(" LIMIT :limit OFFSET :offset");
 
         return jdbc.query(sql.toString(), params, ROW_MAPPER);
     }
 
-    public long countAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId,
-                         Long orderId, String paymentType, String clientPhone, String clientName) {
+    public long countAll(OrderQuery query) {
         Map<String, Object> params = new HashMap<>();
         StringBuilder sql = new StringBuilder(
                 "SELECT COUNT(*) FROM orders o LEFT JOIN clients c ON c.id = o.client_id WHERE 1=1 ");
 
-        appendWhereClause(sql, params, status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+        appendWhereClause(sql, params, query);
 
         Long count = jdbc.queryForObject(sql.toString(), params, Long.class);
         return count != null ? count : 0;
     }
 
-    private void appendWhereClause(StringBuilder sql, Map<String, Object> params,
-                                   OrderStatus status, String dateFrom, String dateTo, Long legacyId,
-                                   Long orderId, String paymentType, String clientPhone, String clientName) {
-        if (status != null) {
-            sql.append("AND o.status = :status ");
-            params.put("status", status.name());
+    // ───────── обёртки для обратной совместимости ─────────
+
+    public List<Order> findAll(OrderStatus status, int page, int size) {
+        return findAll(OrderQuery.builder().status(status).build(), page, size);
+    }
+
+    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, int page, int size) {
+        return findAll(OrderQuery.builder().status(status).dateFrom(dateFrom).dateTo(dateTo).build(), page, size);
+    }
+
+    public List<Order> findAll(OrderStatus status, String dateFrom, String dateTo, Long legacyId, int page, int size) {
+        return findAll(OrderQuery.builder().status(status).dateFrom(dateFrom).dateTo(dateTo).legacyId(legacyId).build(),
+                page, size);
+    }
+
+    public List<Order> findAll(List<OrderStatus> statuses, String dateFrom, String dateTo, String dateField,
+                               Long legacyId, Long orderId, String paymentType,
+                               String clientPhone, String clientName, Long clientId,
+                               List<String> sortBy, List<String> sortDir, int page, int size) {
+        return findAll(OrderQuery.builder()
+                .statuses(statuses).dateFrom(dateFrom).dateTo(dateTo).dateField(dateField)
+                .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
+                .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
+                .sortBy(sortBy).sortDir(sortDir).build(), page, size);
+    }
+
+    public long countAll(List<OrderStatus> statuses, String dateFrom, String dateTo, String dateField,
+                         Long legacyId, Long orderId, String paymentType,
+                         String clientPhone, String clientName, Long clientId) {
+        return countAll(OrderQuery.builder()
+                .statuses(statuses).dateFrom(dateFrom).dateTo(dateTo).dateField(dateField)
+                .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
+                .clientPhone(clientPhone).clientName(clientName).clientId(clientId).build());
+    }
+
+    /** Сборка ORDER BY из списков полей и направлений. По умолчанию — id DESC. */
+    private String buildOrderBy(List<String> sortBy, List<String> sortDir) {
+        if (sortBy == null || sortBy.isEmpty()) return "o.id DESC";
+        StringBuilder ob = new StringBuilder();
+        for (int i = 0; i < sortBy.size(); i++) {
+            String field = sortBy.get(i);
+            String col = switch (field) {
+                case "total_amount" -> "o.total_amount";
+                case "created_at" -> "o.created_at";
+                case "status" -> "o.status";
+                case "client_name" -> "o.client_name";
+                default -> "o.id";
+            };
+            String dir = (sortDir != null && i < sortDir.size() && "asc".equalsIgnoreCase(sortDir.get(i))) ? "ASC" : "DESC";
+            if (ob.length() > 0) ob.append(", ");
+            ob.append(col).append(" ").append(dir);
         }
-        if (dateFrom != null && !dateFrom.isEmpty()) {
-            sql.append("AND o.created_at >= :dateFrom ");
-            params.put("dateFrom", java.time.LocalDate.parse(dateFrom).atStartOfDay());
+        return ob.toString();
+    }
+
+    /** Допустимые поля дат для фильтрации, во избежание SQL-инъекции через имя колонки. */
+    private static final java.util.Set<String> ALLOWED_DATE_FIELDS = java.util.Set.of(
+            "created_at", "pickup_date", "delivery_date",
+            "actual_pickup_date", "actual_delivery_date");
+
+    private void appendWhereClause(StringBuilder sql, Map<String, Object> params, OrderQuery q) {
+        if (q.statuses() != null && !q.statuses().isEmpty()) {
+            sql.append("AND o.status IN (:statuses) ");
+            params.put("statuses", q.statuses().stream().map(OrderStatus::name).toList());
         }
-        if (dateTo != null && !dateTo.isEmpty()) {
-            sql.append("AND o.created_at < :dateTo ");
-            params.put("dateTo", java.time.LocalDate.parse(dateTo).plusDays(1).atStartOfDay());
+        if (q.clientId() != null) {
+            sql.append("AND o.client_id = :clientId ");
+            params.put("clientId", q.clientId());
         }
-        if (legacyId != null) {
+        // Имя колонки для фильтрации по диапазону дат — белый список, dot-prefix `o.` фиксирован.
+        // created_at имеет тип timestamp, остальные — date; используем единый формат сравнения.
+        String df = q.dateField() != null && ALLOWED_DATE_FIELDS.contains(q.dateField()) ? q.dateField() : "created_at";
+        boolean isTimestamp = "created_at".equals(df);
+        if (q.dateFrom() != null && !q.dateFrom().isEmpty()) {
+            sql.append("AND o.").append(df).append(" >= :dateFrom ");
+            params.put("dateFrom", isTimestamp
+                    ? java.time.LocalDate.parse(q.dateFrom()).atStartOfDay()
+                    : java.time.LocalDate.parse(q.dateFrom()));
+        }
+        if (q.dateTo() != null && !q.dateTo().isEmpty()) {
+            sql.append("AND o.").append(df).append(isTimestamp ? " < :dateTo " : " <= :dateTo ");
+            params.put("dateTo", isTimestamp
+                    ? java.time.LocalDate.parse(q.dateTo()).plusDays(1).atStartOfDay()
+                    : java.time.LocalDate.parse(q.dateTo()));
+        }
+        if (q.legacyId() != null) {
             sql.append("AND o.legacy_id = :legacyId ");
-            params.put("legacyId", legacyId);
+            params.put("legacyId", q.legacyId());
         }
-        if (orderId != null) {
+        if (q.orderId() != null) {
             sql.append("AND o.id = :orderId ");
-            params.put("orderId", orderId);
+            params.put("orderId", q.orderId());
         }
+        // paymentType: либо одиночное, либо CSV "CARD,CASH" — поддерживаем оба варианта.
+        String paymentType = q.paymentType();
         if (paymentType != null && !paymentType.isEmpty()) {
-            sql.append("AND o.payment_type = :paymentType ");
-            params.put("paymentType", paymentType);
+            if (paymentType.contains(",")) {
+                List<String> types = java.util.Arrays.stream(paymentType.split(","))
+                        .map(String::trim).filter(s -> !s.isEmpty()).toList();
+                if (!types.isEmpty()) {
+                    sql.append("AND o.payment_type IN (:paymentTypes) ");
+                    params.put("paymentTypes", types);
+                }
+            } else {
+                sql.append("AND o.payment_type = :paymentType ");
+                params.put("paymentType", paymentType);
+            }
         }
-        if (clientPhone != null && !clientPhone.isEmpty()) {
+        if (q.clientPhone() != null && !q.clientPhone().isEmpty()) {
             sql.append("AND (c.phone LIKE :clientPhone OR c.extra_phone LIKE :clientPhone) ");
-            params.put("clientPhone", "%" + clientPhone + "%");
+            params.put("clientPhone", "%" + q.clientPhone() + "%");
         }
-        if (clientName != null && !clientName.isEmpty()) {
+        if (q.clientName() != null && !q.clientName().isEmpty()) {
             sql.append("AND (LOWER(o.client_name) LIKE :clientNameLike OR LOWER(COALESCE(c.contact_person,'')) LIKE :clientNameLike) ");
-            params.put("clientNameLike", "%" + clientName.toLowerCase() + "%");
+            params.put("clientNameLike", "%" + q.clientName().toLowerCase() + "%");
+        }
+        // Заказы с адресом, но без координат — «потерянные», оператор не видит на карте.
+        if (Boolean.TRUE.equals(q.noCoords())) {
+            sql.append("AND ((o.pickup_address IS NOT NULL AND o.pickup_address <> '' AND o.pickup_lat IS NULL) " +
+                       "  OR (o.delivery_address IS NOT NULL AND o.delivery_address <> '' AND o.delivery_lat IS NULL)) ");
+        }
+        // Просроченная фактическая дата — повторяет логику counter'а на дашборде.
+        if (Boolean.TRUE.equals(q.overdueActual())) {
+            sql.append("AND ((o.actual_pickup_date IS NOT NULL AND o.actual_pickup_date < CURRENT_DATE) " +
+                       "  OR (o.actual_delivery_date IS NOT NULL AND o.actual_delivery_date < CURRENT_DATE)) ");
+        }
+        // Некорректный адрес: пора забрать/доставить, но адрес пуст.
+        if (Boolean.TRUE.equals(q.badAddress())) {
+            sql.append("AND ((o.status = 'FOR_PICKUP' AND (o.pickup_address IS NULL OR o.pickup_address = '')) " +
+                       "  OR (o.status = 'DONE' AND (o.delivery_address IS NULL OR o.delivery_address = ''))) ");
         }
     }
 
@@ -213,6 +289,19 @@ public class OrderRepository {
         );
     }
 
+    /** Обновление статуса вместе с причиной (для CANCELLED). Причину очистить — передать null. */
+    public void updateStatusWithReason(Long id, OrderStatus status, String reason) {
+        var params = new MapSqlParameterSource()
+                .addValue("id", id)
+                .addValue("status", status.name())
+                .addValue("reason", reason);
+        jdbc.update(
+                "UPDATE orders SET status = :status, cancellation_reason = :reason, " +
+                "version = version + 1, updated_at = NOW() WHERE id = :id",
+                params
+        );
+    }
+
     public void updateBaseAmount(Long id, java.math.BigDecimal baseAmount) {
         jdbc.update(
                 "UPDATE orders SET base_amount = :baseAmount, version = version + 1, updated_at = NOW() WHERE id = :id",
@@ -237,7 +326,9 @@ public class OrderRepository {
     public void updateDetails(Long id, String pickupAddress, String deliveryAddress, Long legacyId,
                               java.time.LocalDate pickupDate, String pickupTimeSlot,
                               java.time.LocalDate deliveryDate, String deliveryTimeSlot,
-                              String pickupDistrict, String deliveryDistrict) {
+                              String pickupDistrict, String deliveryDistrict,
+                              BigDecimal pickupLat, BigDecimal pickupLon,
+                              BigDecimal deliveryLat, BigDecimal deliveryLon) {
         var params = new MapSqlParameterSource()
                 .addValue("id", id)
                 .addValue("pickupAddress", pickupAddress)
@@ -248,12 +339,18 @@ public class OrderRepository {
                 .addValue("deliveryDate", deliveryDate)
                 .addValue("deliveryTimeSlot", deliveryTimeSlot)
                 .addValue("pickupDistrict", pickupDistrict)
-                .addValue("deliveryDistrict", deliveryDistrict);
+                .addValue("deliveryDistrict", deliveryDistrict)
+                .addValue("pickupLat", pickupLat)
+                .addValue("pickupLon", pickupLon)
+                .addValue("deliveryLat", deliveryLat)
+                .addValue("deliveryLon", deliveryLon);
         jdbc.update(
                 "UPDATE orders SET pickup_address = :pickupAddress, delivery_address = :deliveryAddress, " +
                 "legacy_id = :legacyId, pickup_date = :pickupDate, pickup_time_slot = :pickupTimeSlot, " +
                 "delivery_date = :deliveryDate, delivery_time_slot = :deliveryTimeSlot, " +
                 "pickup_district = :pickupDistrict, delivery_district = :deliveryDistrict, " +
+                "pickup_lat = :pickupLat, pickup_lon = :pickupLon, " +
+                "delivery_lat = :deliveryLat, delivery_lon = :deliveryLon, " +
                 "actual_pickup_date = COALESCE(actual_pickup_date, :pickupDate), " +
                 "actual_pickup_time_slot = COALESCE(actual_pickup_time_slot, :pickupTimeSlot), " +
                 "actual_delivery_date = COALESCE(actual_delivery_date, :deliveryDate), " +

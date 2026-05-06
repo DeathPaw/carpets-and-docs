@@ -1,5 +1,5 @@
 // Enums
-export type OrderStatus = 'LEAD' | 'CREATED' | 'FOR_PICKUP' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'DELIVERED' | 'CANCELLED'
+export type OrderStatus = 'LEAD' | 'CREATED' | 'FOR_PICKUP' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'DELIVERED' | 'COMPLETED' | 'CANCELLED'
 export type OrderItemStatus = 'CREATED' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'CANCELLED'
 export type ServiceStatus = 'CREATED' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 export type PaymentType = 'TRANSFER' | 'CARD' | 'CASH'
@@ -23,6 +23,8 @@ export interface Client {
   is_pensioner: boolean
   is_problem: boolean
   is_regular: boolean
+  lat: number | null
+  lon: number | null
   created_at: string
   updated_at: string
 }
@@ -49,12 +51,17 @@ export interface Order {
   delivery_time_slot: string | null
   pickup_district: string | null
   delivery_district: string | null
+  pickup_lat: number | null
+  pickup_lon: number | null
+  delivery_lat: number | null
+  delivery_lon: number | null
   actual_pickup_date: string | null
   actual_pickup_time_slot: string | null
   actual_delivery_date: string | null
   actual_delivery_time_slot: string | null
   base_amount: number
   discount_percent: number
+  cancellation_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -73,6 +80,7 @@ export interface OrderItem {
   weight: number | null
   area: number | null
   running_meters: number | null
+  cancellation_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -86,6 +94,7 @@ export interface OrderItemService {
   price: number
   is_manual_price?: boolean
   assignees: Employee[]
+  cancellation_reason?: string | null
   created_at: string
   updated_at: string
 }
@@ -95,7 +104,65 @@ export interface Employee {
   name: string
   contact: string | null
   active: boolean
+  /** Привязка к роли (см. EmployeeRole). null = без роли (универсал, может всё). */
+  role_id: number | null
   created_at: string
+}
+
+/**
+ * Роль сотрудника — набор типов позиций, с которыми он умеет работать.
+ * При назначении исполнителей к услуге фильтруем по роли:
+ * сотрудник видит только те типы позиций, которые входят в его роль.
+ */
+export interface EmployeeRole {
+  id: number
+  name: string
+  description: string | null
+  item_type_ids: number[]
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateEmployeeRoleRequest {
+  name: string
+  description?: string
+  item_type_ids: number[]
+}
+
+/** Темы обращения. Лейблы для UI см. FEEDBACK_TOPIC_LABELS в constants/feedback.ts. */
+export type FeedbackTopic =
+  | 'SUGGESTION_HOW'    // «А можем сделать вот так?»
+  | 'FEATURE_REQUEST'   // «Хочу такую функцию»
+  | 'LOGIC_BUG'         // «Ошибка в логике/поведении»
+  | 'VISUAL_BUG'        // «Визуальная ошибка»
+  | 'UNCLEAR'           // «Непонятно что делать»
+
+export type FeedbackStatus =
+  | 'NEW'
+  | 'REVIEWED'
+  | 'IN_PROGRESS'
+  | 'DONE'
+  | 'REJECTED'
+  | 'NEED_INFO'
+
+export interface Feedback {
+  id: number
+  topic: FeedbackTopic
+  body: string
+  page_path: string
+  screenshot: string | null         // base64
+  screenshot_type: string | null    // mime
+  submitted_by: string | null
+  status: FeedbackStatus
+  created_at: string
+}
+
+export interface CreateFeedbackRequest {
+  topic: FeedbackTopic
+  body: string
+  page_path: string
+  screenshot?: string | null
+  screenshot_type?: string | null
 }
 
 export interface PriceListEntry {
@@ -195,6 +262,23 @@ export interface CreateClientRequest {
   is_pensioner?: boolean
   is_problem?: boolean
   is_regular?: boolean
+  lat?: number | null
+  lon?: number | null
+}
+
+export interface District {
+  id: number
+  name: string
+  sort_order: number
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface CreateDistrictRequest {
+  name: string
+  sort_order?: number
+  is_active?: boolean
 }
 
 export interface AddOrderItemRequest {
@@ -204,6 +288,8 @@ export interface AddOrderItemRequest {
 
 export interface UpdateStatusRequest {
   status: string
+  /** Обязательна при переходе в CANCELLED, минимум 10 символов после trim. */
+  cancellation_reason?: string
 }
 
 export interface PayOrderRequest {
@@ -242,11 +328,13 @@ export interface UpdateOrderItemDimensionsRequest {
 export interface CreateEmployeeRequest {
   name: string
   contact?: string
+  role_id?: number | null
 }
 
 export interface UpdateEmployeeRequest {
   name: string
   contact?: string
+  role_id?: number | null
 }
 
 export interface SetPriceRequest {
@@ -276,4 +364,20 @@ export interface OrderModifier {
   modifier_name: string
   percent: number
   created_at: string
+}
+
+/**
+ * Позиция, обогащённая позиционным номером в заказе (ROW_NUMBER OVER PARTITION BY order_id).
+ * Возвращается из эндпоинтов "/items" и "/services" (страницы списков и производство).
+ * Нужна, чтобы в UI выводить "Заказ #123 / поз. 2" без дополнительных запросов.
+ */
+export interface OrderItemPositioned extends OrderItem {
+  position_in_order: number
+}
+
+/** Услуга в плоском виде с привязкой к заказу — используется на странице "Производство" в режиме "По услугам". */
+export interface OrderItemServicePositioned extends OrderItemService {
+  order_id: number
+  position_in_order: number
+  item_type_name: string | null
 }

@@ -2,15 +2,16 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, Legend,
+  PieChart, Pie, Cell,
 } from 'recharts'
 import { getOrdersByDistrict, getOrdersByStatus, getItemsByType, getEmployeeStats, getRevenueByMonth, getTopClients, getWarrantyStats, getMarginAnalysis } from '../api/analytics'
 import SpbDistrictMap from '../components/SpbDistrictMap'
+import { ORDER_STATUS_LABELS } from '../constants/statuses'
 
-const STATUS_LABELS: Record<string, string> = {
-  LEAD: 'Лид', CREATED: 'Создан', FOR_PICKUP: 'К забору', IN_PROGRESS: 'В работе',
-  PARTIALLY_DONE: 'Частично готов', DONE: 'Готов',
-}
+// На графике «активных» статусов используем общий справочник переводов из constants/statuses.
+// Раньше был локальный неполный — для COMPLETED не было перевода и в pie-chart
+// светилось английское «COMPLETED: 1».
+const STATUS_LABELS: Record<string, string> = ORDER_STATUS_LABELS
 
 const STATUS_COLORS: Record<string, string> = {
   LEAD: '#b0bec5', CREATED: '#7fb8e8', FOR_PICKUP: '#7ec8d4',
@@ -34,8 +35,8 @@ export default function AnalyticsPage() {
   const [typeData, setTypeData] = useState<{type_name: string, count: number}[]>([])
   const [employeeData, setEmployeeData] = useState<{name: string, services_done: number, total_earned: number}[]>([])
   const [revenueData, setRevenueData] = useState<{month: string, orders_count: number, revenue: number}[]>([])
-  const [topClients, setTopClients] = useState<{name: string, client_type: string, orders_count: number, total_spent: number}[]>([])
-  const [warrantyData, setWarrantyData] = useState<{client_name: string, total_orders: number, warranty_orders: number, warranty_percent: number}[]>([])
+  const [topClients, setTopClients] = useState<{client_id: number, name: string, client_type: string, orders_count: number, total_spent: number}[]>([])
+  const [warrantyData, setWarrantyData] = useState<{client_id: number, client_name: string, total_orders: number, warranty_orders: number, warranty_percent: number}[]>([])
   const [marginData, setMarginData] = useState<{service_name: string, count: number, revenue: number, cost: number}[]>([])
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
@@ -89,13 +90,17 @@ export default function AnalyticsPage() {
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Активные заказы по статусам</h2>
           {statusChartData.length === 0 ? <div className="empty">Нет данных</div> : (
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveContainer width="100%" height={300}>
               <PieChart>
-                <Pie data={statusChartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, value }) => `${name}: ${value}`} onClick={(_: unknown, index: number) => { const label = statusChartData[index]?.name; const status = LABEL_TO_STATUS[label]; if (status) navigate('/orders?status=' + status); }} style={{ cursor: 'pointer' }}>
-                  {statusChartData.map((entry, i) => <Cell key={i} fill={entry.color} style={{ cursor: 'pointer' }} />)}
+                <Pie
+                  data={statusChartData} dataKey="value" nameKey="name"
+                  cx="50%" cy="50%" outerRadius={90}
+                  label={({ name, value }) => `${name}: ${value}`}
+                  onClick={(_: unknown, index: number) => { const label = statusChartData[index]?.name; const status = LABEL_TO_STATUS[label]; if (status) navigate('/orders?status=' + status); }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {statusChartData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
                 </Pie>
-                <Tooltip />
-                <Legend />
               </PieChart>
             </ResponsiveContainer>
           )}
@@ -105,13 +110,17 @@ export default function AnalyticsPage() {
         <div className="card">
           <h2 style={{ marginTop: 0 }}>Типы позиций</h2>
           {typeChartData.length === 0 ? <div className="empty">Нет данных</div> : (
-            <ResponsiveContainer width="100%" height={250}>
+            <ResponsiveContainer width="100%" height={300}>
               <PieChart>
-                <Pie data={typeChartData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={({ name, value }) => `${name}: ${value}`} onClick={(_: unknown, index: number) => { const typeName = typeChartData[index]?.name; if (typeName) navigate('/items?type=' + encodeURIComponent(typeName)); }} style={{ cursor: 'pointer' }}>
-                  {typeChartData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} style={{ cursor: 'pointer' }} />)}
+                <Pie
+                  data={typeChartData} dataKey="value" nameKey="name"
+                  cx="50%" cy="50%" outerRadius={90}
+                  label={({ name, value }) => `${name}: ${value}`}
+                  onClick={(_: unknown, index: number) => { const typeName = typeChartData[index]?.name; if (typeName) navigate('/items?type=' + encodeURIComponent(typeName)); }}
+                  style={{ cursor: 'pointer' }}
+                >
+                  {typeChartData.map((_, i) => <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
                 </Pie>
-                <Tooltip />
-                <Legend />
               </PieChart>
             </ResponsiveContainer>
           )}
@@ -156,7 +165,12 @@ export default function AnalyticsPage() {
             <thead><tr><th>#</th><th>Клиент</th><th>Тип</th><th>Заказов</th><th>Сумма</th></tr></thead>
             <tbody>
               {topClients.map((c, i) => (
-                <tr key={i} onClick={() => navigate('/clients')} style={{ cursor: 'pointer' }}>
+                <tr
+                  key={i}
+                  onClick={() => navigate(`/orders?clientId=${c.client_id}&clientName=${encodeURIComponent(c.name)}`)}
+                  style={{ cursor: 'pointer' }}
+                  title="Открыть заказы клиента"
+                >
                   <td>{i + 1}</td>
                   <td><strong>{c.name}</strong></td>
                   <td>{c.client_type === 'LEGAL_ENTITY' ? 'Юр.' : 'Физ.'}</td>
@@ -178,7 +192,12 @@ export default function AnalyticsPage() {
               <thead><tr><th>Клиент</th><th>Заказов</th><th>Гарантийных</th><th>%</th></tr></thead>
               <tbody>
                 {warrantyData.map((w, i) => (
-                  <tr key={i} onClick={() => navigate('/clients')} style={{ cursor: 'pointer' }}>
+                  <tr
+                    key={i}
+                    onClick={() => navigate(`/orders?clientId=${w.client_id}&clientName=${encodeURIComponent(w.client_name)}`)}
+                    style={{ cursor: 'pointer' }}
+                    title="Открыть заказы клиента"
+                  >
                     <td><strong>{w.client_name}</strong></td>
                     <td>{w.total_orders}</td>
                     <td>{w.warranty_orders}</td>

@@ -77,7 +77,47 @@ public class OrderItemServiceInstanceService {
             return new OrderItemServiceWithAssignees(
                 service.id(), service.orderItemId(), service.serviceDefId(),
                 sd != null ? sd.name() : null, service.status(), service.price(),
-                service.isManualPrice(), assignees, service.createdAt(), service.updatedAt()
+                service.isManualPrice(), assignees, service.cancellationReason(),
+                service.createdAt(), service.updatedAt()
+            );
+        }).toList();
+    }
+
+    /**
+     * Все услуги по заказу одним батчем — устраняет N+1 на странице заказа,
+     * где раньше делалось по одному запросу на каждую позицию.
+     */
+    public List<OrderItemServiceWithAssignees> findByOrderIdWithAssignees(Long orderId) {
+        List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
+        if (items.isEmpty()) return List.of();
+
+        List<Long> itemIds = items.stream().map(OrderItem::id).toList();
+        List<OrderItemServiceInstance> services = repository.findByOrderItemIds(itemIds);
+        if (services.isEmpty()) return List.of();
+
+        List<Long> serviceIds = services.stream().map(OrderItemServiceInstance::id).toList();
+        Map<Long, List<Long>> assigneeMap = assigneeRepository.findEmployeeIdsByServiceIds(serviceIds);
+
+        Set<Long> allEmpIds = new HashSet<>();
+        assigneeMap.values().forEach(allEmpIds::addAll);
+        Map<Long, Employee> empMap = allEmpIds.isEmpty() ? Map.of()
+                : employeeRepository.findByIds(new ArrayList<>(allEmpIds));
+
+        List<Long> defIds = services.stream().map(OrderItemServiceInstance::serviceDefId).distinct().toList();
+        Map<Long, ServiceDefinition> defMap = new HashMap<>();
+        for (Long defId : defIds) {
+            serviceDefinitionRepository.findById(defId).ifPresent(d -> defMap.put(defId, d));
+        }
+
+        return services.stream().map(s -> {
+            List<Long> empIds = assigneeMap.getOrDefault(s.id(), List.of());
+            List<Employee> assignees = empIds.stream().map(empMap::get).filter(Objects::nonNull).toList();
+            ServiceDefinition sd = defMap.get(s.serviceDefId());
+            return new OrderItemServiceWithAssignees(
+                    s.id(), s.orderItemId(), s.serviceDefId(),
+                    sd != null ? sd.name() : null, s.status(), s.price(),
+                    s.isManualPrice(), assignees, s.cancellationReason(),
+                    s.createdAt(), s.updatedAt()
             );
         }).toList();
     }
@@ -100,6 +140,15 @@ public class OrderItemServiceInstanceService {
         PriceListEntry priceListEntry = priceListRepository.findByItemTypeIdAndServiceDefId(orderItem.itemTypeId(), serviceDefId)
                 .filter(PriceListEntry::isActive)
                 .orElseThrow(() -> new BusinessRuleException("Услуга не доступна для данного типа позиции"));
+
+        // Запрет дублей: одну и ту же услугу нельзя повесить на позицию дважды.
+        // CANCELLED не считается — отменённая услуга не блокирует повторное добавление.
+        boolean alreadyExists = repository.findByOrderItemId(orderItemId).stream()
+                .anyMatch(s -> s.serviceDefId().equals(serviceDefId)
+                        && s.status() != ServiceStatus.CANCELLED);
+        if (alreadyExists) {
+            throw new BusinessRuleException("Эта услуга уже добавлена к позиции");
+        }
 
         // Создаем новую услугу для позиции
         repository.saveAll(orderItemId, List.of(serviceDefId));
@@ -131,6 +180,11 @@ public class OrderItemServiceInstanceService {
 
     @Transactional
     public OrderItemServiceInstance updateStatus(Long serviceId, ServiceStatus status) {
+        return updateStatus(serviceId, status, null);
+    }
+
+    @Transactional
+    public OrderItemServiceInstance updateStatus(Long serviceId, ServiceStatus status, String cancellationReason) {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
 
@@ -155,7 +209,15 @@ public class OrderItemServiceInstanceService {
             }
         }
 
-        repository.updateStatus(serviceId, status);
+        if (status == ServiceStatus.CANCELLED) {
+            String reason = cancellationReason == null ? "" : cancellationReason.trim();
+            if (reason.length() < 10) {
+                throw new BusinessRuleException("Для отмены услуги укажите причину (минимум 10 символов).");
+            }
+            repository.updateStatusWithReason(serviceId, status, reason);
+        } else {
+            repository.updateStatus(serviceId, status);
+        }
         // Автоматически пересчитываем статус позиции
         orderItemService.recalculateItemStatus(instance.orderItemId());
         return repository.findById(serviceId).orElseThrow();
@@ -173,6 +235,11 @@ public class OrderItemServiceInstanceService {
 
     public OrderItemServiceWithAssignees updateStatusWithAssignees(Long serviceId, ServiceStatus status) {
         OrderItemServiceInstance service = updateStatus(serviceId, status);
+        return mapToWithAssignees(service);
+    }
+
+    public OrderItemServiceWithAssignees updateStatusWithAssignees(Long serviceId, ServiceStatus status, String cancellationReason) {
+        OrderItemServiceInstance service = updateStatus(serviceId, status, cancellationReason);
         return mapToWithAssignees(service);
     }
 
@@ -217,6 +284,7 @@ public class OrderItemServiceInstanceService {
                 service.price(),
                 service.isManualPrice(),
                 assignees,
+                service.cancellationReason(),
                 service.createdAt(),
                 service.updatedAt()
         );

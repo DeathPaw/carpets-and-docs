@@ -63,7 +63,8 @@ public class ClientController {
                 req.inn(), req.contactPerson(), req.contactPersonPhone(), req.comment(),
                 req.isPensioner() != null && req.isPensioner(),
                 req.isProblem() != null && req.isProblem(),
-                req.isRegular() != null && req.isRegular()
+                req.isRegular() != null && req.isRegular(),
+                req.lat(), req.lon()
         );
         auditLogService.log("CLIENT", client.id(), "CREATE", "Создан клиент: " + client.name());
         return client;
@@ -79,7 +80,8 @@ public class ClientController {
                 req.inn(), req.contactPerson(), req.contactPersonPhone(), req.comment(),
                 req.isPensioner() != null && req.isPensioner(),
                 req.isProblem() != null && req.isProblem(),
-                req.isRegular() != null && req.isRegular()
+                req.isRegular() != null && req.isRegular(),
+                req.lat(), req.lon()
         );
         auditLogService.log("CLIENT", id, "UPDATE", "Обновлён клиент: " + client.name());
         return client;

@@ -7,6 +7,7 @@ import ru.carpet.dto.*;
 import ru.carpet.model.*;
 import ru.carpet.repository.OrderItemPhotoRepository;
 import ru.carpet.service.OrderItemService;
+import ru.carpet.service.OrderItemServiceInstanceService;
 import ru.carpet.service.OrderService;
 
 import java.util.List;
@@ -18,32 +19,57 @@ public class OrderController {
 
     private final OrderService service;
     private final OrderItemService orderItemService;
+    private final OrderItemServiceInstanceService serviceInstanceService;
     private final OrderItemPhotoRepository photoRepository;
 
     public OrderController(OrderService service, OrderItemService orderItemService,
+                           OrderItemServiceInstanceService serviceInstanceService,
                            OrderItemPhotoRepository photoRepository) {
         this.service = service;
         this.orderItemService = orderItemService;
+        this.serviceInstanceService = serviceInstanceService;
         this.photoRepository = photoRepository;
     }
 
     @GetMapping
     public PageResponse<Order> getAll(
             @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) List<OrderStatus> statuses,
             @RequestParam(required = false) String dateFrom,
             @RequestParam(required = false) String dateTo,
+            // По какому полю даты фильтровать: created_at | pickup_date | delivery_date
+            // | actual_pickup_date | actual_delivery_date. По умолчанию — created_at.
+            @RequestParam(required = false) String dateField,
             @RequestParam(required = false) Long legacyId,
             @RequestParam(required = false) Long orderId,
             @RequestParam(required = false) String paymentType,
             @RequestParam(required = false) String clientPhone,
             @RequestParam(required = false) String clientName,
-            @RequestParam(required = false) String sortBy,
-            @RequestParam(required = false) String sortDir,
+            @RequestParam(required = false) Long clientId,
+            @RequestParam(required = false) List<String> sortBy,
+            @RequestParam(required = false) List<String> sortDir,
+            // true = только заказы с адресом, но без координат (для перехода с дашборда «Без координат»)
+            @RequestParam(required = false) Boolean noCoords,
+            // true = просрочка по факт. дате (для виджета на главной)
+            @RequestParam(required = false) Boolean overdueActual,
+            // true = пора забирать/доставлять, но адрес пуст (виджет «Без адреса»)
+            @RequestParam(required = false) Boolean badAddress,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        List<Order> content = service.findAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName, sortBy, sortDir, page, size);
-        long totalElements = service.countAll(status, dateFrom, dateTo, legacyId, orderId, paymentType, clientPhone, clientName);
+        List<OrderStatus> effectiveStatuses = (statuses != null && !statuses.isEmpty())
+                ? statuses
+                : (status != null ? List.of(status) : null);
+
+        ru.carpet.repository.OrderQuery query = ru.carpet.repository.OrderQuery.builder()
+                .statuses(effectiveStatuses).dateFrom(dateFrom).dateTo(dateTo).dateField(dateField)
+                .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
+                .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
+                .sortBy(sortBy).sortDir(sortDir)
+                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress).build();
+
+        List<Order> content = service.findAll(query, page, size);
+        long totalElements = service.countAll(query);
         return new PageResponse<>(content, totalElements, page, size);
     }
 
@@ -61,7 +87,7 @@ public class OrderController {
 
     @PatchMapping("/{id}/status")
     public Order updateStatus(@PathVariable Long id, @Valid @RequestBody UpdateOrderStatusRequest request) {
-        return service.updateStatus(id, request.status());
+        return service.updateStatus(id, request.status(), request.cancellationReason());
     }
 
     @PatchMapping("/{id}/comment")
@@ -73,7 +99,9 @@ public class OrderController {
     public Order updateDetails(@PathVariable Long id, @RequestBody UpdateOrderDetailsRequest request) {
         return service.updateDetails(id, request.pickupAddress(), request.deliveryAddress(), request.legacyId(),
                 request.pickupDate(), request.pickupTimeSlot(), request.deliveryDate(), request.deliveryTimeSlot(),
-                request.pickupDistrict(), request.deliveryDistrict());
+                request.pickupDistrict(), request.deliveryDistrict(),
+                request.pickupLat(), request.pickupLon(),
+                request.deliveryLat(), request.deliveryLon());
     }
 
     @PatchMapping("/{id}/actual-dates")
@@ -128,11 +156,20 @@ public class OrderController {
         return orderItemService.findByOrderId(orderId);
     }
 
+    /**
+     * Все услуги по всем позициям заказа одним запросом — фронт раньше делал
+     * N запросов GET /api/orders/{}/items/{}/services по одному на каждую позицию.
+     */
+    @GetMapping("/{orderId}/services")
+    public List<OrderItemServiceWithAssignees> getAllServices(@PathVariable Long orderId) {
+        return serviceInstanceService.findByOrderIdWithAssignees(orderId);
+    }
+
     @PatchMapping("/{orderId}/items/{itemId}/status")
     public OrderItem updateItemStatus(@PathVariable Long orderId,
                                       @PathVariable Long itemId,
                                       @Valid @RequestBody UpdateOrderItemStatusRequest request) {
-        return orderItemService.updateStatus(itemId, request.status());
+        return orderItemService.updateStatus(itemId, request.status(), request.cancellationReason());
     }
 
     @PatchMapping("/{orderId}/items/{itemId}/description")
@@ -180,6 +217,17 @@ public class OrderController {
     @GetMapping("/{orderId}/items/{itemId}/photos")
     public List<OrderItemPhoto> getPhotos(@PathVariable Long orderId, @PathVariable Long itemId) {
         return photoRepository.findByOrderItemId(itemId);
+    }
+
+    /**
+     * Все фото по всем позициям заказа одним запросом — спасает от N+1 на странице заказа.
+     * Раньше фронт делал по запросу на каждую позицию.
+     */
+    @GetMapping("/{orderId}/photos")
+    public List<OrderItemPhoto> getAllPhotos(@PathVariable Long orderId) {
+        List<OrderItem> items = orderItemService.findByOrderId(orderId);
+        if (items.isEmpty()) return List.of();
+        return photoRepository.findByOrderItemIds(items.stream().map(OrderItem::id).toList());
     }
 
     @PostMapping("/{orderId}/items/{itemId}/photos")

@@ -6,6 +6,7 @@ import LoginPage from './pages/LoginPage'
 import OrdersPage from './pages/OrdersPage'
 import OrderDetailPage from './pages/OrderDetailPage'
 import ItemsPage from './pages/ItemsPage'
+import ItemDetailPage from './pages/ItemDetailPage'
 import ReferencesPage from './pages/ReferencesPage'
 import EmployeesPage from './pages/EmployeesPage'
 import ClientsPage from './pages/ClientsPage'
@@ -15,6 +16,8 @@ import LogisticsPage from './pages/LogisticsPage'
 import AnalyticsPage from './pages/AnalyticsPage'
 import DashboardPage from './pages/DashboardPage'
 import ProductionPage from './pages/ProductionPage'
+import ProfitabilityPage from './pages/ProfitabilityPage'
+import FeedbackPage from './pages/FeedbackPage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const auth = sessionStorage.getItem('auth')
@@ -36,13 +39,16 @@ export default function App() {
               <Route path="logistics" element={<LogisticsPage />} />
               <Route path="production" element={<ProductionPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
+              <Route path="profitability" element={<ProfitabilityPage />} />
               <Route path="orders/:id" element={<OrderDetailPage />} />
               <Route path="items" element={<ItemsPage />} />
+              <Route path="items/:id" element={<ItemDetailPage />} />
               <Route path="references" element={<ReferencesPage />} />
               <Route path="employees" element={<EmployeesPage />} />
               <Route path="clients" element={<ClientsPage />} />
               <Route path="error-log" element={<ErrorLogPage />} />
               <Route path="audit-log" element={<AuditLogPage />} />
+              <Route path="feedback" element={<FeedbackPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
