@@ -75,17 +75,22 @@ git clone https://github.com/USER/carpet-and-docs.git .
 
 ### А.4. Настроить бэкенд
 
-Открой `C:\carpet\src\backend\src\main\resources\application.yml` и замени блок `datasource`:
+**Никаких правок в `application.yml` или `SecurityConfig.java` руками не делать** — иначе при следующем `git pull` ваши боевые пароли затрутся.
 
-```yaml
-spring:
-  datasource:
-    url: jdbc:postgresql://localhost:5432/carpet_db
-    username: carpet
-    password: CARPET_DB_PASSWORD
-```
+Все секреты подменяются через переменные окружения:
 
-Логин/пароль для входа в само приложение — в `backend/src/main/java/ru/carpet/config/SecurityConfig.java`, метод `userDetailsService`. Меняй и пересобирай. По умолчанию `admin / foxyisgood` — сразу смени на что-то своё перед боевым запуском.
+| Переменная                  | Что задаёт                          | Пример              |
+|-----------------------------|--------------------------------------|---------------------|
+| `SPRING_DATASOURCE_URL`     | JDBC-URL до PostgreSQL              | `jdbc:postgresql://localhost:5432/carpet_db` |
+| `SPRING_DATASOURCE_USERNAME`| Пользователь БД                      | `carpet`            |
+| `SPRING_DATASOURCE_PASSWORD`| Пароль БД                            | `…ваш пароль…`      |
+| `APP_ADMIN_USERNAME`        | Логин для входа в приложение        | `admin`             |
+| `APP_ADMIN_PASSWORD`        | Пароль для входа в приложение       | `…длинный пароль…`  |
+| `SERVER_PORT`               | Порт бэкенда (опц.)                  | `8080`              |
+
+В репо `application.yml` лежит с дефолтами для разработки — при пуше эти дефолты будут перетираться при деплое, но env-переменные имеют приоритет, и боевые значения сохранятся.
+
+Сами переменные пропишутся на шаге А.7 при регистрации сервиса через NSSM. Сейчас просто запомни, какие пароли будешь использовать.
 
 ### А.5. Настроить фронтенд
 
@@ -129,32 +134,46 @@ java -jar app.jar
 
 ### А.7. Завернуть бэкенд в Windows-сервис (NSSM)
 
-NSSM — самый удобный способ повесить любую программу на автозапуск Windows.
+NSSM — самый удобный способ повесить программу на автозапуск Windows. Здесь же мы прописываем боевые env-переменные с паролями — они хранятся в реестре Windows, в репо никогда не попадают.
 
 ```powershell
 # Скачать
 Invoke-WebRequest https://nssm.cc/release/nssm-2.24.zip -OutFile $env:TEMP\nssm.zip
 Expand-Archive $env:TEMP\nssm.zip -DestinationPath C:\nssm -Force
-# Внутри C:\nssm\nssm-2.24\win64\nssm.exe
+
+# Параметры
+$nssm = "C:\nssm\nssm-2.24\win64\nssm.exe"
+$java = "C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot\bin\java.exe"  # подставь свой путь
 
 # Регистрируем сервис
-$nssm = "C:\nssm\nssm-2.24\win64\nssm.exe"
-$java = "C:\Program Files\Eclipse Adoptium\jdk-21.0.5.11-hotspot\bin\java.exe"  # подставь свой путь к java
-
 & $nssm install CarpetBackend $java "-jar C:\carpet\app\app.jar"
 & $nssm set CarpetBackend AppDirectory C:\carpet\app
 & $nssm set CarpetBackend Start SERVICE_AUTO_START
 & $nssm set CarpetBackend AppStdout C:\carpet\app\stdout.log
 & $nssm set CarpetBackend AppStderr C:\carpet\app\stderr.log
+
+# Боевые env-переменные. ПОДСТАВЬ свои значения вместо плейсхолдеров.
+# Каждая пара "KEY=VALUE" — отдельный аргумент.
+& $nssm set CarpetBackend AppEnvironmentExtra `
+    "SPRING_DATASOURCE_URL=jdbc:postgresql://localhost:5432/carpet_db" `
+    "SPRING_DATASOURCE_USERNAME=carpet" `
+    "SPRING_DATASOURCE_PASSWORD=CARPET_DB_PASSWORD" `
+    "APP_ADMIN_USERNAME=admin" `
+    "APP_ADMIN_PASSWORD=ВАШ_БОЕВОЙ_ПАРОЛЬ_ДЛЯ_ВХОДА"
+
 & $nssm start CarpetBackend
 ```
 
 Проверь:
 ```powershell
 Get-Service CarpetBackend     # Status: Running
+# Просмотр прописанных env-переменных:
+& $nssm get CarpetBackend AppEnvironmentExtra
 ```
 
 Если упал — смотри `C:\carpet\app\stderr.log`.
+
+> **Сменить пароль позже** — заново вызвать `nssm set ... AppEnvironmentExtra` со ВСЕМИ переменными (NSSM перезаписывает блок целиком), затем `Restart-Service CarpetBackend`. Деплои `git push` ничего из этих настроек не трогают.
 
 ### А.8. Раздача фронтенда через nginx
 

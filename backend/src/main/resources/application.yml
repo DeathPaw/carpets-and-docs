@@ -1,8 +1,15 @@
+# Все секреты вынесены в env-переменные с плейсхолдерами `${VAR:default}` —
+# в проде значения подменяются через NSSM AppEnvironmentExtra (см. SERVER.md),
+# в локальной разработке работают дефолты после двоеточия.
+#
+# Никогда не коммитим сюда боевые пароли. Если меняете дефолт — он попадёт
+# во все клоны репо, поэтому держим тут только dev-friendly значения.
+
 spring:
   datasource:
-    url: jdbc:postgresql://localhost:5432/carpet_db
-    username: glebramazanov
-    password:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/carpet_db}
+    username: ${SPRING_DATASOURCE_USERNAME:carpet}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
     driver-class-name: org.postgresql.Driver
 
   flyway:
@@ -16,6 +23,13 @@ spring:
     property-naming-strategy: SNAKE_CASE
     default-property-inclusion: non_null
 
+# Логин/пароль для входа в приложение. В проде задаются через env-переменные
+# APP_ADMIN_USERNAME / APP_ADMIN_PASSWORD; SecurityConfig читает их через @Value.
+app:
+  admin:
+    username: ${APP_ADMIN_USERNAME:admin}
+    password: ${APP_ADMIN_PASSWORD:foxyisgood}
+
 # Swagger UI — http://localhost:8080/swagger-ui.html
 # OpenAPI спецификация — http://localhost:8080/v3/api-docs
 springdoc:
@@ -27,4 +41,4 @@ springdoc:
     path: /v3/api-docs
 
 server:
-  port: 8080
+  port: ${SERVER_PORT:8080}

@@ -1,5 +1,6 @@
 package ru.carpet.config;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -21,6 +22,17 @@ import java.util.List;
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
+
+    /**
+     * Логин/пароль администратора берутся из properties (см. application.yml: app.admin.*).
+     * В проде задаются через env-переменные APP_ADMIN_USERNAME / APP_ADMIN_PASSWORD,
+     * чтобы боевые значения не лежали в репозитории.
+     */
+    @Value("${app.admin.username:admin}")
+    private String adminUsername;
+
+    @Value("${app.admin.password:foxyisgood}")
+    private String adminPassword;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -57,8 +69,8 @@ public class SecurityConfig {
     @Bean
     public UserDetailsService userDetailsService(PasswordEncoder encoder) {
         var user = User.builder()
-            .username("admin")
-            .password(encoder.encode("foxyisgood"))
+            .username(adminUsername)
+            .password(encoder.encode(adminPassword))
             .roles("ADMIN")
             .build();
         return new InMemoryUserDetailsManager(user);
