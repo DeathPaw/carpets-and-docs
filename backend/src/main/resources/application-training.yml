@@ -1,0 +1,60 @@
+# =================================================================================
+# Профиль `training` — изолированный тренажёр для обучения операторов.
+#
+# Запуск:
+#   mvn spring-boot:run -Dspring-boot.run.profiles=training
+#   ИЛИ
+#   java -jar target/*.jar --spring.profiles.active=training
+#
+# Что делает этот профиль:
+#   • Использует ОТДЕЛЬНУЮ базу `carpet_training_db` — изменения ничего не ломают
+#     в боевой `carpet_db`.
+#   • Слушает порт 8081, чтобы не конфликтовать с боевым :8080.
+#   • Включает компонент TrainingDataSeeder, который при старте
+#     - чистит БД (TRUNCATE всех таблиц),
+#     - заливает демо-данные (клиенты, сотрудники, услуги, прайс, пример заказа).
+#   • Открывает эндпоинт POST /api/training/reset — кнопка «Начать заново» во фронте.
+#
+# В этом профиле никакие секреты не критичны (всё игрушечное),
+# но мы всё равно держим их через ${VAR:default} для единообразия.
+# =================================================================================
+
+spring:
+  datasource:
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/carpet_training_db}
+    username: ${SPRING_DATASOURCE_USERNAME:carpet}
+    password: ${SPRING_DATASOURCE_PASSWORD:}
+    driver-class-name: org.postgresql.Driver
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+
+# Учётка для входа в тренажёр. Намеренно простая — это демо-стенд.
+app:
+  admin:
+    username: ${APP_ADMIN_USERNAME:admin}
+    password: ${APP_ADMIN_PASSWORD:foxy}
+  training:
+    enabled: true
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8081}
+
+logging:
+  level:
+    ru.carpet: INFO

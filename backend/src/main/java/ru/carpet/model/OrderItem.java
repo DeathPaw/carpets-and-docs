@@ -17,6 +17,9 @@ public record OrderItem(
         BigDecimal weight,
         BigDecimal area,
         BigDecimal runningMeters,
+        /** Периметр (V10). Самостоятельная мера; формула 2(L+W) работает только
+         *  для прямоугольника, а у нас бывают овальные/круглые ковры. */
+        BigDecimal perimeter,
         String cancellationReason,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

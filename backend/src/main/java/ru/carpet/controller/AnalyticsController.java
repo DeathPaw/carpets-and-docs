@@ -83,6 +83,18 @@ public class AnalyticsController {
         return dashboardRepository.dashboard();
     }
 
+    /**
+     * Детальные карточки проблемных заказов (Спринт B, замечание Миши 11 мая:
+     * «вместо квадратиков с цифрами выводи списки с деталями, ты на этом
+     * пространстве спокойно поместишь 4 карточки и провалишься в один клик»).
+     *
+     * Frontend опрашивает каждую минуту (см. autorefresh в DashboardPage).
+     */
+    @GetMapping("/dashboard/problems")
+    public Map<String, Object> dashboardProblems() {
+        return dashboardRepository.problemOrders(5);
+    }
+
     @GetMapping("/production-queue")
     public List<AnalyticsDto.ProductionQueueOrder> productionQueue() {
         return productionRepository.productionQueue();

@@ -81,7 +81,7 @@ export default function AnalyticsPage() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 16 }}>
         {/* Карта районов */}
-        <div className="card">
+        <div className="card" data-tour="analytics-district-map">
           <h2 style={{ marginTop: 0 }}>Заказы по районам</h2>
           <SpbDistrictMap data={mapData} onDistrictClick={(district) => navigate('/logistics?district=' + encodeURIComponent(district))} />
         </div>
@@ -143,7 +143,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Выручка по месяцам — полная ширина */}
-      <div className="card" style={{ marginBottom: 16 }}>
+      <div className="card" data-tour="analytics-revenue" style={{ marginBottom: 16 }}>
         <h2 style={{ marginTop: 0 }}>Выручка по месяцам</h2>
         {revenueChartData.length === 0 ? <div className="empty">Нет данных</div> : (
           <ResponsiveContainer width="100%" height={300}>
@@ -158,7 +158,7 @@ export default function AnalyticsPage() {
       </div>
 
       {/* Топ клиенты */}
-      <div className="card">
+      <div className="card" data-tour="analytics-top-clients">
         <h2 style={{ marginTop: 0 }}>Топ-10 клиентов</h2>
         {topClients.length === 0 ? <div className="empty">Нет данных</div> : (
           <table>

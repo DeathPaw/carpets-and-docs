@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { emitApiSuccess } from './events'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || ''
 
@@ -18,9 +19,22 @@ client.interceptors.request.use(config => {
   return config
 })
 
-// При 401 — перенаправляем на логин
+// При 401 — перенаправляем на логин. На успешных ответах — кидаем событие в шину
+// (используется челлендж-панелью тренажёра: при создании заказа, добавлении
+// позиции и т.п. она автоматически отмечает шаг выполненным).
 client.interceptors.response.use(
-  response => response,
+  response => {
+    try {
+      emitApiSuccess({
+        method:       (response.config.method || 'GET').toUpperCase(),
+        url:          response.config.url || '',
+        status:       response.status,
+        requestData:  response.config.data ? safeJson(response.config.data) : undefined,
+        responseData: response.data,
+      })
+    } catch { /* шина не должна мешать основному флоу */ }
+    return response
+  },
   error => {
     if (error.response?.status === 401) {
       sessionStorage.removeItem('auth')
@@ -29,5 +43,11 @@ client.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+
+/** axios передаёт тело запроса как string (после JSON.stringify). Парсим обратно. */
+function safeJson(raw: unknown): unknown {
+  if (typeof raw !== 'string') return raw
+  try { return JSON.parse(raw) } catch { return raw }
+}
 
 export default client

@@ -21,6 +21,29 @@ export const getTopClients = () =>
 export const getDashboard = () =>
   client.get<Record<string, number>>('/api/analytics/dashboard').then(r => r.data)
 
+/**
+ * Карточки проблемных заказов для главной (Спринт B). Возвращает три категории
+ * по топ-N заказов в каждой. На фронте отображаются вместо «голых счётчиков».
+ */
+export interface ProblemOrderCard {
+  id: number
+  client_name: string
+  status: string
+  problem_reason: string
+  problem_date: string | null
+  address: string | null
+}
+export interface ProblemOrdersResponse {
+  overdue_actual: ProblemOrderCard[]
+  unassigned_logistics: ProblemOrderCard[]
+  bad_address: ProblemOrderCard[]
+  /** Спринт V9: позиции с delivery_state=LOST в незакрытых заказах. */
+  lost_in_delivery: ProblemOrderCard[]
+}
+
+export const getProblemOrders = () =>
+  client.get<ProblemOrdersResponse>('/api/analytics/dashboard/problems').then(r => r.data)
+
 export const getProductionQueue = () =>
   client.get<{order_id: number, client_name: string, status: string, created_at: string, total_amount: number, pickup_district: string, items_count: number, services_count: number, services_done: number}[]>('/api/analytics/production-queue').then(r => r.data)
 

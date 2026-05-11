@@ -1,16 +1,18 @@
 package ru.carpet.controller;
 
-import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
-import ru.carpet.dto.ItemTypeRequest;
-import ru.carpet.dto.ItemTypeWithServices;
 import ru.carpet.model.ItemType;
 import ru.carpet.service.AuditLogService;
 import ru.carpet.service.ItemTypeService;
 
 import java.util.List;
+import java.util.Map;
 
+/**
+ * Типы вещей клиента (V10). Поля упростились — теперь только {@code name}.
+ * Default-логика переехала на SKU (см. {@link ru.carpet.model.Sku}).
+ */
 @RestController
 @RequestMapping("/api/item-types")
 public class ItemTypeController {
@@ -24,28 +26,26 @@ public class ItemTypeController {
     }
 
     @GetMapping
-    public List<ItemTypeWithServices> getAll() {
-        return service.findAll().stream()
-                .map(t -> service.findByIdWithServices(t.id()))
-                .toList();
+    public List<ItemType> getAll() {
+        return service.findAll();
     }
 
     @GetMapping("/{id}")
-    public ItemTypeWithServices getById(@PathVariable Long id) {
-        return service.findByIdWithServices(id);
+    public ItemType getById(@PathVariable Long id) {
+        return service.findById(id);
     }
 
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    public ItemType create(@Valid @RequestBody ItemTypeRequest request) {
-        ItemType t = service.create(request.name(), request.isDefault(), request.defaultPrice(), request.freeThreshold());
+    public ItemType create(@RequestBody Map<String, String> body) {
+        ItemType t = service.create(body.get("name"));
         auditLogService.log("ITEM_TYPE", t.id(), "CREATE", "Создан тип позиции: " + t.name());
         return t;
     }
 
     @PutMapping("/{id}")
-    public ItemType update(@PathVariable Long id, @Valid @RequestBody ItemTypeRequest request) {
-        ItemType t = service.update(id, request.name(), request.isDefault(), request.defaultPrice(), request.freeThreshold());
+    public ItemType update(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        ItemType t = service.update(id, body.get("name"));
         auditLogService.log("ITEM_TYPE", id, "UPDATE", "Обновлён тип позиции: " + t.name());
         return t;
     }
@@ -56,5 +56,4 @@ public class ItemTypeController {
         service.delete(id);
         auditLogService.log("ITEM_TYPE", id, "DELETE", "Удалён тип позиции #" + id);
     }
-
 }

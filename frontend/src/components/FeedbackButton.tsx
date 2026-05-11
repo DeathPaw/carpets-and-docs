@@ -3,6 +3,7 @@ import { useLocation } from 'react-router-dom'
 import { createFeedback } from '../api/feedback'
 import { ALL_FEEDBACK_TOPICS, FEEDBACK_TOPIC_LABELS } from '../constants/feedback'
 import { useToast } from './Toast'
+import Tiles from './Tiles'
 import type { FeedbackTopic } from '../types'
 
 /**
@@ -157,11 +158,11 @@ export default function FeedbackButton() {
 
             <div className="form-group">
               <label>Тема *</label>
-              <select value={topic} onChange={e => setTopic(e.target.value as FeedbackTopic)}>
-                {ALL_FEEDBACK_TOPICS.map(t => (
-                  <option key={t} value={t}>{FEEDBACK_TOPIC_LABELS[t]}</option>
-                ))}
-              </select>
+              <Tiles<FeedbackTopic>
+                options={ALL_FEEDBACK_TOPICS.map(t => ({ value: t, label: FEEDBACK_TOPIC_LABELS[t] }))}
+                value={topic}
+                onChange={setTopic}
+              />
             </div>
 
             <div className="form-group">

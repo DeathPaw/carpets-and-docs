@@ -5,6 +5,7 @@ import { getOrdersQuery } from '../api/orders'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import CreateOrderModal from '../components/orders/CreateOrderModal'
+import { isViewerMode } from '../utils/viewer'
 import type { Order, OrderStatus } from '../types'
 
 // Подписи и список статусов теперь общие — см. constants/statuses.ts
@@ -233,7 +234,10 @@ export default function OrdersPage() {
         <h1>Заказы</h1>
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn-secondary" onClick={exportXLSX}>Экспорт Excel</button>
-          <button className="btn-primary" onClick={() => setShowCreate(true)}>+ Новый заказ</button>
+          {/* В viewer-mode (моноблок) скрываем мутирующие кнопки. */}
+          {!isViewerMode() && (
+            <button className="btn-primary" onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
+          )}
         </div>
       </div>
 
@@ -271,15 +275,46 @@ export default function OrdersPage() {
         )
       })()}
 
-      <div className="filters">
-        <div className="form-group">
+      {/* Статусы — отдельная полоса плашек над основными фильтрами (Спринт-фидбэк
+          11 мая). Плашки используют те же CSS-классы badge-*, что и в таблице —
+          оператор сразу видит цветовую кодировку. Неактивные — приглушённые. */}
+      <div className="filters" data-tour="orders-filters" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
+        <div className="form-group" style={{ flex: '1 1 100%' }}>
           <label>Статус</label>
-          <MultiSelectFilter
-            options={ALL_STATUSES.map(s => ({ value: s, label: STATUS_LABELS[s] || s }))}
-            value={statusFilters}
-            onChange={vals => { setStatusFilters(vals as OrderStatus[]); setPage(0) }}
-            placeholder="Все статусы"
-          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {ALL_STATUSES.map(s => {
+              const on = statusFilters.includes(s)
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={`badge badge-${s.toLowerCase()}`}
+                  onClick={() => {
+                    setStatusFilters(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
+                    setPage(0)
+                  }}
+                  style={{
+                    cursor: 'pointer',
+                    padding: '5px 12px',
+                    fontSize: 13,
+                    border: on ? '2px solid #2c3e50' : '1px solid transparent',
+                    opacity: statusFilters.length === 0 || on ? 1 : 0.4,
+                    fontWeight: on ? 700 : 500,
+                  }}
+                >{STATUS_LABELS[s] || s}</button>
+              )
+            })}
+            {statusFilters.length > 0 && (
+              <button
+                type="button"
+                onClick={() => { setStatusFilters([]); setPage(0) }}
+                style={{
+                  background: 'transparent', border: 'none', color: '#7f8c8d',
+                  cursor: 'pointer', fontSize: 12, padding: '5px 8px',
+                }}
+              >Снять все</button>
+            )}
+          </div>
         </div>
         {clientIdFilter && (
           <div className="form-group">
@@ -347,21 +382,38 @@ export default function OrdersPage() {
             style={{ minWidth: 140 }}
           />
         </div>
+        {/* Блок «Период»: поле даты + диапазон. «Поле даты» раньше жило отдельным
+            фильтром, но без контекста было непонятно — что за «поле»? Перенесли
+            сюда (фидбэк 11 мая), и оператор сразу видит: фильтруем по диапазону
+            ВОТ ЭТОЙ даты. Поле даты сделано плашками — три варианта, дроп-даун
+            был лишним. */}
         <div className="form-group">
-          <label>Поле даты</label>
-          <select value={dateField} onChange={e => { setDateField(e.target.value as typeof dateField); setPage(0) }}>
-            <option value="created_at">Создан</option>
-            <option value="pickup_date">Забор (план)</option>
-            <option value="delivery_date">Доставка (план)</option>
-          </select>
-        </div>
-        <div className="form-group">
-          <label>Дата с</label>
-          <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
-        </div>
-        <div className="form-group">
-          <label>Дата по</label>
-          <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(0) }} />
+          <label>Период</label>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+            <div style={{ display: 'inline-flex', border: '1px solid #bdc3c7', borderRadius: 6, overflow: 'hidden' }}>
+              {[
+                { v: 'created_at',   label: 'Создан' },
+                { v: 'pickup_date',  label: 'Забор' },
+                { v: 'delivery_date',label: 'Доставка' },
+              ].map(o => (
+                <button
+                  key={o.v}
+                  type="button"
+                  onClick={() => { setDateField(o.v as typeof dateField); setPage(0) }}
+                  style={{
+                    padding: '6px 10px', border: 'none', cursor: 'pointer', fontSize: 13,
+                    background: dateField === o.v ? '#3498db' : '#fff',
+                    color: dateField === o.v ? '#fff' : '#2c3e50',
+                    fontWeight: dateField === o.v ? 600 : 500,
+                  }}
+                >{o.label}</button>
+              ))}
+            </div>
+            <span style={{ fontSize: 12, color: '#7f8c8d' }}>с</span>
+            <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
+            <span style={{ fontSize: 12, color: '#7f8c8d' }}>по</span>
+            <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(0) }} />
+          </div>
         </div>
       </div>
 
@@ -389,7 +441,7 @@ export default function OrdersPage() {
               </button>
             )}
           </div>
-          <table>
+          <table data-tour="orders-table">
             <thead>
               <tr>
                 <th onClick={e => toggleSort('id', sortMode(e))} style={{ cursor: 'pointer' }}>

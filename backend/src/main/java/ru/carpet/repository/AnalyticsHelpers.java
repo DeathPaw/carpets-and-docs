@@ -15,16 +15,19 @@ final class AnalyticsHelpers {
     private AnalyticsHelpers() {}
 
     /**
-     * Расчёт себестоимости по pricing_type — единое выражение для всех аналитик доходности.
-     * Завязано на алиасы {@code pl} (price_list), {@code sd} (service_definitions),
-     * {@code oi} (order_items). Все запросы доходности используют эти псевдонимы.
+     * Расчёт себестоимости по pricing_type — V10: завязано на SKU (s.cost_price,
+     * s.pricing_type) и параметры позиции (oi.*). Все запросы доходности
+     * используют алиас {@code s} для skus.
      */
     static final String COST_EXPR =
-            "COALESCE(SUM(pl.cost_price * CASE " +
-            "  WHEN sd.pricing_type = 'FIXED' THEN 1 " +
-            "  WHEN sd.pricing_type = 'BY_WEIGHT' THEN COALESCE(oi.weight, 0) " +
-            "  WHEN sd.pricing_type = 'BY_AREA' THEN COALESCE(oi.length * oi.width, COALESCE(oi.area, 0)) " +
-            "  WHEN sd.pricing_type = 'BY_PERIMETER' THEN COALESCE(2 * (oi.length + oi.width), 0) " +
+            "COALESCE(SUM(s.cost_price * CASE " +
+            "  WHEN s.pricing_type = 'FIXED'             THEN 1 " +
+            "  WHEN s.pricing_type = 'BY_WEIGHT'         THEN COALESCE(oi.weight, 0) " +
+            "  WHEN s.pricing_type = 'BY_AREA'           THEN COALESCE(oi.area, 0) " +
+            "  WHEN s.pricing_type = 'BY_PERIMETER'      THEN COALESCE(oi.perimeter, 0) " +
+            "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
+            "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
+            "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
             "  ELSE 1 END), 0)";
 
     /** Безопасное чтение Long: возвращает 0 если NULL. */

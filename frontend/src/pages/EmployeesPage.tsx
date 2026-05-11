@@ -103,7 +103,7 @@ function EmployeeServicesModal({
                 <tr key={service.id}>
                   <td>{service.id}</td>
                   <td>{service.order_item_id}</td>
-                  <td>{service.service_def_name || `Услуга #${service.service_def_id}`}</td>
+                  <td>{service.sku_name || `SKU #${service.sku_id}`}</td>
                   <td>
                     <span className={`badge badge-${service.status.toLowerCase()}`}>
                       {SERVICE_STATUS_LABELS[service.status]}

@@ -141,6 +141,16 @@ export const updateActualDates = (id: number, data: {
 }) =>
   client.patch<Order>(`/api/orders/${id}/actual-dates`, data).then(r => r.data)
 
+/**
+ * Назначить водителя на заказ (Спринт D — фидбэк по логистике от 11 мая).
+ * Передаём `employee_id: null` чтобы снять назначение. Возвращает обновлённое
+ * имя — UI сразу подставляет в чип карточки.
+ */
+export const setOrderDriver = (id: number, employeeId: number | null) =>
+  client.patch<{ ok: boolean; assigned_driver_id: number | null; driver_name: string | null }>(
+    `/api/orders/${id}/driver`, { employee_id: employeeId }
+  ).then(r => r.data)
+
 // Order Modifiers
 export const getOrderModifiers = (orderId: number) =>
   client.get<import('../types').OrderModifier[]>(`/api/orders/${orderId}/modifiers`).then(r => r.data)

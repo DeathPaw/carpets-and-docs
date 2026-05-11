@@ -495,7 +495,7 @@ export default function ClientsPage() {
         </button>
       </div>
 
-      <div className="filters">
+      <div className="filters" data-tour="clients-search">
         <div className="form-group" style={{ flex: 1, minWidth: 240 }}>
           <label>Поиск</label>
           <input

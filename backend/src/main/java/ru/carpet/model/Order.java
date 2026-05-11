@@ -37,6 +37,10 @@ public record Order(
         BigDecimal baseAmount,
         BigDecimal discountPercent,
         String cancellationReason,
+        /** Назначенный водитель/логист (Спринт D). NULL — не назначен. */
+        Long assignedDriverId,
+        /** Имя назначенного водителя для удобства фронта — JOIN'ится в репозитории. */
+        String assignedDriverName,
         Long version,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

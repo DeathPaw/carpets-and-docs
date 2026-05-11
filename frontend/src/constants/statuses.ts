@@ -11,6 +11,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   PARTIALLY_DONE: 'Частично готов',
   DONE: 'Готов',
   DELIVERED: 'Доставлен',
+  PARTIALLY_DELIVERED: 'Частично доставлен',
   COMPLETED: 'Завершён',
   CANCELLED: 'Отменен',
 }
@@ -18,12 +19,12 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
 /** Все статусы заказа в естественном порядке прогресса. */
 export const ALL_ORDER_STATUSES: OrderStatus[] = [
   'LEAD', 'CREATED', 'FOR_PICKUP', 'IN_PROGRESS', 'PARTIALLY_DONE',
-  'DONE', 'DELIVERED', 'COMPLETED', 'CANCELLED',
+  'DONE', 'DELIVERED', 'PARTIALLY_DELIVERED', 'COMPLETED', 'CANCELLED',
 ]
 
 /** Заказ считается «активным» если он не в финальных статусах. */
 export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [
-  'LEAD', 'CREATED', 'FOR_PICKUP', 'IN_PROGRESS', 'PARTIALLY_DONE', 'DONE',
+  'LEAD', 'CREATED', 'FOR_PICKUP', 'IN_PROGRESS', 'PARTIALLY_DONE', 'DONE', 'PARTIALLY_DELIVERED',
 ]
 
 export const ITEM_STATUS_LABELS: Record<OrderItemStatus, string> = {

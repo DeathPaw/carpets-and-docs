@@ -18,10 +18,20 @@ import DashboardPage from './pages/DashboardPage'
 import ProductionPage from './pages/ProductionPage'
 import ProfitabilityPage from './pages/ProfitabilityPage'
 import FeedbackPage from './pages/FeedbackPage'
+import WorkerLoginPage from './pages/worker/WorkerLoginPage'
+import WorkerHomePage from './pages/worker/WorkerHomePage'
+import WorkerRoutePage from './pages/worker/WorkerRoutePage'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
   const auth = sessionStorage.getItem('auth')
   if (!auth) return <Navigate to="/login" replace />
+  return <>{children}</>
+}
+
+/** Гард для маршрутов работника — отдельная сессия, sessionStorage.worker_id. */
+function RequireWorker({ children }: { children: React.ReactNode }) {
+  const id = sessionStorage.getItem('worker_id')
+  if (!id) return <Navigate to="/worker-login" replace />
   return <>{children}</>
 }
 
@@ -32,6 +42,11 @@ export default function App() {
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            {/* Личный кабинет работника (Спринт D) — отдельная авторизация по PIN,
+                полностью отдельный layout (без оператора-сайдбара). */}
+            <Route path="/worker-login" element={<WorkerLoginPage />} />
+            <Route path="/worker" element={<RequireWorker><WorkerHomePage /></RequireWorker>} />
+            <Route path="/worker/route" element={<RequireWorker><WorkerRoutePage /></RequireWorker>} />
             <Route path="/" element={<RequireAuth><Layout /></RequireAuth>}>
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<DashboardPage />} />

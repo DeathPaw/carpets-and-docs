@@ -11,36 +11,39 @@ import ru.carpet.repository.*;
 import java.math.BigDecimal;
 import java.util.*;
 
+/**
+ * Услуги на позициях заказа (V10).
+ *
+ * <p>Привязка теперь к SKU (см. {@link Sku}). Имя и группа берутся snapshot'ом
+ * из конкретной версии SKU через {@link OrderItemServiceInstanceRepository}.
+ *
+ * <p>При добавлении услуги к позиции рассчитываем цену через {@link PricingHelper}
+ * по pricingType SKU и параметрам позиции (вес/площадь/периметр и т.д.).
+ */
 @Service
 public class OrderItemServiceInstanceService {
 
     private final OrderItemServiceInstanceRepository repository;
     private final ServiceAssigneeRepository assigneeRepository;
     private final EmployeeRepository employeeRepository;
-    private final ServiceDefinitionRepository serviceDefinitionRepository;
     private final OrderItemRepository orderItemRepository;
-    private final PricingService pricingService;
     private final OrderItemService orderItemService;
-    private final PriceListRepository priceListRepository;
+    private final SkuService skuService;
 
     public OrderItemServiceInstanceService(
             OrderItemServiceInstanceRepository repository,
             ServiceAssigneeRepository assigneeRepository,
             EmployeeRepository employeeRepository,
-            ServiceDefinitionRepository serviceDefinitionRepository,
             OrderItemRepository orderItemRepository,
-            PricingService pricingService,
             OrderItemService orderItemService,
-            PriceListRepository priceListRepository
+            SkuService skuService
     ) {
         this.repository = repository;
         this.assigneeRepository = assigneeRepository;
         this.employeeRepository = employeeRepository;
-        this.serviceDefinitionRepository = serviceDefinitionRepository;
         this.orderItemRepository = orderItemRepository;
-        this.pricingService = pricingService;
         this.orderItemService = orderItemService;
-        this.priceListRepository = priceListRepository;
+        this.skuService = skuService;
     }
 
     public List<OrderItemServiceInstance> findByOrderItemId(Long orderItemId) {
@@ -48,76 +51,34 @@ public class OrderItemServiceInstanceService {
     }
 
     public List<OrderItemServiceWithAssignees> findByOrderItemIdWithAssignees(Long orderItemId) {
-        return findByOrderItemIdWithAssigneesBatch(orderItemId);
-    }
-
-    public List<OrderItemServiceWithAssignees> findByOrderItemIdWithAssigneesBatch(Long orderItemId) {
         List<OrderItemServiceInstance> services = repository.findByOrderItemId(orderItemId);
-        if (services.isEmpty()) return List.of();
-
-        List<Long> serviceIds = services.stream().map(OrderItemServiceInstance::id).toList();
-        Map<Long, List<Long>> assigneeMap = assigneeRepository.findEmployeeIdsByServiceIds(serviceIds);
-
-        // Collect all employee IDs
-        Set<Long> allEmpIds = new HashSet<>();
-        assigneeMap.values().forEach(allEmpIds::addAll);
-        Map<Long, Employee> empMap = allEmpIds.isEmpty() ? Map.of() : employeeRepository.findByIds(new ArrayList<>(allEmpIds));
-
-        // Collect all service def IDs
-        List<Long> defIds = services.stream().map(OrderItemServiceInstance::serviceDefId).distinct().toList();
-        Map<Long, ServiceDefinition> defMap = new HashMap<>();
-        for (Long defId : defIds) {
-            serviceDefinitionRepository.findById(defId).ifPresent(d -> defMap.put(defId, d));
-        }
-
-        return services.stream().map(service -> {
-            List<Long> empIds = assigneeMap.getOrDefault(service.id(), List.of());
-            List<Employee> assignees = empIds.stream().map(empMap::get).filter(Objects::nonNull).toList();
-            ServiceDefinition sd = defMap.get(service.serviceDefId());
-            return new OrderItemServiceWithAssignees(
-                service.id(), service.orderItemId(), service.serviceDefId(),
-                sd != null ? sd.name() : null, service.status(), service.price(),
-                service.isManualPrice(), assignees, service.cancellationReason(),
-                service.createdAt(), service.updatedAt()
-            );
-        }).toList();
+        return enrichWithAssignees(services);
     }
 
-    /**
-     * Все услуги по заказу одним батчем — устраняет N+1 на странице заказа,
-     * где раньше делалось по одному запросу на каждую позицию.
-     */
+    /** Все услуги по заказу одним батчем — устраняет N+1 на странице заказа. */
     public List<OrderItemServiceWithAssignees> findByOrderIdWithAssignees(Long orderId) {
         List<OrderItem> items = orderItemRepository.findByOrderId(orderId);
         if (items.isEmpty()) return List.of();
-
         List<Long> itemIds = items.stream().map(OrderItem::id).toList();
         List<OrderItemServiceInstance> services = repository.findByOrderItemIds(itemIds);
-        if (services.isEmpty()) return List.of();
+        return enrichWithAssignees(services);
+    }
 
+    private List<OrderItemServiceWithAssignees> enrichWithAssignees(List<OrderItemServiceInstance> services) {
+        if (services.isEmpty()) return List.of();
         List<Long> serviceIds = services.stream().map(OrderItemServiceInstance::id).toList();
         Map<Long, List<Long>> assigneeMap = assigneeRepository.findEmployeeIdsByServiceIds(serviceIds);
-
         Set<Long> allEmpIds = new HashSet<>();
         assigneeMap.values().forEach(allEmpIds::addAll);
         Map<Long, Employee> empMap = allEmpIds.isEmpty() ? Map.of()
                 : employeeRepository.findByIds(new ArrayList<>(allEmpIds));
-
-        List<Long> defIds = services.stream().map(OrderItemServiceInstance::serviceDefId).distinct().toList();
-        Map<Long, ServiceDefinition> defMap = new HashMap<>();
-        for (Long defId : defIds) {
-            serviceDefinitionRepository.findById(defId).ifPresent(d -> defMap.put(defId, d));
-        }
-
         return services.stream().map(s -> {
             List<Long> empIds = assigneeMap.getOrDefault(s.id(), List.of());
             List<Employee> assignees = empIds.stream().map(empMap::get).filter(Objects::nonNull).toList();
-            ServiceDefinition sd = defMap.get(s.serviceDefId());
             return new OrderItemServiceWithAssignees(
-                    s.id(), s.orderItemId(), s.serviceDefId(),
-                    sd != null ? sd.name() : null, s.status(), s.price(),
-                    s.isManualPrice(), assignees, s.cancellationReason(),
-                    s.createdAt(), s.updatedAt()
+                    s.id(), s.orderItemId(), s.skuId(), s.skuName(), s.skuGroupName(),
+                    s.pricingType(), s.status(), s.price(), s.isManualPrice(),
+                    assignees, s.cancellationReason(), s.createdAt(), s.updatedAt()
             );
         }).toList();
     }
@@ -130,51 +91,33 @@ public class OrderItemServiceInstanceService {
         return repository.sumPriceByEmployeeId(employeeId, status, dateFrom, dateTo);
     }
 
+    /**
+     * Добавить услугу к позиции по выбранному SKU.
+     * Цена рассчитывается через {@link PricingHelper} (SKU.price × соответствующий
+     * параметр позиции в зависимости от pricingType).
+     */
     @Transactional
-    public OrderItemServiceInstance addService(Long orderItemId, Long serviceDefId) {
-        // Получаем позицию заказа
+    public OrderItemServiceInstance addService(Long orderItemId, Long skuId) {
         OrderItem orderItem = orderItemRepository.findById(orderItemId)
                 .orElseThrow(() -> new EntityNotFoundException("OrderItem not found: " + orderItemId));
+        Sku sku = skuService.findById(skuId);
 
-        // Проверяем доступность услуги для данного типа позиции через прайс-лист
-        PriceListEntry priceListEntry = priceListRepository.findByItemTypeIdAndServiceDefId(orderItem.itemTypeId(), serviceDefId)
-                .filter(PriceListEntry::isActive)
-                .orElseThrow(() -> new BusinessRuleException("Услуга не доступна для данного типа позиции"));
-
-        // Запрет дублей: одну и ту же услугу нельзя повесить на позицию дважды.
-        // CANCELLED не считается — отменённая услуга не блокирует повторное добавление.
+        // Запрет дублей: одну и ту же SKU нельзя повесить на позицию дважды.
         boolean alreadyExists = repository.findByOrderItemId(orderItemId).stream()
-                .anyMatch(s -> s.serviceDefId().equals(serviceDefId)
+                .anyMatch(s -> Objects.equals(s.skuId(), skuId)
                         && s.status() != ServiceStatus.CANCELLED);
         if (alreadyExists) {
             throw new BusinessRuleException("Эта услуга уже добавлена к позиции");
         }
 
-        // Создаем новую услугу для позиции
-        repository.saveAll(orderItemId, List.of(serviceDefId));
-
-        // Получаем созданную услугу
-        List<OrderItemServiceInstance> services = repository.findByOrderItemId(orderItemId);
-        OrderItemServiceInstance service = services.stream()
-                .filter(s -> s.serviceDefId().equals(serviceDefId))
-                .reduce((first, second) -> second) // получаем последнюю созданную
-                .orElseThrow(() -> new EntityNotFoundException("Service not created"));
-
-        // Рассчитываем стоимость услуги используя цену из прайс-листа
-        ServiceDefinition serviceDef = serviceDefinitionRepository.findById(serviceDefId).orElse(null);
-
-        if (serviceDef != null) {
-            BigDecimal calculatedPrice = pricingService.calculateServicePrice(priceListEntry.price(), serviceDef.pricingType(), orderItem);
-            repository.updateCalculatedPrice(service.id(), calculatedPrice);
-            // Пересчитываем стоимость позиции
-            orderItemService.recalculateItemPrice(orderItemId);
-        }
-
-        return repository.findById(service.id()).orElseThrow();
+        BigDecimal price = PricingHelper.calculate(sku.price(), sku.pricingType(), orderItem);
+        Long newId = repository.saveOne(orderItemId, skuId, price);
+        orderItemService.recalculateItemPrice(orderItemId);
+        return repository.findById(newId).orElseThrow();
     }
 
-    public OrderItemServiceWithAssignees addServiceWithAssignees(Long orderItemId, Long serviceDefId) {
-        OrderItemServiceInstance service = addService(orderItemId, serviceDefId);
+    public OrderItemServiceWithAssignees addServiceWithAssignees(Long orderItemId, Long skuId) {
+        OrderItemServiceInstance service = addService(orderItemId, skuId);
         return mapToWithAssignees(service);
     }
 
@@ -188,24 +131,16 @@ public class OrderItemServiceInstanceService {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
 
-        // Блокировка: нельзя перевести в IN_PROGRESS или DONE без назначенного исполнителя
         if (status != ServiceStatus.CREATED && status != ServiceStatus.CANCELLED) {
             List<Long> assigneeIds = assigneeRepository.findEmployeeIdsByServiceId(serviceId);
             if (assigneeIds.isEmpty()) {
                 throw new BusinessRuleException("Невозможно сменить статус: не назначен исполнитель");
             }
-        }
-
-        // Блокировка: если размеры не заполнены для данного pricing_type, нельзя переводить дальше CREATED
-        if (status != ServiceStatus.CREATED && status != ServiceStatus.CANCELLED) {
             OrderItem orderItem = orderItemRepository.findById(instance.orderItemId()).orElse(null);
-            ServiceDefinition serviceDef = serviceDefinitionRepository.findById(instance.serviceDefId()).orElse(null);
-            if (orderItem != null && serviceDef != null) {
-                String missing = checkDimensionsForPricing(serviceDef.pricingType(), orderItem);
-                if (missing != null) {
-                    throw new ru.carpet.exception.BusinessRuleException(
-                            "Невозможно сменить статус услуги: не заполнены " + missing + " в позиции заказа");
-                }
+            String missing = PricingHelper.checkDimensions(instance.pricingType(), orderItem);
+            if (missing != null) {
+                throw new BusinessRuleException(
+                        "Невозможно сменить статус услуги: не заполнено в позиции — " + missing);
             }
         }
 
@@ -218,7 +153,6 @@ public class OrderItemServiceInstanceService {
         } else {
             repository.updateStatus(serviceId, status);
         }
-        // Автоматически пересчитываем статус позиции
         orderItemService.recalculateItemStatus(instance.orderItemId());
         return repository.findById(serviceId).orElseThrow();
     }
@@ -228,24 +162,20 @@ public class OrderItemServiceInstanceService {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
         repository.updatePrice(serviceId, price);
-        // Автоматически пересчитываем стоимость позиции
         orderItemService.recalculateItemPrice(instance.orderItemId());
         return repository.findById(serviceId).orElseThrow();
     }
 
     public OrderItemServiceWithAssignees updateStatusWithAssignees(Long serviceId, ServiceStatus status) {
-        OrderItemServiceInstance service = updateStatus(serviceId, status);
-        return mapToWithAssignees(service);
+        return mapToWithAssignees(updateStatus(serviceId, status));
     }
 
     public OrderItemServiceWithAssignees updateStatusWithAssignees(Long serviceId, ServiceStatus status, String cancellationReason) {
-        OrderItemServiceInstance service = updateStatus(serviceId, status, cancellationReason);
-        return mapToWithAssignees(service);
+        return mapToWithAssignees(updateStatus(serviceId, status, cancellationReason));
     }
 
     public OrderItemServiceWithAssignees updatePriceWithAssignees(Long serviceId, java.math.BigDecimal price) {
-        OrderItemServiceInstance service = updatePrice(serviceId, price);
-        return mapToWithAssignees(service);
+        return mapToWithAssignees(updatePrice(serviceId, price));
     }
 
     @Transactional
@@ -261,43 +191,18 @@ public class OrderItemServiceInstanceService {
 
     public OrderItemServiceWithAssignees assignEmployeesWithAssignees(Long serviceId, List<Long> employeeIds) {
         assignEmployees(serviceId, employeeIds);
-        OrderItemServiceInstance service = repository.findById(serviceId).orElseThrow();
-        return mapToWithAssignees(service);
+        return mapToWithAssignees(repository.findById(serviceId).orElseThrow());
     }
 
-    private OrderItemServiceWithAssignees mapToWithAssignees(OrderItemServiceInstance service) {
-        List<Long> employeeIds = assigneeRepository.findEmployeeIdsByServiceId(service.id());
+    private OrderItemServiceWithAssignees mapToWithAssignees(OrderItemServiceInstance s) {
+        List<Long> employeeIds = assigneeRepository.findEmployeeIdsByServiceId(s.id());
         List<Employee> assignees = employeeIds.stream()
                 .map(id -> employeeRepository.findById(id).orElse(null))
-                .filter(emp -> emp != null)
-                .toList();
-
-        ServiceDefinition serviceDef = serviceDefinitionRepository.findById(service.serviceDefId()).orElse(null);
-        String serviceDefName = serviceDef != null ? serviceDef.name() : null;
-
+                .filter(Objects::nonNull).toList();
         return new OrderItemServiceWithAssignees(
-                service.id(),
-                service.orderItemId(),
-                service.serviceDefId(),
-                serviceDefName,
-                service.status(),
-                service.price(),
-                service.isManualPrice(),
-                assignees,
-                service.cancellationReason(),
-                service.createdAt(),
-                service.updatedAt()
+                s.id(), s.orderItemId(), s.skuId(), s.skuName(), s.skuGroupName(),
+                s.pricingType(), s.status(), s.price(), s.isManualPrice(),
+                assignees, s.cancellationReason(), s.createdAt(), s.updatedAt()
         );
-    }
-
-    /** Проверяет, заполнены ли нужные размеры для pricing_type. Возвращает null если ОК, иначе описание недостающих полей. */
-    private String checkDimensionsForPricing(ru.carpet.model.PricingType pricingType, OrderItem item) {
-        return switch (pricingType) {
-            case BY_AREA -> (item.length() == null || item.width() == null) ? "длина и ширина" : null;
-            case BY_WEIGHT -> item.weight() == null ? "вес" : null;
-            case BY_PERIMETER -> (item.runningMeters() == null && (item.length() == null || item.width() == null))
-                    ? "погонные метры или длина и ширина" : null;
-            case FIXED -> null;
-        };
     }
 }

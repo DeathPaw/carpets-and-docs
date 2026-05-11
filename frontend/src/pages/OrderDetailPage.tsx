@@ -11,7 +11,7 @@ import {
   type ItemPhoto,
 } from '../api/orders'
 import { getItemServices, getAllOrderServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
-import { getItemTypes, getEmployees, getItemType, getPriceModifiers, getEmployeeRoles } from '../api/references'
+import { getItemTypes, getEmployees, getPriceModifiers, getEmployeeRoles } from '../api/references'
 import { getClient, getClientModifiers, getClientEvents, addClientEvent } from '../api/clients'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
@@ -21,10 +21,11 @@ import DistrictSelect from '../components/DistrictSelect'
 import AddressInput from '../components/AddressInput'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal } from '../components/orders/order-detail-modals'
+import SkuPicker from '../components/SkuPicker'
 import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
-  PaymentType, PriceListEntry,
+  PaymentType,
   PriceModifier, OrderModifier, Client, EmployeeRole,
 } from '../types'
 
@@ -58,6 +59,7 @@ function Badge({ status, labels }: { status: string; labels: Record<string, stri
 
 // formatOrderNumber теперь общая — см. utils/format.ts
 import { formatOrderNumber } from '../utils/format'
+import { isViewerMode } from '../utils/viewer'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
 function checkDimensionsForPricing(pricingType: string | null | undefined, item: OrderItem): { ok: boolean; missing: string } {
@@ -101,25 +103,14 @@ function ServicesPanel({
   const { showToast } = useToast()
   const itemId = item.id
   const [services, setServices] = useState<OrderItemService[]>([])
-  const [availableServices, setAvailableServices] = useState<{id: number, name: string, pricing_type?: string | null}[]>([])
   const [loading, setLoading] = useState(true)
+  const [skuPickerOpen, setSkuPickerOpen] = useState(false)
   const [assignModal, setAssignModal] = useState<number | null>(null)
   const [selectedEmployees, setSelectedEmployees] = useState<number[]>([])
   const [employeeSearch, setEmployeeSearch] = useState('')
-  const [selectedServiceToAdd, setSelectedServiceToAdd] = useState<number | ''>('')
   const [editingPrice, setEditingPrice] = useState<number | null>(null)
   const [priceValue, setPriceValue] = useState('')
   const [dimWarning, setDimWarning] = useState('')
-  const [showDimModal, setShowDimModal] = useState<{
-    serviceDefId: number
-    missing: string
-    pricingType: string | null | undefined
-  } | null>(null)
-  // Поля для ввода размеров прямо в модалке добавления услуги.
-  // Сбрасываются при открытии модалки.
-  const [dimInputs, setDimInputs] = useState<{ length: string; width: string; weight: string; runningMeters: string }>({
-    length: '', width: '', weight: '', runningMeters: '',
-  })
   // Модалка «Заполните размеры» при попытке перевести услугу в работу/готова без размеров.
   // Раньше блок приходил из бэка как 422-ошибка с тостом — оператор не сразу понимал что делать.
   // Теперь спрашиваем заранее и предлагаем кнопку «Заполнить размеры».
@@ -128,16 +119,9 @@ function ServicesPanel({
   const load = async () => {
     setLoading(true)
     try {
-      const [servicesData, itemTypeData] = await Promise.all([
-        getItemServices(orderId, itemId),
-        getItemType(itemTypeId)
-      ])
+      const servicesData = await getItemServices(orderId, itemId)
       setServices(servicesData)
-      setAvailableServices(
-        (itemTypeData.services || [])
-          .filter((s: PriceListEntry) => s.is_active)
-          .map((s: PriceListEntry) => ({ id: s.service_def_id, name: s.service_def_name || `Услуга #${s.service_def_id}`, pricing_type: s.pricing_type }))
-      )
+      void itemTypeId // unused after V10 — SKU выбирается через SkuPicker по атрибутам
     } finally {
       setLoading(false)
     }
@@ -157,8 +141,9 @@ function ServicesPanel({
     // но фронт может сразу показать понятное окно с кнопкой «Заполнить».
     if (status === 'IN_PROGRESS' || status === 'DONE') {
       const svc = services.find(s => s.id === serviceId)
-      const svcDef = availableServices.find(a => a.id === svc?.service_def_id)
-      const check = checkDimensionsForPricing(svcDef?.pricing_type, item)
+      // V10: pricing_type теперь приходит на самой услуге (OrderItemService.pricing_type),
+      // не нужно искать в каталоге.
+      const check = checkDimensionsForPricing(svc?.pricing_type, item)
       if (!check.ok) {
         setStatusBlockModal({ serviceId, missing: check.missing })
         return
@@ -202,27 +187,14 @@ function ServicesPanel({
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка назначения исполнителей'; showToast(msg, 'error') }
   }
 
-  const tryAddService = (serviceDefId: number) => {
-    const svc = availableServices.find(s => s.id === serviceDefId)
-    const check = checkDimensionsForPricing(svc?.pricing_type, item)
-    if (!check.ok) {
-      // Открываем модалку — внутри предложим заполнить размеры или пропустить.
-      setDimInputs({
-        length: item.length?.toString() || '',
-        width: item.width?.toString() || '',
-        weight: item.weight?.toString() || '',
-        runningMeters: item.running_meters?.toString() || '',
-      })
-      setShowDimModal({ serviceDefId, missing: check.missing, pricingType: svc?.pricing_type })
-      return
-    }
-    void doAddService(serviceDefId)
-  }
-
-  const doAddService = async (serviceDefId: number) => {
+  /**
+   * V10: добавление услуги через SkuPicker. Picker сам показывает «подходящие»
+   * по атрибутам SKU. Превентивная проверка размеров теперь делается на бэке
+   * при попытке перевести услугу в работу — не блокируем сам факт добавления.
+   */
+  const doAddService = async (skuId: number) => {
     try {
-      await addServiceToItem(orderId, itemId, { service_def_id: serviceDefId })
-      setSelectedServiceToAdd('')
+      await addServiceToItem(orderId, itemId, { sku_id: skuId })
       setDimWarning('')
       await load()
       onRefresh()
@@ -247,10 +219,9 @@ function ServicesPanel({
   if (loading) return <div className="loading">Загрузка услуг...</div>
 
   // Дубли запрещены, но отменённая услуга освобождает слот — её можно добавить заново.
-  const activeServiceDefIds = new Set(
-    services.filter(s => s.status !== 'CANCELLED').map(s => s.service_def_id)
+  const activeSkuIds = new Set(
+    services.filter(s => s.status !== 'CANCELLED').map(s => s.sku_id)
   )
-  const unusedServices = availableServices.filter(s => !activeServiceDefIds.has(s.id))
 
   // Фильтрация по ролям: показываем только тех, чья роль включает тип позиции,
   // ИЛИ кто без роли (универсалы). Если ролей нет вообще — показываем всех.
@@ -266,33 +237,25 @@ function ServicesPanel({
     .filter(suitableByRole)
     .filter(e => e.name.toLowerCase().includes(employeeSearch.toLowerCase()))
 
-  // Определяем, заблокирована ли услуга по размерам (pricing_type vs item dimensions)
+  // Определяем, заблокирована ли услуга по размерам (pricing_type vs item dimensions).
+  // V10: pricing_type приходит на самой услуге (OrderItemService.pricing_type).
   const isServiceBlocked = (s: OrderItemService): boolean => {
-    const svcDef = availableServices.find(a => a.id === s.service_def_id)
-    const check = checkDimensionsForPricing(svcDef?.pricing_type, item)
+    const check = checkDimensionsForPricing(s.pricing_type, item)
     return !check.ok
   }
 
   return (
     <div style={{ marginTop: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
         <h4 style={{ margin: 0 }}>Услуги</h4>
-        {isEditable && unusedServices.length > 0 && (
-          <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
-            <select
-              value={selectedServiceToAdd}
-              onChange={e => {
-                const val = Number(e.target.value)
-                if (val) tryAddService(val)
-              }}
-              style={{ width: 'auto' }}
-            >
-              <option value="">+ Добавить услугу...</option>
-              {unusedServices.map(s => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </div>
+        {/* V10: вместо чипов «+ Стирка / + Чистка» — единая кнопка с открытием
+            SkuPicker'а. Picker сам показывает подходящие SKU по атрибутам позиции. */}
+        {isEditable && (
+          <button
+            type="button"
+            onClick={() => setSkuPickerOpen(true)}
+            className="btn-primary btn-sm"
+          >+ Добавить услугу</button>
         )}
       </div>
 
@@ -325,7 +288,7 @@ function ServicesPanel({
               return (
                 <tr key={s.id} style={blocked ? { background: '#fff3cd' } : undefined}>
                   <td>
-                    {s.service_def_name ?? `Услуга #${s.service_def_id}`}
+                    {s.sku_name ?? `Услуга #${s.sku_id}`}
                     {blocked && (
                       <div style={{ fontSize: '0.8em', color: '#e67e22', fontWeight: 600 }}>
                         Не заполнены размеры
@@ -440,101 +403,10 @@ function ServicesPanel({
         </div>
       )}
 
-      {/* Модалка добавления услуги без размеров — теперь даёт сразу заполнить нужные поля.
-          Какие поля показывать, зависит от pricing_type выбранной услуги. */}
-      {showDimModal && (() => {
-        const pt = showDimModal.pricingType
-        const showLengthWidth = pt === 'BY_AREA' || pt === 'BY_PERIMETER'
-        const showWeight = pt === 'BY_WEIGHT'
-        const showRunningMeters = pt === 'BY_PERIMETER'
-
-        const submitWithDimensions = async () => {
-          const sid = showDimModal.serviceDefId
-          // Что-то ввели — сохраняем размеры, потом добавляем услугу.
-          const length = dimInputs.length.trim() ? Number(dimInputs.length) : null
-          const width = dimInputs.width.trim() ? Number(dimInputs.width) : null
-          const weight = dimInputs.weight.trim() ? Number(dimInputs.weight) : null
-          const rm = dimInputs.runningMeters.trim() ? Number(dimInputs.runningMeters) : null
-          try {
-            await updateOrderItemDimensions(orderId, item.id, {
-              length: length ?? undefined,
-              width: width ?? undefined,
-              weight: weight ?? undefined,
-              running_meters: rm ?? undefined,
-            })
-          } catch (e: unknown) {
-            showToast((e as any)?.response?.data?.message || 'Ошибка сохранения размеров', 'error')
-            return
-          }
-          setShowDimModal(null)
-          await doAddService(sid)
-        }
-
-        const skipAndAdd = async () => {
-          const sid = showDimModal.serviceDefId
-          setShowDimModal(null)
-          setDimWarning('Заполните размеры позиции, чтобы услуга могла быть выполнена')
-          await doAddService(sid)
-        }
-
-        return (
-          <div className="modal-overlay" onClick={() => setShowDimModal(null)}>
-            <div className="modal" onClick={e => e.stopPropagation()}>
-              <h2>Не заполнены размеры</h2>
-              <p>Для этой услуги нужны: <strong>{showDimModal.missing}</strong>.</p>
-              <p style={{ color: '#7f8c8d', fontSize: '0.9em' }}>
-                Можно указать прямо сейчас или пропустить — услуга будет добавлена, но её нельзя
-                будет перевести в работу, пока размеры не заполнены.
-              </p>
-
-              <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
-                {showLengthWidth && (
-                  <>
-                    <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
-                      <label>Длина, м</label>
-                      <input type="number" min={0} step="0.01"
-                             value={dimInputs.length}
-                             onChange={e => setDimInputs(d => ({...d, length: e.target.value}))}
-                             placeholder="0.00" />
-                    </div>
-                    <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
-                      <label>Ширина, м</label>
-                      <input type="number" min={0} step="0.01"
-                             value={dimInputs.width}
-                             onChange={e => setDimInputs(d => ({...d, width: e.target.value}))}
-                             placeholder="0.00" />
-                    </div>
-                  </>
-                )}
-                {showWeight && (
-                  <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
-                    <label>Вес, кг</label>
-                    <input type="number" min={0} step="0.01"
-                           value={dimInputs.weight}
-                           onChange={e => setDimInputs(d => ({...d, weight: e.target.value}))}
-                           placeholder="0.00" />
-                  </div>
-                )}
-                {showRunningMeters && (
-                  <div className="form-group" style={{ flex: 1, minWidth: 100, marginBottom: 0 }}>
-                    <label>Погонные метры</label>
-                    <input type="number" min={0} step="0.01"
-                           value={dimInputs.runningMeters}
-                           onChange={e => setDimInputs(d => ({...d, runningMeters: e.target.value}))}
-                           placeholder="0.00" />
-                  </div>
-                )}
-              </div>
-
-              <div className="modal-actions">
-                <button className="btn-secondary" onClick={() => setShowDimModal(null)}>Отмена</button>
-                <button className="btn-warning" onClick={() => void skipAndAdd()}>Пропустить и добавить</button>
-                <button className="btn-primary" onClick={() => void submitWithDimensions()}>Сохранить и добавить</button>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+      {/* V10: модалка «заполните размеры перед добавлением» удалена —
+          SkuPicker не требует размеров, добавлять услугу можно всегда.
+          Если размеры нужны для расчёта (BY_AREA/BY_WEIGHT/…), бэк блокирует
+          переход услуги в работу/готова — для этого случая есть statusBlockModal. */}
 
       {assignModal !== null && (() => {
         // Подсказка: какие роли подходят для этого типа позиции — оператор должен
@@ -608,10 +480,19 @@ function ServicesPanel({
           title="Отмена услуги"
           subject={(() => {
             const s = services.find(s => s.id === cancelServiceId)
-            return s ? `Услуга «${s.service_def_name}» будет отменена.` : undefined
+            return s ? `Услуга «${s.sku_name}» будет отменена.` : undefined
           })()}
           onCancel={() => setCancelServiceId(null)}
           onConfirm={confirmCancelService}
+        />
+      )}
+
+      {skuPickerOpen && (
+        <SkuPicker
+          item={item}
+          excludeSkuIds={activeSkuIds}
+          onSelect={skuId => void doAddService(skuId)}
+          onClose={() => setSkuPickerOpen(false)}
         />
       )}
     </div>
@@ -621,6 +502,7 @@ function ServicesPanel({
 // ---- Item Row ----
 function ItemRow({
   item, index, orderId, employees, roles, onRefresh, isEditable, initialPhotos, isDefaultType,
+  freshlyAdded,
 }: {
   item: OrderItem
   index: number
@@ -634,12 +516,19 @@ function ItemRow({
   /** Дефолтный тип (доставка/оформление) — пробрасывается в ServicesPanel,
       чтобы тот скрыл цены услуг (они входят в стоимость позиции). */
   isDefaultType: boolean
+  /** true — позиция только что добавлена в этой же сессии. Тогда:
+      • строка автоматически раскрыта (детали + услуги видны),
+      • режим редактирования описания включён сразу,
+      • фокус ставится на поле описания.
+      Миша на встрече 11 мая: «не заставляй оператора отдельно раскрывать каждую
+      только что добавленную позицию — это лишний клик». */
+  freshlyAdded?: boolean
 }) {
   const { showToast } = useToast()
-  const [expanded, setExpanded] = useState(false)
+  const [expanded, setExpanded] = useState(!!freshlyAdded)
   const [editPrice, setEditPrice] = useState(false)
-  const [editDimensions, setEditDimensions] = useState(false)
-  const [editDesc, setEditDesc] = useState(false)
+  const [editDimensions, setEditDimensions] = useState(!!freshlyAdded && isEditable)
+  const [editDesc, setEditDesc] = useState(!!freshlyAdded && isEditable)
   const [photos, setPhotos] = useState<{id: number, filename: string, content_type: string, data: string}[]>(
     initialPhotos ? initialPhotos.map(p => ({ id: p.id, filename: p.filename, content_type: p.content_type, data: p.data })) : []
   )
@@ -778,6 +667,9 @@ function ItemRow({
                 onChange={e => setDescValue(e.target.value)}
                 placeholder="Описание"
                 style={{ width: '100%' }}
+                // autoFocus только когда позиция «свежеподнятая» — иначе при
+                // случайном клике на ✏️ пользователь не теряет фокус из других мест.
+                autoFocus={freshlyAdded}
               />
               <input
                 value={defectsValue}
@@ -785,9 +677,12 @@ function ItemRow({
                 placeholder="Дефекты"
                 style={{ width: '100%' }}
               />
+              {/* tabIndex=-1 на ✓/✕ — Tab проходит мимо них к следующей позиции
+                  (или к полям размеров), фидбэк 11 мая по tab-порядку. Кнопки
+                  остаются кликабельными. */}
               <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" onClick={saveDesc}>&#10003;</button>
-                <button className="btn-secondary btn-sm" onClick={() => { setEditDesc(false); setDescValue(item.description || ''); setDefectsValue(item.defects || '') }}>&#10005;</button>
+                <button className="btn-success btn-sm" tabIndex={-1} onClick={saveDesc}>&#10003;</button>
+                <button className="btn-secondary btn-sm" tabIndex={-1} onClick={() => { setEditDesc(false); setDescValue(item.description || ''); setDefectsValue(item.defects || '') }}>&#10005;</button>
               </div>
             </div>
           ) : (
@@ -847,8 +742,8 @@ function ItemRow({
                 />
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" onClick={saveDimensions}>&#10003;</button>
-                <button className="btn-secondary btn-sm" onClick={() => setEditDimensions(false)}>&#10005;</button>
+                <button className="btn-success btn-sm" tabIndex={-1} onClick={saveDimensions}>&#10003;</button>
+                <button className="btn-secondary btn-sm" tabIndex={-1} onClick={() => setEditDimensions(false)}>&#10005;</button>
               </div>
             </div>
           ) : (
@@ -1016,6 +911,11 @@ export default function OrderDetailPage() {
   // Все фото по заказу одним батчем — раздаём в ItemRow через initialPhotos.
   // До этого ItemRow сам fetch'ил фото на mount → N запросов на N позиций.
   const [photosByItemId, setPhotosByItemId] = useState<Map<number, ItemPhoto[]>>(new Map())
+  // ID позиций, которые оператор только что добавил в этой сессии. ItemRow
+  // по этому флагу автоматически раскрывается и фокусит поле описания
+  // (Спринт A.4, замечание Миши: «не заставляй раскрывать каждую вручную»).
+  // Сбрасывается при уходе со страницы — повторно не сработает.
+  const [freshlyAddedIds, setFreshlyAddedIds] = useState<Set<number>>(new Set())
   const [history, setHistory] = useState<OrderStatusHistory[]>([])
   const [itemTypes, setItemTypes] = useState<ItemType[]>([])
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -1275,13 +1175,14 @@ export default function OrderDetailPage() {
       servicesByItem.set(s.order_item_id, arr)
     })
 
-    const defaultTypeIds = new Set(itemTypes.filter(t => t.is_default).map(t => t.id))
+    // V10: «авто-добавленные» позиции теперь определяются на уровне SKU (is_auto_add),
+    // а не типа позиции. Здесь для печати считаем, что все позиции одинаково значимы.
     const itemRows = items.map((it, idx) => {
-      const isDefault = defaultTypeIds.has(it.item_type_id)
+      const isDefault = false
       const svcList = servicesByItem.get(it.id) || []
       const svcRows = svcList.map(s =>
         `<tr style="background:#fafafa;font-size:11px">
-          <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.service_def_name || 'Услуга #' + s.service_def_id}
+          <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.sku_name || 'Услуга #' + s.sku_id}
             <span style="color:#888;margin-left:8px">(${SERVICE_STATUS_LABELS[s.status] || s.status})</span>
           </td>
           <td style="padding:2px 8px"></td>
@@ -1411,7 +1312,9 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
 
   // Заказ нельзя редактировать в финальных статусах. DELIVERED ещё можно править
   // (оператор может уточнить дату доставки и оплатить), а COMPLETED/CANCELLED — нет.
-  const isEditable = order.status !== 'DELIVERED'
+  // В режиме просмотра (моноблок) — всегда readonly.
+  const isEditable = !isViewerMode()
+                  && order.status !== 'DELIVERED'
                   && order.status !== 'COMPLETED'
                   && order.status !== 'CANCELLED'
 
@@ -1429,7 +1332,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
       {error && <div className="error-msg" style={{ marginBottom: 12 }}>{error}</div>}
 
       {/* Order Info */}
-      <div className="card">
+      <div className="card" data-tour="order-info">
         <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
           <div>
             <div style={{ marginBottom: 8 }}>
@@ -1700,33 +1603,41 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
         </div>
 
         <div className="actions" style={{ marginTop: 16 }}>
-          {ALLOWED_TRANSITIONS[order.status]?.length > 0 && (
-            <div className="form-group" style={{ marginBottom: 0 }}>
-              <select
-                value=""
-                onChange={e => e.target.value && changeOrderStatus(e.target.value as OrderStatus)}
-                style={{ width: 'auto' }}
-              >
-                <option value="">Сменить статус...</option>
-                {ALLOWED_TRANSITIONS[order.status]?.map(s => (
-                  <option key={s} value={s}>{ORDER_STATUS_LABELS[s]}</option>
+          {!isViewerMode() && ALLOWED_TRANSITIONS[order.status]?.length > 0 && (() => {
+            // Раньше — обычный select «Сменить статус». Заменено на плитки-кнопки:
+            // оператор делает это многократно за день, дроп-даун — два клика вместо
+            // одного (Миша, встреча 11 мая: «дропдауны на ≤5 значений бесят»).
+            const transitions = ALLOWED_TRANSITIONS[order.status] || []
+            return (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: '0.9em', color: '#7f8c8d' }}>Перевести в:</span>
+                {transitions.map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    className="btn-primary btn-sm"
+                    onClick={() => changeOrderStatus(s as OrderStatus)}
+                    title={`Перевести в «${ORDER_STATUS_LABELS[s]}»`}
+                  >
+                    {ORDER_STATUS_LABELS[s]}
+                  </button>
                 ))}
-              </select>
-            </div>
-          )}
+              </div>
+            )
+          })()}
           {/* Оплата возможна только когда заказ доставлен. После оплаты заказ становится «Завершённым». */}
-          {!order.paid && order.status === 'DELIVERED' && (
+          {!isViewerMode() && !order.paid && order.status === 'DELIVERED' && (
             <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить и завершить</button>
           )}
           {/* В статусе DONE — клиент пришёл забрать сам и хочет сразу заплатить.
               Кнопка делает три операции одной транзакцией клиента: отмечаем доставку,
               переводим в DELIVERED, открываем PayModal — после оплаты заказ становится COMPLETED. */}
-          {!order.paid && order.status === 'DONE' && (
+          {!isViewerMode() && !order.paid && order.status === 'DONE' && (
             <button className="btn-success" onClick={() => setShowDeliverAndPay(true)}>
               Принять оплату
             </button>
           )}
-          {(order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
+          {!isViewerMode() && (order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
           )}
           <button className="btn-secondary" onClick={() => {
@@ -1746,7 +1657,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
       </div>
 
       {/* Items */}
-      <div className="card">
+      <div className="card" data-tour="order-items">
         <div className="page-header" style={{ marginBottom: 12 }}>
           <h2 style={{ margin: 0 }}>Позиции заказа</h2>
           {isEditable && (
@@ -1769,11 +1680,9 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             {items.length === 0 ? (
               <tr><td colSpan={isEditable ? 7 : 6} className="empty">Нет позиций</td></tr>
             ) : (() => {
-                const defaultTypeIds = new Set(itemTypes.filter(t => t.is_default).map(t => t.id))
-                const sorted = [
-                  ...items.filter(i => !defaultTypeIds.has(i.item_type_id)),
-                  ...items.filter(i => defaultTypeIds.has(i.item_type_id)),
-                ]
+                // V10: «по умолчанию»-сортировки нет — порядок добавления сохраняется,
+                // потому что auto-add теперь живёт на SKU и не влияет на тип позиции.
+                const sorted = items
                 return sorted.map((item, idx) => (
                   <ItemRow
                     key={item.id}
@@ -1785,7 +1694,8 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                     onRefresh={loadOrder}
                     isEditable={isEditable}
                     initialPhotos={photosByItemId.get(item.id) || []}
-                    isDefaultType={defaultTypeIds.has(item.item_type_id)}
+                    isDefaultType={false}
+                    freshlyAdded={freshlyAddedIds.has(item.id)}
                   />
                 ))
               })()
@@ -1795,7 +1705,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
       </div>
 
       {/* Расчёт стоимости */}
-      <div className="card">
+      <div className="card" data-tour="order-calc">
         <h2 style={{ marginTop: 0 }}>Расчёт стоимости</h2>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #eee' }}>
@@ -1889,7 +1799,17 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           orderId={orderId}
           itemTypes={itemTypes}
           onClose={() => setShowAddItem(false)}
-          onAdded={() => { setShowAddItem(false); void loadOrder() }}
+          onAdded={(newIds) => {
+            setShowAddItem(false)
+            // Помечаем свежедобавленные ID — ItemRow раскроет их и поставит фокус
+            // в поле описания, чтобы оператор сразу дописывал, не раскрывая каждую.
+            setFreshlyAddedIds(prev => {
+              const next = new Set(prev)
+              for (const id of newIds) next.add(id)
+              return next
+            })
+            void loadOrder()
+          }}
         />
       )}
       {showPay && <PayModal onClose={() => setShowPay(false)} onPay={handlePay} />}

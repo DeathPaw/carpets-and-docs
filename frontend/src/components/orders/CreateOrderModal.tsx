@@ -54,18 +54,36 @@ export default function CreateOrderModal({ onClose, onCreated }: {
     setSearchTimer(timer)
   }
 
-  // Диалог: «У клиента уже есть адрес — использовать его?». Срабатывает когда выбрали клиента
-  // с заполненным address. Если оператор подтверждает — заполняем pickup/delivery и координаты,
-  // включаем customAddress, чтобы поля показались. Если «нет» — оставляем поля пустыми.
-  const [pendingClientAddress, setPendingClientAddress] = useState<Client | null>(null)
+  // Исходный адрес из карточки выбранного клиента — нужен, чтобы показывать
+  // подсказку «адрес клиента / изменён вручную» под полем. Сравниваем с тем,
+  // что сейчас в поле адреса; равно — значит оператор ничего не правил.
+  const [clientSourceAddress, setClientSourceAddress] = useState<string>('')
 
   const selectClient = (c: Client) => {
     setSelectedClientId(c.id)
     setSelectedClientName(c.name)
     setClientSearch(c.name)
     setClients([])
+    // Старый сценарий открывал модалку «Использовать адрес клиента?» — это лишний клик
+    // (Миша на встрече: «вот этот поп-ап точно лишний клик, у тебя адрес уже есть»).
+    // Теперь сразу подставляем адрес в поля забора и доставки, включая координаты и район.
+    // Оператор видит подсказку «адрес клиента» и при желании правит прямо в поле.
     if (c.address && c.address.trim()) {
-      setPendingClientAddress(c)
+      setCustomAddress(true)
+      setSameAddress(true)
+      setPickupAddress(c.address)
+      setDeliveryAddress(c.address)
+      setClientSourceAddress(c.address)
+      if (c.district) {
+        setPickupDistrict(c.district)
+        setDeliveryDistrict(c.district)
+      }
+      if (c.lat != null && c.lon != null) {
+        setPickupCoords({ lat: Number(c.lat), lon: Number(c.lon) })
+        setDeliveryCoords({ lat: Number(c.lat), lon: Number(c.lon) })
+      }
+    } else {
+      setClientSourceAddress('')
     }
   }
 
@@ -81,25 +99,14 @@ export default function CreateOrderModal({ onClose, onCreated }: {
     } catch { setPhoneDuplicates([]) }
   }
 
-  const acceptClientAddress = () => {
-    if (!pendingClientAddress) return
-    const c = pendingClientAddress
-    setCustomAddress(true)
-    setSameAddress(true)
-    setPickupAddress(c.address || '')
-    setDeliveryAddress(c.address || '')
-    if (c.district) {
-      setPickupDistrict(c.district)
-      setDeliveryDistrict(c.district)
+  /** «адрес клиента» если поле не редактировалось, «изменён» если оператор что-то поправил. */
+  const addressBadge = (current: string): { text: string; color: string } | null => {
+    if (!clientSourceAddress) return null
+    if (current.trim() === clientSourceAddress.trim()) {
+      return { text: 'адрес клиента', color: '#27ae60' }
     }
-    if (c.lat != null && c.lon != null) {
-      setPickupCoords({ lat: Number(c.lat), lon: Number(c.lon) })
-      setDeliveryCoords({ lat: Number(c.lat), lon: Number(c.lon) })
-    }
-    setPendingClientAddress(null)
+    return { text: 'изменён вручную', color: '#e67e22' }
   }
-
-  const declineClientAddress = () => setPendingClientAddress(null)
 
   const submit = async () => {
     setLoading(true)
@@ -219,6 +226,9 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxHeight: '85vh', overflowY: 'auto', position: 'relative' }}>
         <button
           onClick={onClose}
+          // tabIndex=-1: крестик закрытия не нужен в табовой навигации,
+          // оператор использует Esc или кнопку «Отмена» внизу формы.
+          tabIndex={-1}
           style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', fontSize: '1.5em', cursor: 'pointer', color: '#888', lineHeight: 1 }}
           title="Закрыть"
         >&times;</button>
@@ -359,6 +369,17 @@ export default function CreateOrderModal({ onClose, onCreated }: {
                 // считаем подтверждённым, не плодим лишнее предупреждение.
                 externallyConfirmed={pickupCoords.lat != null && pickupCoords.lon != null}
               />
+              {/* Плашка-подсказка: оператор видит, откуда взялся адрес — из карточки
+                  клиента или он его уже отредактировал. Заменила поп-ап
+                  «Использовать адрес клиента?». */}
+              {(() => {
+                const b = addressBadge(pickupAddress)
+                return b ? (
+                  <div style={{ fontSize: '0.8em', color: b.color, marginTop: 2 }}>
+                    {b.text}
+                  </div>
+                ) : null
+              })()}
               <div style={{ marginTop: 4 }}>
                 <DistrictSelect
                   value={pickupDistrict}
@@ -399,6 +420,14 @@ export default function CreateOrderModal({ onClose, onCreated }: {
                   }}
                   externallyConfirmed={deliveryCoords.lat != null && deliveryCoords.lon != null}
                 />
+                {(() => {
+                  const b = addressBadge(deliveryAddress)
+                  return b ? (
+                    <div style={{ fontSize: '0.8em', color: b.color, marginTop: 2 }}>
+                      {b.text}
+                    </div>
+                  ) : null
+                })()}
                 <div style={{ marginTop: 4 }}>
                   <DistrictSelect
                     value={deliveryDistrict}
@@ -438,28 +467,6 @@ export default function CreateOrderModal({ onClose, onCreated }: {
         </div>
       </div>
 
-      {/* Подтверждение: использовать адрес клиента для заказа? */}
-      {pendingClientAddress && (
-        <div className="modal-overlay" onClick={declineClientAddress} style={{ zIndex: 1100 }}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>
-            <h3 style={{ marginTop: 0 }}>Адрес клиента</h3>
-            <p style={{ color: '#555' }}>
-              У клиента <strong>{pendingClientAddress.name}</strong> уже есть адрес:
-            </p>
-            <div style={{
-              padding: '8px 12px', background: '#f4f6f7', borderRadius: 4, marginBottom: 12,
-            }}>
-              {pendingClientAddress.address}
-              {pendingClientAddress.district && <span style={{ color: '#888' }}> · {pendingClientAddress.district}</span>}
-            </div>
-            <p style={{ color: '#555' }}>Использовать его как адрес забора и доставки?</p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-              <button className="btn-secondary" onClick={declineClientAddress}>Нет, ввести другой</button>
-              <button className="btn-primary" onClick={acceptClientAddress}>Да, использовать</button>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   )
 }

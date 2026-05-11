@@ -36,9 +36,9 @@ public class OrderItemServiceController {
     public OrderItemServiceWithAssignees addService(@PathVariable Long orderId,
                                                      @PathVariable Long itemId,
                                                      @Valid @RequestBody AddServiceRequest request) {
-        OrderItemServiceWithAssignees result = service.addServiceWithAssignees(itemId, request.serviceDefId());
+        OrderItemServiceWithAssignees result = service.addServiceWithAssignees(itemId, request.skuId());
         auditLogService.log("ORDER_SERVICE", result.id(), "CREATE",
-                "Добавлена услуга \"" + (result.serviceDefName() != null ? result.serviceDefName() : "#" + result.serviceDefId()) +
+                "Добавлена услуга \"" + (result.skuName() != null ? result.skuName() : "SKU #" + result.skuId()) +
                 "\" к позиции #" + itemId + " заказа #" + orderId);
         return result;
     }

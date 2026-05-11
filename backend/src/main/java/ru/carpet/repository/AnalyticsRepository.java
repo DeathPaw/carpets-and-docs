@@ -59,10 +59,12 @@ public class AnalyticsRepository {
     }
 
     public List<AnalyticsDto.TypeCount> itemsByType() {
+        // V10: is_default у item_types удалён. Считаем все типы; «авто-добавленные»
+        // позиции (доставка/приём) теперь отделяются по SKU.is_auto_add, но для
+        // аналитики имеет смысл их тоже видеть.
         return jdbc.query(
             "SELECT it.name as type_name, COUNT(*) as count " +
             "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
-            "WHERE it.is_default = false " +
             "GROUP BY it.name ORDER BY count DESC",
             (RowMapper<AnalyticsDto.TypeCount>) (rs, n) -> new AnalyticsDto.TypeCount(
                 rs.getString("type_name"), longOrZero(rs, "count")
@@ -112,19 +114,24 @@ public class AnalyticsRepository {
 
     public List<AnalyticsDto.MarginRow> marginAnalysis() {
         return jdbc.query(
-            "SELECT sd.name as service_name, " +
+            // V10: имя/тип/себестоимость берутся напрямую с SKU через ois.sku_id.
+            "SELECT s.name as service_name, " +
             "COUNT(ois.id) as count, " +
             "COALESCE(SUM(ois.price), 0) as revenue, " +
-            "COALESCE(SUM(pl.cost_price * CASE WHEN sd.pricing_type = 'FIXED' THEN 1 " +
-            "WHEN sd.pricing_type = 'BY_WEIGHT' THEN COALESCE(oi.weight, 0) " +
-            "WHEN sd.pricing_type = 'BY_AREA' THEN COALESCE(oi.length * oi.width, 0) " +
-            "ELSE 1 END), 0) as cost " +
+            "COALESCE(SUM(s.cost_price * CASE " +
+            "  WHEN s.pricing_type = 'FIXED'             THEN 1 " +
+            "  WHEN s.pricing_type = 'BY_WEIGHT'         THEN COALESCE(oi.weight, 0) " +
+            "  WHEN s.pricing_type = 'BY_AREA'           THEN COALESCE(oi.area, 0) " +
+            "  WHEN s.pricing_type = 'BY_PERIMETER'      THEN COALESCE(oi.perimeter, 0) " +
+            "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
+            "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
+            "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
+            "  ELSE 1 END), 0) as cost " +
             "FROM order_item_services ois " +
-            "JOIN service_definitions sd ON sd.id = ois.service_def_id " +
-            "JOIN order_items oi ON oi.id = ois.order_item_id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
+            "JOIN skus s          ON s.id = ois.sku_id " +
+            "JOIN order_items oi  ON oi.id = ois.order_item_id " +
             "WHERE ois.status = 'DONE' " +
-            "GROUP BY sd.name ORDER BY revenue DESC",
+            "GROUP BY s.name ORDER BY revenue DESC",
             (RowMapper<AnalyticsDto.MarginRow>) (rs, n) -> new AnalyticsDto.MarginRow(
                 rs.getString("service_name"), longOrZero(rs, "count"),
                 nz(rs.getBigDecimal("revenue")), nz(rs.getBigDecimal("cost"))

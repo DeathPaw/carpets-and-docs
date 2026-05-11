@@ -38,13 +38,12 @@ public class ProfitabilityRepository {
             "COALESCE(SUM(ois.price), 0) AS revenue, " +
             COST_EXPR + " AS cost, " +
             "COALESCE(SUM(ois.price), 0) - " + COST_EXPR + " AS profit, " +
-            "COUNT(*) FILTER (WHERE ois.id IS NOT NULL AND pl.cost_price IS NULL) AS cost_missing " +
+            "COUNT(*) FILTER (WHERE ois.id IS NOT NULL AND s.cost_price IS NULL) AS cost_missing " +
             "FROM item_types it " +
             "LEFT JOIN order_items oi ON oi.item_type_id = it.id " +
             "LEFT JOIN orders o ON o.id = oi.order_id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
-            "LEFT JOIN service_definitions sd ON sd.id = ois.service_def_id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
+            "LEFT JOIN skus s ON s.id = ois.sku_id " +
             "WHERE 1=1 " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY it.id, it.name ORDER BY revenue DESC NULLS LAST",
             dateParams(dateFrom, dateTo),
@@ -68,8 +67,7 @@ public class ProfitabilityRepository {
             "JOIN orders o ON o.client_id = c.id " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
-            "LEFT JOIN service_definitions sd ON sd.id = ois.service_def_id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
+            "LEFT JOIN skus s ON s.id = ois.sku_id " +
             "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY c.id, c.name, c.client_type ORDER BY profit DESC NULLS LAST LIMIT 50",
             dateParams(dateFrom, dateTo),
@@ -87,21 +85,24 @@ public class ProfitabilityRepository {
             "SELECT e.id AS employee_id, e.name, " +
             "COUNT(DISTINCT ois.id) AS services_count, " +
             "COALESCE(SUM(ois.price / NULLIF(assigned_count.cnt, 0)), 0) AS revenue, " +
-            "COALESCE(SUM((pl.cost_price * CASE " +
-            "  WHEN sd.pricing_type = 'FIXED' THEN 1 " +
-            "  WHEN sd.pricing_type = 'BY_WEIGHT' THEN COALESCE(oi.weight, 0) " +
-            "  WHEN sd.pricing_type = 'BY_AREA' THEN COALESCE(oi.length * oi.width, COALESCE(oi.area, 0)) " +
-            "  WHEN sd.pricing_type = 'BY_PERIMETER' THEN COALESCE(2 * (oi.length + oi.width), 0) " +
+            // V10: cost/pricing идут с SKU напрямую (ois.sku_id → skus s).
+            "COALESCE(SUM((s.cost_price * CASE " +
+            "  WHEN s.pricing_type = 'FIXED'             THEN 1 " +
+            "  WHEN s.pricing_type = 'BY_WEIGHT'         THEN COALESCE(oi.weight, 0) " +
+            "  WHEN s.pricing_type = 'BY_AREA'           THEN COALESCE(oi.area, 0) " +
+            "  WHEN s.pricing_type = 'BY_PERIMETER'      THEN COALESCE(oi.perimeter, 0) " +
+            "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
+            "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
+            "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
             "  ELSE 1 END) / NULLIF(assigned_count.cnt, 0)), 0) AS cost " +
             "FROM employees e " +
             "JOIN service_assignees sa ON sa.employee_id = e.id " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id AND ois.status = 'DONE' " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
             "JOIN orders o ON o.id = oi.order_id " +
-            "JOIN service_definitions sd ON sd.id = ois.service_def_id " +
+            "JOIN skus s ON s.id = ois.sku_id " +
             "JOIN (SELECT order_item_service_id, COUNT(*) AS cnt FROM service_assignees GROUP BY order_item_service_id) assigned_count " +
             "  ON assigned_count.order_item_service_id = ois.id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
             "WHERE 1=1 " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY e.id, e.name ORDER BY revenue DESC",
             dateParams(dateFrom, dateTo),
@@ -117,18 +118,19 @@ public class ProfitabilityRepository {
         Map<String, Object> p = new HashMap<>(dateParams(dateFrom, dateTo));
         p.put("employeeId", employeeId);
         return jdbc.query(
-            "SELECT sd.id AS service_id, sd.name AS service_name, " +
+            // V10: услуга = SKU. service_id здесь — это sku_id.
+            "SELECT s.id AS service_id, s.name AS service_name, " +
             "COUNT(DISTINCT ois.id) AS count, " +
             "COALESCE(SUM(ois.price / NULLIF(assigned_count.cnt, 0)), 0) AS revenue " +
             "FROM service_assignees sa " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id AND ois.status = 'DONE' " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
             "JOIN orders o ON o.id = oi.order_id " +
-            "JOIN service_definitions sd ON sd.id = ois.service_def_id " +
+            "JOIN skus s ON s.id = ois.sku_id " +
             "JOIN (SELECT order_item_service_id, COUNT(*) AS cnt FROM service_assignees GROUP BY order_item_service_id) assigned_count " +
             "  ON assigned_count.order_item_service_id = ois.id " +
             "WHERE sa.employee_id = :employeeId " + dateFilterClause("o", dateFrom, dateTo) + " " +
-            "GROUP BY sd.id, sd.name ORDER BY revenue DESC",
+            "GROUP BY s.id, s.name ORDER BY revenue DESC",
             p,
             (RowMapper<AnalyticsDto.ProfitByEmployeeService>) (rs, n) -> new AnalyticsDto.ProfitByEmployeeService(
                 rs.getLong("service_id"), rs.getString("service_name"),
@@ -148,8 +150,7 @@ public class ProfitabilityRepository {
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
-            "LEFT JOIN service_definitions sd ON sd.id = ois.service_def_id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
+            "LEFT JOIN skus s ON s.id = ois.sku_id " +
             "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY COALESCE(o.pickup_district, '(без района)') ORDER BY profit DESC NULLS LAST",
             dateParams(dateFrom, dateTo),
@@ -170,8 +171,7 @@ public class ProfitabilityRepository {
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
-            "LEFT JOIN service_definitions sd ON sd.id = ois.service_def_id " +
-            "LEFT JOIN price_list pl ON pl.item_type_id = oi.item_type_id AND pl.service_def_id = ois.service_def_id " +
+            "LEFT JOIN skus s ON s.id = ois.sku_id " +
             "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo));
         if (clientId != null) {
             sb.append(" AND o.client_id = :clientId ");

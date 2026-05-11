@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { setViewerMode } from '../utils/viewer'
 
 export default function LoginPage() {
   const navigate = useNavigate()
@@ -7,6 +8,9 @@ export default function LoginPage() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  // Спринт D: галка «открыть в режиме просмотра». При логине дополнительно
+  // ставит viewer_mode=1; UI скрывает кнопки изменения, оставляя только чтение.
+  const [viewerLogin, setViewerLogin] = useState(false)
 
   const submit = async () => {
     if (!username.trim() || !password.trim()) {
@@ -32,7 +36,9 @@ export default function LoginPage() {
 
       // Сохраняем токен и переходим
       sessionStorage.setItem('auth', token)
-      navigate('/orders')
+      setViewerMode(viewerLogin)
+      // В режиме просмотра удобнее открывать дашборд (там цифры и проблемные заказы).
+      navigate(viewerLogin ? '/dashboard' : '/orders')
     } catch {
       setError('Ошибка подключения к серверу')
     } finally {
@@ -75,6 +81,21 @@ export default function LoginPage() {
           />
         </div>
 
+        {/* Чекбокс «Только просмотр» — для моноблока. Логин стандартный,
+            но кнопки изменения скрыты. */}
+        <label style={{
+          display: 'flex', alignItems: 'center', gap: 8,
+          marginBottom: 12, fontSize: 13, color: '#7f8c8d', cursor: 'pointer',
+        }}>
+          <input
+            type="checkbox"
+            checked={viewerLogin}
+            onChange={e => setViewerLogin(e.target.checked)}
+            style={{ width: 'auto' }}
+          />
+          Войти в режиме просмотра (для моноблока)
+        </label>
+
         {error && <div className="error-msg" style={{ marginBottom: 12 }}>{error}</div>}
 
         <button
@@ -83,8 +104,24 @@ export default function LoginPage() {
           disabled={loading}
           style={{ width: '100%', padding: '10px', fontSize: 15 }}
         >
-          {loading ? 'Вход...' : 'Войти'}
+          {loading ? 'Вход...' : (viewerLogin ? 'Войти на просмотр' : 'Войти')}
         </button>
+
+        {/* Альтернатива — личный кабинет работника (Спринт D).
+            Намеренно мелким текстом, не равным с операторским — операторы привычно
+            идут сюда, работники сразу видят, что для них «другая дверь». */}
+        <div style={{ textAlign: 'center', marginTop: 16 }}>
+          <button
+            type="button"
+            onClick={() => navigate('/worker-login')}
+            style={{
+              background: 'transparent', border: 'none', color: '#3498db',
+              fontSize: 13, cursor: 'pointer', textDecoration: 'underline',
+            }}
+          >
+            Вход для работника →
+          </button>
+        </div>
       </div>
     </div>
   )

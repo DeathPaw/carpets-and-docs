@@ -21,10 +21,8 @@ public class OrderService {
     private final OrderStatusHistoryRepository historyRepository;
     private final OrderItemServiceInstanceRepository serviceInstanceRepository;
     private final ItemTypeRepository itemTypeRepository;
-    private final ServiceDefinitionRepository serviceDefinitionRepository;
-    private final PriceListRepository priceListRepository;
+    private final SkuService skuService;
     private final AuditLogService auditLogService;
-    private final PricingService pricingService;
     private final OrderItemService orderItemService;
     private final OrderModifierRepository orderModifierRepository;
     private final PriceModifierRepository priceModifierRepository;
@@ -37,10 +35,8 @@ public class OrderService {
             OrderStatusHistoryRepository historyRepository,
             OrderItemServiceInstanceRepository serviceInstanceRepository,
             ItemTypeRepository itemTypeRepository,
-            ServiceDefinitionRepository serviceDefinitionRepository,
-            PriceListRepository priceListRepository,
+            SkuService skuService,
             AuditLogService auditLogService,
-            PricingService pricingService,
             @Lazy OrderItemService orderItemService,
             OrderModifierRepository orderModifierRepository,
             PriceModifierRepository priceModifierRepository,
@@ -52,10 +48,8 @@ public class OrderService {
         this.historyRepository = historyRepository;
         this.serviceInstanceRepository = serviceInstanceRepository;
         this.itemTypeRepository = itemTypeRepository;
-        this.serviceDefinitionRepository = serviceDefinitionRepository;
-        this.priceListRepository = priceListRepository;
+        this.skuService = skuService;
         this.auditLogService = auditLogService;
-        this.pricingService = pricingService;
         this.orderItemService = orderItemService;
         this.orderModifierRepository = orderModifierRepository;
         this.priceModifierRepository = priceModifierRepository;
@@ -108,16 +102,10 @@ public class OrderService {
     public Order create(Long clientId, String clientName, String comment,
                         String pickupAddress, String deliveryAddress, Long legacyId) {
         Order order = repository.save(clientId, clientName, comment, pickupAddress, deliveryAddress, legacyId);
-        // Автоматически добавляем позиции с is_default = true (доставка/оформление/приём).
-        // Для каждой такой позиции сразу создаём её активные услуги из прайс-листа —
-        // например, если «Доставка» имеет активную услугу «Доставка», она попадает
-        // в заказ автоматически. Если оператор не настроил активные услуги для дефолт-типа —
-        // позиция просто без услуг (как раньше).
-        List<ItemType> defaults = itemTypeRepository.findDefaults();
-        for (ItemType defaultType : defaults) {
-            OrderItem item = itemRepository.save(order.id(), defaultType.id(), null);
-            attachActiveServicesFromPriceList(item.id(), defaultType.id());
-        }
+        // V10: автоматически добавляем SKU с is_auto_add=true (бывшие «default»-типы).
+        // Каждый такой SKU имеет один или несколько атрибутов item_type — для каждого
+        // прикрепляемого типа создаём позицию и навешиваем SKU как услугу.
+        attachAutoAddSkus(order.id());
         // Копируем модификаторы клиента в заказ
         if (clientId != null) {
             orderModifierRepository.copyFromClient(clientId, order.id());
@@ -132,73 +120,73 @@ public class OrderService {
     }
 
     /**
-     * Привязывает к позиции все активные услуги из прайс-листа для её типа.
-     * Используется при автодобавлении дефолтных позиций — чтобы оператору
-     * не нужно было каждый раз вручную добавлять «Доставку» к позиции «Доставка».
+     * V10: автоматически прикрепляет к заказу все SKU с {@code is_auto_add=true}
+     * (бывшая логика default-типов). Для каждого SKU берём первый связанный
+     * item_type из его атрибутов и создаём позицию + услугу.
      */
-    private void attachActiveServicesFromPriceList(Long itemId, Long itemTypeId) {
-        List<PriceListEntry> active = priceListRepository.findActiveByItemTypeId(itemTypeId);
-        if (active.isEmpty()) return;
-        OrderItem item = itemRepository.findById(itemId).orElseThrow();
-        for (PriceListEntry entry : active) {
-            serviceInstanceRepository.saveAll(itemId, List.of(entry.serviceDefId()));
-            // Берём только что вставленную услугу (последнюю по id для этой позиции и def_id),
-            // чтобы рассчитать её цену из прайс-листа с учётом размеров позиции.
-            ServiceDefinition sd = serviceDefinitionRepository.findById(entry.serviceDefId()).orElse(null);
-            if (sd != null) {
-                BigDecimal calculated = pricingService.calculateServicePrice(entry.price(), sd.pricingType(), item);
-                serviceInstanceRepository.findByOrderItemId(itemId).stream()
-                        .filter(s -> s.serviceDefId().equals(entry.serviceDefId()))
-                        .reduce((a, b) -> b)  // последняя
-                        .ifPresent(s -> serviceInstanceRepository.updateCalculatedPrice(s.id(), calculated));
-            }
+    private void attachAutoAddSkus(Long orderId) {
+        var autoSkus = skuService.findAutoAdd();
+        for (var sku : autoSkus) {
+            // Какой item_type использовать? Первый из атрибутов sku.attributes["item_type"].
+            var typeIds = sku.attributes().get("item_type");
+            if (typeIds == null || typeIds.isEmpty()) continue;
+            Long itemTypeId;
+            try { itemTypeId = Long.parseLong(typeIds.get(0)); }
+            catch (NumberFormatException e) { continue; }
+            OrderItem item = itemRepository.save(orderId, itemTypeId, null);
+            // Цена SKU + free_threshold учитываются в recalculateAutoAddPrices()
+            BigDecimal price = sku.price() == null ? BigDecimal.ZERO : sku.price();
+            serviceInstanceRepository.saveOne(item.id(), sku.id(), price);
+            // Цена позиции = цена услуги (для default-позиций одна услуга = одна цена).
+            itemRepository.updatePrice(item.id(), price);
         }
     }
 
     /**
-     * Пересчитывает цены дефолтных позиций (например, доставка).
-     * Логика: если freeThreshold задан и сумма остальных позиций >= threshold → цена = 0,
-     * иначе цена = defaultPrice.
+     * Пересчитывает цены auto-add позиций с учётом {@code sku.free_threshold}:
+     * если базовая сумма НЕ auto-add позиций ≥ free_threshold — цена становится 0.
      */
     @Transactional
     public void recalculateDefaultItemPrices(Long orderId) {
-        List<OrderItem> items = itemRepository.findByOrderId(orderId);
-        List<ItemType> defaults = itemTypeRepository.findDefaults();
-
-        for (ItemType defaultType : defaults) {
-            if (defaultType.defaultPrice() == null) continue;
-
-            // Сумма всех НЕ-дефолтных позиций
-            BigDecimal nonDefaultSum = items.stream()
-                    .filter(i -> !isDefaultType(i.itemTypeId(), defaults))
-                    .map(OrderItem::price)
-                    .reduce(BigDecimal.ZERO, BigDecimal::add);
-
-            // Найти позицию этого дефолтного типа в заказе
-            items.stream()
-                    .filter(i -> i.itemTypeId().equals(defaultType.id()))
-                    .forEach(item -> {
-                        BigDecimal newPrice;
-                        if (defaultType.freeThreshold() != null
-                                && nonDefaultSum.compareTo(defaultType.freeThreshold()) >= 0) {
-                            newPrice = BigDecimal.ZERO;
-                        } else {
-                            newPrice = defaultType.defaultPrice();
-                        }
-                        if (newPrice.compareTo(item.price()) != 0) {
-                            itemRepository.updatePrice(item.id(), newPrice);
-                        }
-                    });
+        var autoSkus = skuService.findAutoAdd();
+        if (autoSkus.isEmpty()) {
+            BigDecimal total = itemRepository.sumPriceByOrderId(orderId);
+            repository.updateBaseAmount(orderId, total);
+            recalculateTotalWithModifiers(orderId, total);
+            return;
         }
-
-        // Пересчитываем итоговую сумму заказа
+        List<OrderItem> items = itemRepository.findByOrderId(orderId);
+        // Все услуги заказа, чтобы по sku_id определить auto-add позиции.
+        var allServices = serviceInstanceRepository.findByOrderItemIds(
+                items.stream().map(OrderItem::id).toList());
+        java.util.Set<Long> autoSkuIds = new java.util.HashSet<>();
+        for (var s : autoSkus) autoSkuIds.add(s.id());
+        // Определяем для каждой позиции — auto или нет (по её первой услуге).
+        java.util.Map<Long, Long> itemToSkuId = new java.util.HashMap<>();
+        for (var svc : allServices) {
+            itemToSkuId.putIfAbsent(svc.orderItemId(), svc.skuId());
+        }
+        // Сумма не-auto-add позиций — база для проверки free_threshold.
+        BigDecimal nonAutoSum = items.stream()
+                .filter(i -> !autoSkuIds.contains(itemToSkuId.get(i.id())))
+                .map(OrderItem::price)
+                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Пересчёт цены каждой auto-add позиции по free_threshold.
+        for (var sku : autoSkus) {
+            if (sku.freeThreshold() == null) continue;
+            for (var item : items) {
+                if (!java.util.Objects.equals(itemToSkuId.get(item.id()), sku.id())) continue;
+                BigDecimal newPrice = nonAutoSum.compareTo(sku.freeThreshold()) >= 0
+                        ? BigDecimal.ZERO
+                        : (sku.price() == null ? BigDecimal.ZERO : sku.price());
+                if (newPrice.compareTo(item.price()) != 0) {
+                    itemRepository.updatePrice(item.id(), newPrice);
+                }
+            }
+        }
         BigDecimal total = itemRepository.sumPriceByOrderId(orderId);
         repository.updateBaseAmount(orderId, total);
         recalculateTotalWithModifiers(orderId, total);
-    }
-
-    private boolean isDefaultType(Long itemTypeId, List<ItemType> defaults) {
-        return defaults.stream().anyMatch(d -> d.id().equals(itemTypeId));
     }
 
     /** Ручное изменение статуса заказа (без причины — для не-CANCELLED). */
@@ -251,6 +239,10 @@ public class OrderService {
             case PARTIALLY_DONE -> next == OrderStatus.CANCELLED;
             case DONE -> next == OrderStatus.DELIVERED;
             case DELIVERED -> next == OrderStatus.COMPLETED; // только через оплату; см. pay()
+            // PARTIALLY_DELIVERED ставится автоматически из delivery_state позиций
+            // (Спринт V9). Ручной переход — только в DELIVERED (когда оператор
+            // решил «всё ок, потеря закрыта гарантией») или COMPLETED через оплату.
+            case PARTIALLY_DELIVERED -> next == OrderStatus.DELIVERED || next == OrderStatus.COMPLETED;
             case COMPLETED -> false;                          // финальный — никаких изменений
             case CANCELLED -> false;
         };
@@ -291,14 +283,10 @@ public class OrderService {
     }
 
     private OrderStatus computeOrderStatus(List<OrderItem> items) {
-        // Исключаем default-позиции (доставка, оформление) — они не влияют на статус заказа
-        List<ItemType> defaults = itemTypeRepository.findDefaults();
-        List<OrderItem> meaningful = items.stream()
-                .filter(i -> !isDefaultType(i.itemTypeId(), defaults))
-                .toList();
-
-        // Если нет значимых позиций — считаем по всем
-        List<OrderItem> target = meaningful.isEmpty() ? items : meaningful;
+        // V10: «дефолтность» позиции теперь определяется по auto-add SKU её услуги.
+        // Считаем все позиции одинаково — auto-add позиции (доставка) обычно
+        // CREATED в начале и DONE в конце, не ломают статус заказа.
+        List<OrderItem> target = items;
 
         long doneCount = target.stream().filter(i -> i.status() == OrderItemStatus.DONE).count();
         long cancelledCount = target.stream().filter(i -> i.status() == OrderItemStatus.CANCELLED).count();
@@ -363,10 +351,13 @@ public class OrderService {
                     warranty.id(), item.itemTypeId(), item.description(),
                     item.length(), item.width(), item.weight(), item.area(), item.runningMeters()
             );
-            // Копируем услуги
+            // V10: копируем услуги через sku_id
             List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(item.id());
-            List<Long> serviceDefIds = services.stream().map(OrderItemServiceInstance::serviceDefId).toList();
-            serviceInstanceRepository.saveAll(newItem.id(), serviceDefIds);
+            List<Long> skuIds = services.stream()
+                    .map(OrderItemServiceInstance::skuId)
+                    .filter(java.util.Objects::nonNull)
+                    .toList();
+            serviceInstanceRepository.saveAll(newItem.id(), skuIds);
         }
 
         // Автоматически создаём событие клиента о гарантийном возврате
@@ -458,11 +449,18 @@ public class OrderService {
         for (OrderModifier m : mods) {
             orderModifierRepository.add(newOrder.id(), m.modifierId(), m.modifierName(), m.percent());
         }
-        // Копируем не-дефолтные позиции
-        List<ItemType> defaults = itemTypeRepository.findDefaults();
+        // V10: копируем позиции, кроме тех, что используют auto-add SKU
+        // (доставка/приём — они уже автоматически добавились в новый заказ).
+        java.util.Set<Long> autoSkuIds = new java.util.HashSet<>();
+        for (var s : skuService.findAutoAdd()) autoSkuIds.add(s.id());
         List<OrderItem> items = itemRepository.findByOrderId(orderId);
+        var allServices = serviceInstanceRepository.findByOrderItemIds(
+                items.stream().map(OrderItem::id).toList());
+        java.util.Map<Long, Long> itemToFirstSku = new java.util.HashMap<>();
+        for (var svc : allServices) itemToFirstSku.putIfAbsent(svc.orderItemId(), svc.skuId());
         for (OrderItem item : items) {
-            if (defaults.stream().anyMatch(d -> d.id().equals(item.itemTypeId()))) continue;
+            Long itemSkuId = itemToFirstSku.get(item.id());
+            if (itemSkuId != null && autoSkuIds.contains(itemSkuId)) continue;
             duplicateItemInternal(newOrder.id(), item);
         }
         recalculateTotalAmount(newOrder.id());
@@ -486,23 +484,21 @@ public class OrderService {
                 orderId, original.itemTypeId(), original.description(),
                 original.length(), original.width(), original.weight(), original.area(), original.runningMeters()
         );
-        // Обновить дефекты
         if (original.defects() != null) {
             itemRepository.updateDescription(newItem.id(), original.description(), original.defects());
         }
-        // Копируем услуги — цены берём из прайс-листа (актуальные)
+        // V10: копируем услуги вместе с sku_id — цена пересчитывается через PricingHelper.
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(original.id());
         for (OrderItemServiceInstance svc : services) {
-            serviceInstanceRepository.saveAll(newItem.id(), List.of(svc.serviceDefId()));
-            // Пересчитываем цену из прайс-листа
-            var priceListEntry = priceListRepository.findByItemTypeIdAndServiceDefId(original.itemTypeId(), svc.serviceDefId());
-            var serviceDef = serviceDefinitionRepository.findById(svc.serviceDefId()).orElse(null);
-            if (priceListEntry.isPresent() && serviceDef != null) {
-                OrderItem freshItem = itemRepository.findById(newItem.id()).orElseThrow();
-                BigDecimal price = pricingService.calculateServicePrice(priceListEntry.get().price(), serviceDef.pricingType(), freshItem);
-                List<OrderItemServiceInstance> newServices = serviceInstanceRepository.findByOrderItemId(newItem.id());
-                OrderItemServiceInstance last = newServices.get(newServices.size() - 1);
-                serviceInstanceRepository.updateCalculatedPrice(last.id(), price);
+            if (svc.skuId() == null) continue;
+            ru.carpet.model.Sku sku = null;
+            try { sku = skuService.findById(svc.skuId()); } catch (Exception ignored) {}
+            if (sku == null) continue;
+            OrderItem freshItem = itemRepository.findById(newItem.id()).orElseThrow();
+            BigDecimal newPrice = PricingHelper.calculate(sku.price(), sku.pricingType(), freshItem);
+            Long newSvcId = serviceInstanceRepository.saveOne(newItem.id(), svc.skuId(), newPrice);
+            if (newSvcId != null) {
+                serviceInstanceRepository.updateCalculatedPrice(newSvcId, newPrice);
             }
         }
         // Пересчитать стоимость позиции

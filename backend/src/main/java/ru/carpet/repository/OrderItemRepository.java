@@ -37,6 +37,7 @@ public class OrderItemRepository {
             rs.getBigDecimal("weight"),
             rs.getBigDecimal("area"),
             rs.getBigDecimal("running_meters"),
+            rs.getBigDecimal("perimeter"),
             rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
@@ -49,7 +50,7 @@ public class OrderItemRepository {
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
@@ -60,6 +61,8 @@ public class OrderItemRepository {
     }
 
     public OrderItem save(Long orderId, Long itemTypeId, String description) {
+        // V10: item_types упрощены, версионирование типа убрано (типы — просто справочник
+        // имён, история имени не критична). Сохраняем только item_type_id.
         var params = new MapSqlParameterSource()
                 .addValue("orderId", orderId)
                 .addValue("itemTypeId", itemTypeId)
@@ -166,7 +169,7 @@ public class OrderItemRepository {
     public Optional<OrderItem> findById(Long id) {
         List<OrderItem> result = jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +

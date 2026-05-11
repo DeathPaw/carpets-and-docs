@@ -3,7 +3,9 @@ package ru.carpet.repository;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -106,6 +108,110 @@ public class DashboardRepository {
             "   OR (status = 'DONE' AND (delivery_address IS NULL OR delivery_address = ''))",
             Map.of(), Long.class));
 
+        // V9: счётчик заказов с потерянными позициями (delivery_state = LOST).
+        result.put("lost_in_delivery", jdbc.queryForObject(
+            "SELECT COUNT(DISTINCT o.id) FROM orders o " +
+            "JOIN order_items oi ON oi.order_id = o.id " +
+            "WHERE o.status NOT IN ('COMPLETED','CANCELLED') " +
+            "  AND oi.delivery_state = 'LOST'",
+            Map.of(), Long.class));
+
         return result;
     }
+
+    /**
+     * Детали проблемных заказов — для виджета на главной (Спринт B).
+     * Возвращает до {@code limit} штук в каждой из трёх категорий, чтобы оператор
+     * сразу видел, к кому проваливаться, а не отдельно открывал список и фильтровал.
+     *
+     * <p>Категории совпадают со счётчиками выше:
+     *   • overdue_actual    — фактическая дата уже прошла, заказ не закрыт;
+     *   • unassigned_logistics — пора забирать/доставлять, дата не назначена;
+     *   • bad_address       — пора в логистику, адреса нет.
+     *
+     * <p>Если категорий с заказами больше {@code limit} — в счётчиках видно общее
+     * число, а здесь — топ-N с пометкой «и ещё X».
+     */
+    public Map<String, Object> problemOrders(int limit) {
+        Map<String, Object> result = new HashMap<>();
+        result.put("overdue_actual",       fetchList(SQL_OVERDUE_ACTUAL,       limit));
+        result.put("unassigned_logistics", fetchList(SQL_UNASSIGNED_LOGISTICS, limit));
+        result.put("bad_address",          fetchList(SQL_BAD_ADDRESS,          limit));
+        // Спринт V9: «Потеряно в доставке» — позиции с delivery_state=LOST
+        // в незакрытых заказах. Это новый блок проблем.
+        result.put("lost_in_delivery",     fetchList(SQL_LOST_IN_DELIVERY,     limit));
+        return result;
+    }
+
+    private List<Map<String, Object>> fetchList(String sql, int limit) {
+        List<Map<String, Object>> rows = jdbc.queryForList(sql, Map.of("limit", limit));
+        // Приводим к простому формату: id, client_name, status, address, problem_date, problem_reason.
+        // Поля для UI пробрасываются через snake_case (Jackson сконфигурирован).
+        List<Map<String, Object>> out = new ArrayList<>(rows.size());
+        for (Map<String, Object> r : rows) out.add(r);
+        return out;
+    }
+
+    private static final String SQL_OVERDUE_ACTUAL = """
+        SELECT id,
+               client_name,
+               status,
+               COALESCE(actual_pickup_date,  actual_delivery_date) AS problem_date,
+               CASE
+                 WHEN actual_pickup_date < CURRENT_DATE   THEN 'Просрочка забора'
+                 WHEN actual_delivery_date < CURRENT_DATE THEN 'Просрочка доставки'
+                 ELSE 'Просрочка по факт. дате'
+               END AS problem_reason,
+               COALESCE(pickup_address, delivery_address) AS address
+        FROM orders
+        WHERE status NOT IN ('DELIVERED','COMPLETED','CANCELLED')
+          AND ((actual_pickup_date IS NOT NULL AND actual_pickup_date < CURRENT_DATE)
+            OR (actual_delivery_date IS NOT NULL AND actual_delivery_date < CURRENT_DATE))
+        ORDER BY problem_date
+        LIMIT :limit
+        """;
+
+    private static final String SQL_UNASSIGNED_LOGISTICS = """
+        SELECT id,
+               client_name,
+               status,
+               CASE WHEN status = 'FOR_PICKUP' THEN 'Не назначен забор'
+                    WHEN status = 'DONE'       THEN 'Не назначена доставка' END AS problem_reason,
+               COALESCE(pickup_address, delivery_address) AS address,
+               COALESCE(pickup_date, delivery_date) AS problem_date
+        FROM orders
+        WHERE (status = 'FOR_PICKUP' AND actual_pickup_date IS NULL)
+           OR (status = 'DONE' AND actual_delivery_date IS NULL)
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """;
+
+    private static final String SQL_LOST_IN_DELIVERY = """
+        SELECT DISTINCT o.id,
+               o.client_name,
+               o.status,
+               'Потеряно при доставке' AS problem_reason,
+               o.actual_delivery_date  AS problem_date,
+               o.delivery_address      AS address
+        FROM orders o
+        JOIN order_items oi ON oi.order_id = o.id
+        WHERE o.status NOT IN ('COMPLETED','CANCELLED')
+          AND oi.delivery_state = 'LOST'
+        ORDER BY o.actual_delivery_date NULLS LAST, o.id DESC
+        LIMIT :limit
+        """;
+
+    private static final String SQL_BAD_ADDRESS = """
+        SELECT id,
+               client_name,
+               status,
+               'Адрес не заполнен' AS problem_reason,
+               NULL::text AS address,
+               COALESCE(pickup_date, delivery_date) AS problem_date
+        FROM orders
+        WHERE (status = 'FOR_PICKUP' AND (pickup_address IS NULL OR pickup_address = ''))
+           OR (status = 'DONE' AND (delivery_address IS NULL OR delivery_address = ''))
+        ORDER BY created_at DESC
+        LIMIT :limit
+        """;
 }

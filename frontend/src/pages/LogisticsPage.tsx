@@ -1,10 +1,13 @@
 import { useEffect, useState, useMemo } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getOrders, updateActualDates } from '../api/orders'
+import { getOrders, updateActualDates, setOrderDriver } from '../api/orders'
+import { getDrivers } from '../api/references'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import MultiSelectFilter from '../components/MultiSelectFilter'
+import { hashColor } from '../components/Tiles'
 import { formatOrderNumber } from '../utils/format'
-import type { Order } from '../types'
+import { isViewerMode } from '../utils/viewer'
+import type { Order, Employee } from '../types'
 
 type CardType = 'pickup' | 'delivery'
 type Horizon = 4 | 8 | 12
@@ -84,24 +87,54 @@ export default function LogisticsPage() {
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date().toISOString().slice(0,10)))
   // Мультивыборы: пустой массив = «все».
   const [typeFilters, setTypeFilters] = useState<CardType[]>([])
-  const [districtFilter, setDistrictFilter] = useState(searchParams.get('district') || '')
+  // Фильтр районов — массив (Спринт D, фидбэк 11 мая: «выбрать Центральный и
+  // Красносельский, потом Красносельский отменить»). Клик по району — toggle:
+  // если уже в списке → убрать; иначе → добавить. Остальные районы при этом
+  // НЕ скрываем (раньше скрывалось при single-select).
+  const [districtFilters, setDistrictFilters] = useState<string[]>(() => {
+    const url = searchParams.get('district')
+    return url ? [url] : []
+  })
   // Слоты: спецзначение 'none' для «без слота».
   const [timeSlotFilters, setTimeSlotFilters] = useState<string[]>([])
   const [noDateFilter, setNoDateFilter] = useState<NoDateFilter>('all')
+  // По умолчанию список «Без даты» свёрнут до 5 карточек — иначе он занимает весь экран
+  // и список дней по горизонтали уходит вниз. Кнопка «Показать все» раскрывает.
+  const [noDateExpanded, setNoDateExpanded] = useState(false)
+  const NO_DATE_PREVIEW = 5
   const [horizon, setHorizon] = useState<Horizon>(4)
   // Карта в sidebar — по умолчанию свёрнута, разворачивается по клику.
   const [mapExpanded, setMapExpanded] = useState(false)
 
   useEffect(() => {
     const fromUrl = searchParams.get('district')
-    if (fromUrl !== null) setDistrictFilter(fromUrl)
+    if (fromUrl !== null) setDistrictFilters(fromUrl ? [fromUrl] : [])
   }, [searchParams])
+
+  /** Toggle района в фильтре: добавляет если нет, убирает если есть. */
+  const toggleDistrict = (d: string) => {
+    setDistrictFilters(prev =>
+      prev.includes(d) ? prev.filter(x => x !== d) : [...prev, d]
+    )
+  }
 
   const [allOrders, setAllOrders] = useState<Order[]>([])
   const [loading, setLoading] = useState(false)
   const [dragData, setDragData] = useState<{orderId: number, type: CardType} | null>(null)
   const [dragOverDay, setDragOverDay] = useState<string | null>(null)
   const isDragging = dragData !== null
+
+  // Список водителей для модалки назначения. Фильтр на бэке (/api/employees/drivers):
+  // V10 — водитель = сотрудник с ролью, привязанной к item_type, на который ссылается
+  // хотя бы один auto-add SKU (на практике — «Логист» с «Доставка»/«Приём»). Универсалы
+  // (без роли) НЕ показываются — фидбэк: «должны быть только водители».
+  // На фронте остаётся только убрать неактивных.
+  const [employees, setEmployees] = useState<Employee[]>([])
+  useEffect(() => {
+    void getDrivers().then(list => setEmployees(list.filter(e => e.active)))
+  }, [])
+  // Открытый popup выбора водителя для заказа. null — закрыт.
+  const [driverPickerFor, setDriverPickerFor] = useState<{ orderId: number; current: number | null } | null>(null)
   // Сайдбар «Районы» — компактный по умолчанию (узкая колонка с цифрами и баром нагрузки),
   // развёрнутый — широкая таблица с заборами/доставками/суммой. Состояние помним.
   const [asideExpanded, setAsideExpanded] = useState<boolean>(
@@ -178,7 +211,7 @@ export default function LogisticsPage() {
   // timeSlotFilters: пустой = все, может содержать 'none' для «без слота» или конкретные значения.
   const filteredCards = useMemo(() => {
     return allCards.filter(c => {
-      if (districtFilter && c.district !== districtFilter) return false
+      if (districtFilters.length > 0 && (!c.district || !districtFilters.includes(c.district))) return false
       if (timeSlotFilters.length > 0) {
         const noneSelected = timeSlotFilters.includes('none')
         if (!c.timeSlot) {
@@ -189,7 +222,7 @@ export default function LogisticsPage() {
       }
       return true
     })
-  }, [allCards, districtFilter, timeSlotFilters])
+  }, [allCards, districtFilters, timeSlotFilters])
 
   // Сортировка карточек по началу временного слота (без слота — в конец).
   const slotStartMinutes = (slot: string | null): number => {
@@ -235,9 +268,30 @@ export default function LogisticsPage() {
 
   // Список районов для фильтра больше не нужен сверху — фильтр применяется кликом по строке в боковой сводке.
 
-  // District stats for the visible week
+  // District stats — статистика по районам в боковой таблице.
+  //
+  // Считаем из allCards БЕЗ применения районного фильтра, но С остальными
+  // (тип, слот). Иначе при клике на «Центральный» в таблице остаётся ТОЛЬКО
+  // Центральный — оператор не видит, что есть в других районах и не может
+  // включить второй (фидбэк 11 мая: «не должен скрывать остальные варианты»).
+  //
+  // Остальные фильтры (тип/слот) применяем — оператор фильтрует «только заборы»
+  // и видит соответствующую статистику.
   const districtStats = useMemo(() => {
-    const visibleCards = filteredCards.filter(c => c.date && weekDays.includes(c.date))
+    const visibleCards = allCards.filter(c => {
+      // Считаем только карточки выбранной недели с датой.
+      if (!c.date || !weekDays.includes(c.date)) return false
+      if (typeFilters.length > 0 && !typeFilters.includes(c.type)) return false
+      if (timeSlotFilters.length > 0) {
+        const noneSelected = timeSlotFilters.includes('none')
+        if (!c.timeSlot) {
+          if (!noneSelected) return false
+        } else if (!timeSlotFilters.includes(c.timeSlot)) {
+          return false
+        }
+      }
+      return true
+    })
     const map = new Map<string, {district: string, pickups: number, deliveries: number, sum: number}>()
     visibleCards.forEach(c => {
       const d = c.district || '(без района)'
@@ -247,7 +301,7 @@ export default function LogisticsPage() {
       s.sum += Number(c.order.total_amount)
     })
     return Array.from(map.values()).sort((a,b) => (b.pickups+b.deliveries) - (a.pickups+a.deliveries))
-  }, [filteredCards, weekDays])
+  }, [allCards, weekDays, typeFilters, timeSlotFilters])
 
   // Сводка по неделе: цифры заборов/доставок и самый загруженный день.
   const weekSummary = useMemo(() => {
@@ -362,11 +416,13 @@ export default function LogisticsPage() {
     // - двойной: тип (pickup/delivery) сверху, слот снизу. Делаем градиент.
     const typeColor = isPickup ? '#3498db' : '#27ae60'
     const sColor = slotColor(card.timeSlot)
+    const viewer = isViewerMode()
     return (
       <div
         key={`${card.order.id}-${card.type}`}
-        draggable
-        onDragStart={() => handleDragStart(card.order.id, card.type)}
+        // В режиме просмотра drag не нужен — карточки только показываем.
+        draggable={!viewer}
+        onDragStart={() => !viewer && handleDragStart(card.order.id, card.type)}
         onDragEnd={() => setDragData(null)}
         onClick={() => navigate(`/orders/${card.order.id}`)}
         title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}`}
@@ -416,8 +472,59 @@ export default function LogisticsPage() {
             висит {ageDays}д
           </div>
         )}
+        {/* Чип «Водитель» — клик открывает модалку выбора. В viewer-mode
+            рендерим как читаемый span (без клика). */}
+        {viewer ? (
+          <div style={{
+            marginTop: 4, padding: '1px 6px',
+            background: card.order.assigned_driver_id ? '#eafaf1' : '#f4f6f7',
+            color:      card.order.assigned_driver_id ? '#196f3d' : '#7f8c8d',
+            borderRadius: 3, fontSize: '0.92em',
+            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            👤 {card.order.assigned_driver_name || 'не назначен'}
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={e => {
+              e.stopPropagation()
+              setDriverPickerFor({ orderId: card.order.id, current: card.order.assigned_driver_id })
+            }}
+            onMouseDown={e => e.stopPropagation()}
+            style={{
+              display: 'block', marginTop: 4, padding: '1px 6px',
+              background: card.order.assigned_driver_id ? '#eafaf1' : '#fdf2e9',
+              color:      card.order.assigned_driver_id ? '#196f3d' : '#a04000',
+              border: 'none', borderRadius: 3,
+              fontSize: '0.92em', fontWeight: 500,
+              cursor: 'pointer', width: '100%', textAlign: 'left',
+              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+            }}
+            title="Назначить водителя"
+          >
+            👤 {card.order.assigned_driver_name || 'не назначен'}
+          </button>
+        )}
       </div>
     )
+  }
+
+  /**
+   * Сохранить выбранного водителя для заказа из модалки picker'a.
+   * Обновляем allOrders inline, чтобы UI отреагировал без перезагрузки.
+   */
+  const saveDriver = async (employeeId: number | null) => {
+    if (!driverPickerFor) return
+    const { orderId } = driverPickerFor
+    try {
+      const res = await setOrderDriver(orderId, employeeId)
+      setAllOrders(prev => prev.map(o => o.id === orderId
+        ? { ...o, assigned_driver_id: res.assigned_driver_id, assigned_driver_name: res.driver_name }
+        : o
+      ))
+    } catch { /* ignore */ }
+    setDriverPickerFor(null)
   }
 
   /** Drop-overlay со слотами — появляется только при перетаскивании над днём. */
@@ -509,10 +616,37 @@ export default function LogisticsPage() {
           </div>
           {cards.length === 0 ? (
             opts?.hideEmpty ? null : (
-              <div style={{ color: '#bbb', fontStyle: 'italic', fontSize: '0.9em' }}>Нет заказов под фильтр</div>
+              <div style={{
+                color: '#999', fontStyle: 'italic', fontSize: '0.9em',
+                padding: '8px 4px', textAlign: 'center',
+              }}>
+                {/* В блоке «Без даты» пустота — это нормально (все распределили).
+                    Даём подсказку, что сюда можно вернуть карточку, если оператор передумал. */}
+                ↓ Перетащите карточку сюда, чтобы снять с даты
+              </div>
             )
           ) : (
-            cards.map(renderCard)
+            <>
+              {/* По умолчанию рендерим только первые NO_DATE_PREVIEW карточек.
+                  Это критично, потому что «Без даты» накапливается и при 30+ заказах
+                  без даты весь список дней уходил под фолд. */}
+              {(noDateExpanded ? cards : cards.slice(0, NO_DATE_PREVIEW)).map(renderCard)}
+              {cards.length > NO_DATE_PREVIEW && (
+                <button
+                  type="button"
+                  onClick={() => setNoDateExpanded(v => !v)}
+                  style={{
+                    width: '100%', marginTop: 6, padding: '6px 8px',
+                    background: '#fff', border: '1px dashed #bdc3c7', borderRadius: 6,
+                    color: '#34495e', cursor: 'pointer', fontSize: '0.9em',
+                  }}
+                >
+                  {noDateExpanded
+                    ? `Свернуть (показано ${cards.length})`
+                    : `Показать ещё ${cards.length - NO_DATE_PREVIEW}…`}
+                </button>
+              )}
+            </>
           )}
         </div>
       )
@@ -655,7 +789,7 @@ export default function LogisticsPage() {
         </div>
       </div>
 
-      <div className="logistics-layout">
+      <div className="logistics-layout" data-tour="logistics-grid">
         <div className="logistics-main">
 
       {/* Фильтры. Фильтр района — в боковой сводке (клик по строке).
@@ -663,16 +797,32 @@ export default function LogisticsPage() {
       <div className="filters">
         <div className="form-group">
           <label>Тип</label>
-          <MultiSelectFilter
-            options={[
-              { value: 'pickup',   label: 'Заборы' },
-              { value: 'delivery', label: 'Доставки' },
-            ]}
-            value={typeFilters}
-            onChange={vals => setTypeFilters(vals as CardType[])}
-            placeholder="Все"
-            width={150}
-          />
+          {/* Спринт D, фидбэк 11 мая: вместо двухпозиционного дроп-дауна —
+              две кнопки-toggle. Активная подсвечена; повторный клик — выключить. */}
+          <div style={{ display: 'inline-flex', gap: 6 }}>
+            {[
+              { v: 'pickup'   as CardType, label: 'Заборы',   color: '#3498db' },
+              { v: 'delivery' as CardType, label: 'Доставки', color: '#27ae60' },
+            ].map(b => {
+              const on = typeFilters.includes(b.v)
+              return (
+                <button
+                  key={b.v}
+                  type="button"
+                  onClick={() =>
+                    setTypeFilters(prev => prev.includes(b.v) ? prev.filter(x => x !== b.v) : [...prev, b.v])
+                  }
+                  style={{
+                    padding: '6px 14px', borderRadius: 6,
+                    border: on ? `2px solid ${b.color}` : '1px solid #bdc3c7',
+                    background: on ? b.color : '#fff',
+                    color: on ? '#fff' : '#2c3e50',
+                    fontWeight: on ? 600 : 500, fontSize: 13, cursor: 'pointer',
+                  }}
+                >{b.label}</button>
+              )
+            })}
+          </div>
         </div>
         <div className="form-group">
           <label>Временной слот</label>
@@ -687,20 +837,35 @@ export default function LogisticsPage() {
             width={180}
           />
         </div>
-        {districtFilter && (
-          <div className="form-group">
-            <label>Активный фильтр</label>
-            <button
-              type="button"
-              onClick={() => setDistrictFilter('')}
-              style={{
-                padding: '6px 10px', borderRadius: 4, border: '1px solid #ccc',
-                background: '#fef9e7', cursor: 'pointer',
-              }}
-              title="Снять фильтр"
-            >
-              Район: {districtFilter} ✕
-            </button>
+        {districtFilters.length > 0 && (
+          <div className="form-group" style={{ flex: '1 1 100%' }}>
+            <label>Активные фильтры по районам</label>
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+              {districtFilters.map(d => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleDistrict(d)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 14, border: '1px solid #f1c40f',
+                    background: '#fef9e7', cursor: 'pointer', fontSize: 13,
+                  }}
+                  title="Снять фильтр по этому району"
+                >
+                  {d} ✕
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => setDistrictFilters([])}
+                style={{
+                  padding: '4px 10px', borderRadius: 4, border: 'none',
+                  background: 'transparent', color: '#7f8c8d', cursor: 'pointer', fontSize: 12,
+                }}
+              >
+                Снять все
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -724,8 +889,12 @@ export default function LogisticsPage() {
         <div className="loading">Загрузка...</div>
       ) : (
         <>
-          {/* No-date section с собственным фильтром */}
-          {((cardsByDay.get('no-date')?.length ?? 0) > 0 || noDateFilter !== 'all') && (
+          {/* No-date section с собственным фильтром.
+              Раньше блок скрывался когда не было нераспределённых карточек,
+              из-за чего оператор не мог перетащить заказ обратно «без даты»
+              (фидбэк пользователя 11 мая). Теперь блок всегда рендерится —
+              если пуст, это drop-zone с подсказкой «перетащите сюда, чтобы снять с даты». */}
+          {true && (
             <div style={{ marginBottom: 16 }}>
               <div style={{
                 display: 'flex', alignItems: 'center', justifyContent: 'space-between',
@@ -805,19 +974,32 @@ export default function LogisticsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {districtStats.map(s => (
+                      {districtStats.map(s => {
+                        const isActive = districtFilters.includes(s.district)
+                        return (
                         <tr
                           key={s.district}
-                          style={{ cursor: 'pointer' }}
-                          onClick={() => setDistrictFilter(s.district === '(без района)' ? '' : s.district)}
-                          title="Клик — фильтр по району"
+                          style={{
+                            cursor: 'pointer',
+                            background: isActive ? '#fef9e7' : undefined,
+                            outline: isActive ? '1px solid #f1c40f' : undefined,
+                          }}
+                          onClick={() => {
+                            // Спринт D: клик по району — toggle. Второй клик по тому же
+                            // району снимает фильтр; клик по другому — добавляет к выбранным.
+                            // «(без района)» сейчас не фильтрабелен — игнорируем.
+                            if (s.district === '(без района)') return
+                            toggleDistrict(s.district)
+                          }}
+                          title={isActive ? 'Клик — снять этот район' : 'Клик — добавить район к фильтру'}
                         >
                           <td><strong>{s.district}</strong></td>
                           <td style={{ textAlign: 'right' }}>{s.pickups || '—'}</td>
                           <td style={{ textAlign: 'right' }}>{s.deliveries || '—'}</td>
                           <td style={{ textAlign: 'right' }}><strong>{s.pickups + s.deliveries}</strong></td>
                         </tr>
-                      ))}
+                        )
+                      })}
                       <tr style={{ background: '#f4f6f7', fontWeight: 700 }}>
                         <td>Итого</td>
                         <td style={{ textAlign: 'right' }}>{districtStats.reduce((a,s) => a+s.pickups, 0)}</td>
@@ -832,16 +1014,29 @@ export default function LogisticsPage() {
                     {districtStats.map(s => {
                       const load = s.pickups + s.deliveries
                       const widthPct = maxLoad > 0 ? Math.round((load / maxLoad) * 100) : 0
+                      const isActive = districtFilters.includes(s.district)
                       return (
                         <div
                           key={s.district}
-                          style={{ marginBottom: 6, cursor: 'pointer' }}
-                          onClick={() => setDistrictFilter(s.district === '(без района)' ? '' : s.district)}
-                          title={`${s.pickups} заборов · ${s.deliveries} доставок`}
+                          style={{
+                            marginBottom: 6, cursor: 'pointer',
+                            padding: '4px 6px', borderRadius: 4,
+                            background: isActive ? '#fef9e7' : 'transparent',
+                            outline: isActive ? '1px solid #f1c40f' : undefined,
+                          }}
+                          onClick={() => {
+                            // Спринт D: клик по району — toggle. Второй клик по тому же
+                            // району снимает фильтр; клик по другому — добавляет к выбранным.
+                            // «(без района)» сейчас не фильтрабелен — игнорируем.
+                            if (s.district === '(без района)') return
+                            toggleDistrict(s.district)
+                          }}
+                          title={isActive ? 'Клик — снять этот район' : `${s.pickups} заборов · ${s.deliveries} доставок · клик — фильтр`}
                         >
                           <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85em' }}>
                             <span style={{
                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto', minWidth: 0,
+                              fontWeight: isActive ? 700 : 400,
                             }}>{s.district}</span>
                             <strong style={{ marginLeft: 6 }}>{load}</strong>
                           </div>
@@ -904,6 +1099,7 @@ export default function LogisticsPage() {
                   onClick={() => setMapExpanded(true)}
                   style={{ cursor: 'zoom-in' }}
                   title="Клик — развернуть карту"
+                  data-tour="logistics-map"
                 >
                   <MapMarkers points={mapPoints} height={220} />
                 </div>
@@ -941,6 +1137,79 @@ export default function LogisticsPage() {
           )}
         </aside>
       </div>
+
+      {/* Модалка выбора водителя — открывается из чипа на карточке заказа.
+          UX: плитки сотрудников (цвет по хэшу имени, как в кабинете работника),
+          сверху подсветка текущего, отдельная кнопка «Без водителя» — снимает
+          назначение. Закрытие — клик по фону или Esc. */}
+      {driverPickerFor && (
+        <div
+          className="modal-overlay"
+          onClick={() => setDriverPickerFor(null)}
+          style={{ zIndex: 1200 }}
+        >
+          <div
+            className="modal"
+            onClick={e => e.stopPropagation()}
+            style={{ maxWidth: 480, padding: 16 }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: 4 }}>Назначить водителя</h3>
+            <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 14 }}>
+              Заказ #{driverPickerFor.orderId}. Можно назначить любого сотрудника.
+            </div>
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+              gap: 8,
+              marginBottom: 12,
+            }}>
+              {employees.map(e => {
+                const isCurrent = e.id === driverPickerFor.current
+                const c = hashColor(e.name)
+                return (
+                  <button
+                    key={e.id}
+                    type="button"
+                    onClick={() => void saveDriver(e.id)}
+                    style={{
+                      padding: '10px 12px',
+                      background: c.bg, color: c.text,
+                      border: isCurrent ? `2px solid ${c.text}` : '1px solid #d6dbdf',
+                      borderRadius: 8,
+                      cursor: 'pointer',
+                      fontSize: 13, fontWeight: 600,
+                      textAlign: 'center',
+                      boxShadow: isCurrent ? `0 0 0 3px ${c.bg}` : 'none',
+                    }}
+                  >
+                    {e.name}
+                  </button>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                onClick={() => void saveDriver(null)}
+                style={{
+                  flex: 1, padding: '8px',
+                  background: '#fdf2e9', color: '#a04000', border: '1px solid #f5cba7',
+                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}
+              >Снять назначение</button>
+              <button
+                type="button"
+                onClick={() => setDriverPickerFor(null)}
+                style={{
+                  flex: 1, padding: '8px',
+                  background: '#fff', color: '#2c3e50', border: '1px solid #d6dbdf',
+                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}
+              >Отмена</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

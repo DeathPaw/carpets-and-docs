@@ -145,7 +145,7 @@ export default function ItemDetailPage() {
             <tbody>
               {services.map(s => (
                 <tr key={s.id}>
-                  <td>{s.service_def_name}</td>
+                  <td>{s.sku_name}</td>
                   <td>
                     <span className={`badge badge-${s.status.toLowerCase()}`}>
                       {SERVICE_STATUS_LABELS[s.status] ?? s.status}

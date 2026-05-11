@@ -59,6 +59,12 @@ public class EmployeeController {
         return service.findSuitableForItemType(itemTypeId);
     }
 
+    /** Кандидаты в водители/логисты — у кого в роли есть хоть один default item_type. */
+    @GetMapping("/drivers")
+    public List<Employee> drivers() {
+        return service.findDrivers();
+    }
+
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deactivateViaDelete(@PathVariable Long id) {

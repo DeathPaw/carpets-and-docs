@@ -89,7 +89,7 @@ public class ProductionRepository {
     public List<AnalyticsDto.ProductionQueueService> productionQueueServices() {
         return jdbc.query(
             "SELECT ois.id as service_id, ois.status, ois.price, " +
-            "sd.name as service_name, sd.pricing_type, " +
+            "s.name as service_name, s.pricing_type, " +
             "oi.id as item_id, oi.description as item_description, oi.status as item_status, " +
             "it.id as item_type_id, it.name as item_type_name, " +
             "o.id as order_id, o.client_name, o.created_at as order_created_at, " +
@@ -100,13 +100,13 @@ public class ProductionRepository {
             "FROM order_item_services ois " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
             "JOIN orders o ON o.id = oi.order_id " +
-            "JOIN service_definitions sd ON sd.id = ois.service_def_id " +
+            "JOIN skus s ON s.id = ois.sku_id " +
             "JOIN item_types it ON it.id = oi.item_type_id " +
             "LEFT JOIN service_assignees sa ON sa.order_item_service_id = ois.id " +
             "LEFT JOIN employees e ON e.id = sa.employee_id " +
             "WHERE ois.status IN ('CREATED','IN_PROGRESS','DONE') " +
             "AND o.status NOT IN ('CANCELLED','DELIVERED','COMPLETED') " +
-            "GROUP BY ois.id, sd.name, sd.pricing_type, oi.id, oi.description, oi.status, " +
+            "GROUP BY ois.id, s.name, s.pricing_type, oi.id, oi.description, oi.status, " +
             "it.id, it.name, o.id, o.client_name, o.created_at, o.pickup_district " +
             "ORDER BY o.created_at ASC, oi.id ASC, ois.id ASC",
             (RowMapper<AnalyticsDto.ProductionQueueService>) (rs, n) -> {

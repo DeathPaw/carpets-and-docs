@@ -47,6 +47,11 @@ public class EmployeeService {
         return repository.findActiveSuitableForItemType(itemTypeId);
     }
 
+    /** Кандидаты в водители (роль с default item_type) — для модалки в логистике. */
+    public List<Employee> findDrivers() {
+        return repository.findActiveDrivers();
+    }
+
     @Transactional
     public void deactivate(Long id) {
         repository.findById(id)

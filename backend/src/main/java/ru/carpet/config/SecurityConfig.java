@@ -41,6 +41,11 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // /api/worker/** — личный кабинет работника (Спринт D). Авторизация
+                // по 4-значному PIN внутри API, без Basic Auth. На локальном стенде
+                // и за NAT'ом это безопасно; на проде с белым IP сюда можно навесить
+                // rate-limit или подписанный JWT на коротком сроке.
+                .requestMatchers("/api/worker/**").permitAll()
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().permitAll()
             )

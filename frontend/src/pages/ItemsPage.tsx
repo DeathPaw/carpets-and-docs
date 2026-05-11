@@ -94,28 +94,69 @@ export default function ItemsPage() {
         <h1>Позиции заказов</h1>
       </div>
 
-      <div className="filters">
-        <div className="form-group">
+      {/* Спринт-фидбэк 11 мая: статусы и типы — плашки, не выпадающий список. */}
+      <div className="filters" data-tour="items-filters" style={{ flexWrap: 'wrap' }}>
+        <div className="form-group" style={{ flex: '1 1 100%' }}>
           <label>Статус</label>
-          <MultiSelectFilter
-            options={ALL_ITEM_STATUSES.map(s => ({ value: s, label: ITEM_STATUS_LABELS[s] }))}
-            searchable
-            value={statusFilters}
-            onChange={vals => { setStatusFilters(vals as OrderItemStatus[]); setPage(0) }}
-            placeholder="Все"
-            width={170}
-          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {ALL_ITEM_STATUSES.map(s => {
+              const on = statusFilters.includes(s)
+              return (
+                <button
+                  key={s}
+                  type="button"
+                  className={`badge badge-${s.toLowerCase()}`}
+                  onClick={() => {
+                    setStatusFilters(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
+                    setPage(0)
+                  }}
+                  style={{
+                    cursor: 'pointer', padding: '5px 12px', fontSize: 13,
+                    border: on ? '2px solid #2c3e50' : '1px solid transparent',
+                    opacity: statusFilters.length === 0 || on ? 1 : 0.4,
+                    fontWeight: on ? 700 : 500,
+                  }}
+                >{ITEM_STATUS_LABELS[s]}</button>
+              )
+            })}
+            {statusFilters.length > 0 && (
+              <button type="button"
+                onClick={() => { setStatusFilters([]); setPage(0) }}
+                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 12, padding: '5px 8px' }}
+              >Снять все</button>
+            )}
+          </div>
         </div>
-        <div className="form-group">
+        <div className="form-group" style={{ flex: '1 1 100%' }}>
           <label>Тип позиции</label>
-          <MultiSelectFilter
-            options={itemTypes.map(t => ({ value: String(t.id), label: t.name }))}
-            searchable
-            value={itemTypeFilters.map(String)}
-            onChange={vals => { setItemTypeFilters(vals.map(Number)); setPage(0) }}
-            placeholder="Все типы"
-            width={200}
-          />
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {itemTypes.map(t => {
+              const on = itemTypeFilters.includes(t.id)
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    setItemTypeFilters(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id])
+                    setPage(0)
+                  }}
+                  style={{
+                    padding: '5px 12px', borderRadius: 5,
+                    border: on ? '2px solid #3498db' : '1px solid #bdc3c7',
+                    background: on ? '#3498db' : '#fff',
+                    color: on ? '#fff' : '#2c3e50',
+                    fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                  }}
+                >{t.name}</button>
+              )
+            })}
+            {itemTypeFilters.length > 0 && (
+              <button type="button"
+                onClick={() => { setItemTypeFilters([]); setPage(0) }}
+                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 12, padding: '5px 8px' }}
+              >Снять все</button>
+            )}
+          </div>
         </div>
         <div className="form-group">
           <label>№ заказа</label>

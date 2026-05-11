@@ -1,5 +1,5 @@
 // Enums
-export type OrderStatus = 'LEAD' | 'CREATED' | 'FOR_PICKUP' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'DELIVERED' | 'COMPLETED' | 'CANCELLED'
+export type OrderStatus = 'LEAD' | 'CREATED' | 'FOR_PICKUP' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'DELIVERED' | 'PARTIALLY_DELIVERED' | 'COMPLETED' | 'CANCELLED'
 export type OrderItemStatus = 'CREATED' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'CANCELLED'
 export type ServiceStatus = 'CREATED' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 export type PaymentType = 'TRANSFER' | 'CARD' | 'CASH'
@@ -62,6 +62,9 @@ export interface Order {
   base_amount: number
   discount_percent: number
   cancellation_reason: string | null
+  /** Назначенный водитель/логист (Спринт D). NULL — не назначен. */
+  assigned_driver_id: number | null
+  assigned_driver_name: string | null
   created_at: string
   updated_at: string
 }
@@ -88,8 +91,11 @@ export interface OrderItem {
 export interface OrderItemService {
   id: number
   order_item_id: number
-  service_def_id: number
-  service_def_name?: string
+  /** V10: ссылка на SKU. Прежнее `service_def_id` удалено вместе со старым каталогом. */
+  sku_id: number
+  sku_name?: string
+  sku_group_name?: string
+  pricing_type?: string
   status: ServiceStatus
   price: number
   is_manual_price?: boolean
@@ -97,6 +103,47 @@ export interface OrderItemService {
   cancellation_reason?: string | null
   created_at: string
   updated_at: string
+}
+
+/** V10: тип ценообразования SKU. */
+export type SkuPricingType = 'FIXED' | 'BY_WEIGHT' | 'BY_AREA' | 'BY_PERIMETER'
+  | 'BY_LENGTH' | 'BY_WIDTH' | 'BY_RUNNING_METERS'
+
+export interface SkuGroup {
+  id: number
+  name: string
+  sort_order: number
+}
+
+export interface AttributeDefinition {
+  key: string
+  label: string
+  /** NUMBER | STRING | REFERENCE_ITEM_TYPE */
+  value_type: 'NUMBER' | 'STRING' | 'REFERENCE_ITEM_TYPE'
+  unit: string | null
+  sort_order: number
+}
+
+export interface Sku {
+  id: number
+  group_id: number
+  group_name: string | null
+  name: string
+  pricing_type: SkuPricingType
+  price: number | null
+  cost_price: number | null
+  is_auto_add: boolean
+  free_threshold: number | null
+  is_active: boolean
+  is_deleted: boolean
+  current_version_id: number | null
+  /** Атрибуты как map key → [values]. Один ключ может иметь несколько значений. */
+  attributes: Record<string, string[]>
+}
+
+export interface SkuMatchResult {
+  sku: Sku
+  matches: boolean
 }
 
 export interface Employee {
@@ -165,33 +212,10 @@ export interface CreateFeedbackRequest {
   screenshot_type?: string | null
 }
 
-export interface PriceListEntry {
-  id: number
-  item_type_id: number
-  item_type_name: string | null
-  service_def_id: number
-  service_def_name: string | null
-  pricing_type: string | null
-  price: number | null
-  cost_price: number | null
-  is_active: boolean
-}
-
+/** V10: ItemType упрощён — это просто категория вещи клиента. */
 export interface ItemType {
   id: number
   name: string
-  is_default: boolean
-  default_price: number | null
-  free_threshold: number | null
-  services: PriceListEntry[]
-  created_at: string
-}
-
-export interface ServiceDefinition {
-  id: number
-  name: string
-  base_price?: number
-  pricing_type?: PricingType
   created_at: string
 }
 
@@ -304,17 +328,9 @@ export interface AssignEmployeesRequest {
   employee_ids: number[]
 }
 
+/** V10: CreateItemTypeRequest упрощён — только имя. */
 export interface CreateItemTypeRequest {
   name: string
-  is_default?: boolean
-  default_price?: number | null
-  free_threshold?: number | null
-}
-
-export interface CreateServiceDefinitionRequest {
-  name: string
-  base_price: number
-  pricing_type: PricingType
 }
 
 export interface UpdateOrderItemDimensionsRequest {
@@ -323,6 +339,8 @@ export interface UpdateOrderItemDimensionsRequest {
   weight?: number
   area?: number
   running_meters?: number
+  /** V10: периметр — отдельная мера для овальных/круглых ковров. */
+  perimeter?: number
 }
 
 export interface CreateEmployeeRequest {

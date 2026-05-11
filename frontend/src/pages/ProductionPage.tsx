@@ -4,10 +4,11 @@ import {
   getProductionQueue, getProductionQueueItems, getProductionQueueServices,
   type ProductionQueueItem, type ProductionQueueService,
 } from '../api/analytics'
-import { updateServiceStatus } from '../api/services'
-import { getEmployees, getItemTypes } from '../api/references'
+import { updateServiceStatus, assignServiceEmployees } from '../api/services'
+import { getEmployees, getEmployeesSuitableFor, getItemTypes } from '../api/references'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
+import { hashColor } from '../components/Tiles'
 import type { Employee, ItemType, ServiceStatus } from '../types'
 
 interface QueueOrder {
@@ -75,6 +76,13 @@ export default function ProductionPage() {
   // Drag-state.
   const [dragServiceId, setDragServiceId] = useState<number | null>(null)
   const [dragOverColumn, setDragOverColumn] = useState<string | null>(null)
+  // Модалка выбора исполнителя при перетаскивании в IN_PROGRESS, когда у услуги
+  // ещё нет назначения (Спринт D, фидбэк 11 мая: «не дает переставить если не
+  // указан исполнитель — давай вместо ошибки открывать pop up»).
+  const [assigneePicker, setAssigneePicker] = useState<{ svc: ProductionQueueService; targetStatus: string } | null>(null)
+  const [pickerEmployees, setPickerEmployees] = useState<Employee[]>([])
+  // Фильтр «только без исполнителя».
+  const [onlyUnassigned, setOnlyUnassigned] = useState(false)
 
   useEffect(() => { localStorage.setItem('production_mode', mode) }, [mode])
 
@@ -120,6 +128,8 @@ export default function ProductionPage() {
   /** Применение фильтров услуг. */
   const filteredServices = useMemo(() => {
     return services.filter(s => {
+      // Спринт D: отдельный фильтр «только без исполнителя».
+      if (onlyUnassigned && s.employee_ids.length > 0) return false
       if (employeeFilters.length > 0) {
         // Услуга проходит, если хотя бы один её исполнитель в списке выбранных.
         const ok = s.employee_ids.some(id => employeeFilters.includes(id))
@@ -134,9 +144,11 @@ export default function ProductionPage() {
       }
       return true
     })
-  }, [services, employeeFilters, itemTypeFilters, serviceNameFilter, districtFilter, orderIdFilter])
+  }, [services, employeeFilters, itemTypeFilters, serviceNameFilter, districtFilter, orderIdFilter, onlyUnassigned])
 
-  /** Drag-n-drop статуса услуги. Бэк сам валидирует переход; мы показываем причину если он отклонил. */
+  /** Drag-n-drop статуса услуги. Бэк сам валидирует переход; мы показываем причину если он отклонил.
+   *  Особый случай: drop в IN_PROGRESS на услуге без assignee — открываем модалку
+   *  выбора сотрудника (Спринт D), назначаем + переводим статус единым актом. */
   const handleServiceDrop = async (targetStatus: string) => {
     if (dragServiceId == null) return
     const svc = services.find(s => s.service_id === dragServiceId)
@@ -144,17 +156,54 @@ export default function ProductionPage() {
     setDragOverColumn(null)
     if (!svc) return
     if (svc.status === targetStatus) return // ничего не делаем — drop в ту же колонку
+
+    // Если перетаскиваем в работу/готово, а исполнителей нет — спросим у оператора.
+    if ((targetStatus === 'IN_PROGRESS' || targetStatus === 'DONE') && svc.employee_ids.length === 0) {
+      try {
+        const list = await getEmployeesSuitableFor(svc.item_type_id)
+        setPickerEmployees(list.filter(e => e.active))
+        setAssigneePicker({ svc, targetStatus })
+      } catch {
+        showToast('Не удалось загрузить список сотрудников', 'error')
+      }
+      return
+    }
+    await applyStatusChange(svc, targetStatus)
+  }
+
+  /** Применить смену статуса услуги (с уже назначенным исполнителем). */
+  const applyStatusChange = async (svc: ProductionQueueService, targetStatus: string) => {
     try {
       await updateServiceStatus(svc.order_id, svc.item_id, svc.service_id, {
         status: targetStatus as ServiceStatus,
       })
-      // Обновляем локально без полной перезагрузки.
       setServices(prev => prev.map(s => s.service_id === svc.service_id ? { ...s, status: targetStatus } : s))
     } catch (e: unknown) {
-      // Бэк возвращает понятное сообщение в response.data.message — например
-      // «не назначен исполнитель» или «не заполнены размеры».
       const msg = (e as any)?.response?.data?.message || 'Не удалось сменить статус услуги'
       showToast(msg, 'error')
+    }
+  }
+
+  /** Назначение сотрудника из модалки + смена статуса (после успешного назначения). */
+  const confirmAssigneeAndChange = async (employeeId: number) => {
+    if (!assigneePicker) return
+    const { svc, targetStatus } = assigneePicker
+    try {
+      await assignServiceEmployees(svc.order_id, svc.item_id, svc.service_id, {
+        employee_ids: [employeeId],
+      })
+      // Локально подменяем исполнителя — теперь можно вызвать applyStatusChange.
+      const empName = pickerEmployees.find(e => e.id === employeeId)?.name || ''
+      const updatedSvc: ProductionQueueService = {
+        ...svc,
+        employee_ids: [employeeId],
+        employee_names: empName,
+      }
+      setServices(prev => prev.map(s => s.service_id === svc.service_id ? updatedSvc : s))
+      setAssigneePicker(null)
+      await applyStatusChange(updatedSvc, targetStatus)
+    } catch {
+      showToast('Не удалось назначить исполнителя', 'error')
     }
   }
 
@@ -162,12 +211,13 @@ export default function ProductionPage() {
   const hasServiceFilters =
     employeeFilters.length > 0 || itemTypeFilters.length > 0
     || serviceNameFilter.length > 0 || districtFilter.length > 0 || orderIdFilter !== ''
+    || onlyUnassigned
 
   return (
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <h1>Производство</h1>
-        <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
+        <div data-tour="production-modes" style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
           {([
             { v: 'orders' as Mode,   label: 'По заказам' },
             { v: 'items' as Mode,    label: 'По позициям' },
@@ -201,26 +251,73 @@ export default function ProductionPage() {
             />
           </div>
           <div className="form-group">
-            <label>Тип позиции</label>
-            <MultiSelectFilter
-              options={itemTypes.map(t => ({ value: String(t.id), label: t.name }))}
-              searchable
-              value={itemTypeFilters.map(String)}
-              onChange={vals => setItemTypeFilters(vals.map(Number))}
-              placeholder="Все"
-              width={180}
-            />
+            <label>&nbsp;</label>
+            {/* Спринт D, фидбэк 11 мая: «отдельную кнопку чтобы показать все
+                где не назначен исполнитель». Toggle: вкл → видны только пустые. */}
+            <button
+              type="button"
+              onClick={() => setOnlyUnassigned(v => !v)}
+              style={{
+                padding: '6px 14px', borderRadius: 6,
+                border: onlyUnassigned ? '2px solid #c0392b' : '1px solid #bdc3c7',
+                background: onlyUnassigned ? '#c0392b' : '#fff',
+                color: onlyUnassigned ? '#fff' : '#2c3e50',
+                fontWeight: onlyUnassigned ? 600 : 500, fontSize: 13, cursor: 'pointer',
+              }}
+              title="Показать только услуги без назначенного исполнителя"
+            >
+              {onlyUnassigned ? '✓ Только без исполнителя' : 'Только без исполнителя'}
+            </button>
           </div>
-          <div className="form-group">
+          <div className="form-group" style={{ flex: '1 1 100%' }}>
+            <label>Тип позиции</label>
+            {/* Спринт D: плашки вместо MultiSelectFilter — не нужно открывать
+                выпадающий список. Активный тип — синяя заливка. */}
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {itemTypes.map(t => {
+                const on = itemTypeFilters.includes(t.id)
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() =>
+                      setItemTypeFilters(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id])
+                    }
+                    style={{
+                      padding: '5px 12px', borderRadius: 5,
+                      border: on ? '2px solid #3498db' : '1px solid #bdc3c7',
+                      background: on ? '#3498db' : '#fff',
+                      color: on ? '#fff' : '#2c3e50',
+                      fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                    }}
+                  >{t.name}</button>
+                )
+              })}
+            </div>
+          </div>
+          <div className="form-group" style={{ flex: '1 1 100%' }}>
             <label>Услуга</label>
-            <MultiSelectFilter
-              options={allServiceNames.map(n => ({ value: n, label: n }))}
-              searchable
-              value={serviceNameFilter}
-              onChange={setServiceNameFilter}
-              placeholder="Все"
-              width={180}
-            />
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+              {allServiceNames.map(n => {
+                const on = serviceNameFilter.includes(n)
+                return (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() =>
+                      setServiceNameFilter(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
+                    }
+                    style={{
+                      padding: '5px 12px', borderRadius: 5,
+                      border: on ? '2px solid #16a085' : '1px solid #bdc3c7',
+                      background: on ? '#16a085' : '#fff',
+                      color: on ? '#fff' : '#2c3e50',
+                      fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                    }}
+                  >{n}</button>
+                )
+              })}
+            </div>
           </div>
           <div className="form-group">
             <label>Район</label>
@@ -420,6 +517,63 @@ export default function ProductionPage() {
               </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Модалка выбора исполнителя при перетаскивании в «В работе»/«Готово»
+          для услуги без assignee (Спринт D, фидбэк 11 мая). Плитки —
+          только сотрудники, чья роль умеет работать с типом этой позиции.
+          Список грузится при открытии модалки через getEmployeesSuitableFor. */}
+      {assigneePicker && (
+        <div className="modal-overlay" onClick={() => setAssigneePicker(null)} style={{ zIndex: 1300 }}>
+          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, padding: 16 }}>
+            <h3 style={{ marginTop: 0, marginBottom: 4 }}>Выберите исполнителя</h3>
+            <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 14 }}>
+              {assigneePicker.svc.service_name} на {assigneePicker.svc.item_type_name} ·
+              заказ #{assigneePicker.svc.order_id}. Показаны только сотрудники с подходящей ролью.
+            </div>
+            {pickerEmployees.length === 0 ? (
+              <div style={{ padding: 16, textAlign: 'center', color: '#7f8c8d' }}>
+                Нет сотрудников с подходящей ролью.
+                <br />Назначьте роль в карточке сотрудника или добавьте тип в её роль.
+              </div>
+            ) : (
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))',
+                gap: 8, marginBottom: 12,
+              }}>
+                {pickerEmployees.map(e => {
+                  const c = hashColor(e.name)
+                  return (
+                    <button
+                      key={e.id}
+                      type="button"
+                      onClick={() => void confirmAssigneeAndChange(e.id)}
+                      style={{
+                        padding: '10px 12px',
+                        background: c.bg, color: c.text,
+                        border: '1px solid #d6dbdf', borderRadius: 8,
+                        cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        textAlign: 'center',
+                      }}
+                    >{e.name}</button>
+                  )
+                })}
+              </div>
+            )}
+            <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+              <button
+                type="button"
+                onClick={() => setAssigneePicker(null)}
+                style={{
+                  padding: '8px 16px',
+                  background: '#fff', border: '1px solid #bdc3c7',
+                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                }}
+              >Отмена</button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,6 +1,10 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { getDashboard } from '../api/analytics'
+import { getDashboard, getProblemOrders, type ProblemOrderCard, type ProblemOrdersResponse } from '../api/analytics'
+
+/** Период автообновления главной — Спринт B, Миша: «дашборд для руководителя
+ *  должен сам обновляться, чтобы быть первым в курсе проблем». */
+const AUTO_REFRESH_MS = 60_000
 
 interface Widget {
   key: string
@@ -39,33 +43,40 @@ const STATUS_WIDGETS: Widget[] = [
     emphasizeColor: '#c0392b', hideIfZero: true },
 ]
 
-// Виджеты блока «Проблемные заказы» — нижняя часть Главной.
-// Все скрываются при значении 0 и подсвечиваются красным (требуют немедленного внимания).
-// Ссылки используют флаги-параметры (`overdueActual`, `badAddress`), которые повторяют
-// логику бэкенда DashboardRepository — иначе клик по виджету «2 заказа» открывал
-// все 4 активных, потому что фильтра на странице не было.
-const PROBLEM_WIDGETS: Widget[] = [
-  // Фактическая дата уже прошла, а заказ не закрыт.
-  { key: 'overdue_actual', label: 'Просрочка по факт. дате',
-    link: `/orders?statuses=${ACTIVE_STATUSES}&overdueActual=true`,
-    emphasizeColor: '#c0392b', hideIfZero: true },
-  // Статус FOR_PICKUP/DONE, но в логистике слот не назначен → ничего не запланировано.
-  { key: 'unassigned_logistics', label: 'Не распределено в логистике',
-    link: '/logistics',
-    emphasizeColor: '#d35400', hideIfZero: true },
-  // Пора забирать/доставлять, но адреса вообще нет → не знаем куда ехать.
-  { key: 'bad_address', label: 'Без адреса (FOR_PICKUP/DONE)',
-    link: `/orders?statuses=FOR_PICKUP,DONE&badAddress=true`,
-    emphasizeColor: '#c0392b', hideIfZero: true },
-]
+// Раньше тут жил PROBLEM_WIDGETS — голые счётчики проблемных заказов
+// (просрочка / без даты / без адреса). Спринт B по совету Миши заменил их
+// на детальные карточки: вместо «4» — список конкретных заказов с причиной,
+// клиентом и адресом. Логика собирается прямо в JSX ниже через renderProblemColumn.
 
 export default function DashboardPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<Record<string, number>>({})
+  const [problems, setProblems] = useState<ProblemOrdersResponse | null>(null)
   const [loading, setLoading] = useState(true)
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
   useEffect(() => {
-    getDashboard().then(setData).catch(() => {}).finally(() => setLoading(false))
+    let alive = true
+
+    const fetchAll = async () => {
+      try {
+        const [d, p] = await Promise.all([getDashboard(), getProblemOrders()])
+        if (!alive) return
+        setData(d)
+        setProblems(p)
+        setLastRefresh(new Date())
+      } catch {
+        // silent — на фоне обновляется; первый промах через 1 минуту попробует снова
+      } finally {
+        if (alive) setLoading(false)
+      }
+    }
+
+    void fetchAll()
+    // Автообновление раз в минуту — для отображения на отдельном мониторе
+    // в офисе («дашборд статуса бизнеса»).
+    const id = window.setInterval(fetchAll, AUTO_REFRESH_MS)
+    return () => { alive = false; window.clearInterval(id) }
   }, [])
 
   if (loading) return <div className="loading">Загрузка...</div>
@@ -127,7 +138,7 @@ export default function DashboardPage() {
       <div className="page-header"><h1>Главная</h1></div>
 
       {/* Блок 1: «На сегодня» — что физически нужно делать сегодня. */}
-      <section style={{ marginBottom: 28 }}>
+      <section data-tour="dashboard-today" style={{ marginBottom: 28 }}>
         <h2 style={{
           fontSize: 14, color: '#95a5a6', fontWeight: 600,
           textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 12px 0',
@@ -144,7 +155,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Блок 2: «По статусам» — состояние пайплайна. */}
-      <section style={{ marginBottom: 28 }}>
+      <section data-tour="dashboard-statuses" style={{ marginBottom: 28 }}>
         <h2 style={{
           fontSize: 14, color: '#95a5a6', fontWeight: 600,
           textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 12px 0',
@@ -160,38 +171,147 @@ export default function DashboardPage() {
         </div>
       </section>
 
-      {/* Блок 3: «Проблемные заказы» — карточки исчезают, когда показывать нечего.
-          Если все три счётчика = 0, секция целиком пуста (карточек нет).
-          Раздел всегда отрендерен с заголовком — оператор видит, что блок «здоров». */}
-      {(() => {
-        const visibleProblems = PROBLEM_WIDGETS.filter(w => (data[w.key] ?? 0) > 0)
-        return (
-          <section>
-            <h2 style={{
-              fontSize: 14, color: '#c0392b', fontWeight: 600,
-              textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 12px 0',
-            }}>
-              Проблемные заказы
-            </h2>
-            {visibleProblems.length === 0 ? (
+      {/* Блок 3: «Проблемные заказы» — теперь карточки с деталями (Спринт B).
+          Не голые счётчики «4», а список из реальных карточек: номер, клиент,
+          причина, дата. Клик — провалиться в заказ. */}
+      <section data-tour="dashboard-problems">
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '0 0 12px 0' }}>
+          <h2 style={{
+            fontSize: 14, color: '#c0392b', fontWeight: 600,
+            textTransform: 'uppercase', letterSpacing: 1.2, margin: 0,
+          }}>
+            Проблемные заказы
+          </h2>
+          {lastRefresh && (
+            <span style={{ fontSize: 11, color: '#95a5a6' }}>
+              обновлено в {lastRefresh.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })} · авто-обновление каждую минуту
+            </span>
+          )}
+        </div>
+        {(() => {
+          if (!problems) return null
+          const totalProblems =
+            problems.overdue_actual.length +
+            problems.unassigned_logistics.length +
+            problems.bad_address.length +
+            (problems.lost_in_delivery?.length ?? 0)
+          if (totalProblems === 0) {
+            return (
               <div style={{
                 padding: '14px 18px', borderRadius: 10,
                 background: '#eafaf1', color: '#27ae60', fontSize: 14,
               }}>
                 ✓ Проблемных заказов нет
               </div>
-            ) : (
-              <div style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-                gap: 14,
-              }}>
-                {PROBLEM_WIDGETS.map(renderCard)}
+            )
+          }
+          return (
+            <div style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+              gap: 14,
+            }}>
+              {renderProblemColumn('Просрочка по факт. дате', problems.overdue_actual, data['overdue_actual'] ?? 0, navigate, '#c0392b',
+                `/orders?statuses=${ACTIVE_STATUSES}&overdueActual=true`)}
+              {renderProblemColumn('Не распределено в логистике', problems.unassigned_logistics, data['unassigned_logistics'] ?? 0, navigate, '#d35400',
+                '/logistics')}
+              {renderProblemColumn('Без адреса', problems.bad_address, data['bad_address'] ?? 0, navigate, '#c0392b',
+                `/orders?statuses=FOR_PICKUP,DONE&badAddress=true`)}
+              {/* V9: «Потеряно в доставке» — заказы с LOST-позициями.
+                  Цвет багровый, чтобы отличался от «обычных» проблем (это уже факт),
+                  оператор сразу понимает: нужно создать гарантию или согласовать с клиентом. */}
+              {renderProblemColumn('Потеряно в доставке', problems.lost_in_delivery ?? [],
+                data['lost_in_delivery'] ?? 0, navigate, '#8e44ad',
+                `/orders?statuses=PARTIALLY_DELIVERED`)}
+            </div>
+          )
+        })()}
+      </section>
+    </div>
+  )
+}
+
+/**
+ * Колонка-карточка из категории проблемных заказов. Внутри: заголовок,
+ * до N мини-строк с конкретными заказами (клик — к заказу), при остатке —
+ * ссылка «и ещё X — все →» (клик к отфильтрованному списку).
+ */
+function renderProblemColumn(
+  title: string,
+  rows: ProblemOrderCard[],
+  total: number,
+  navigate: ReturnType<typeof useNavigate>,
+  color: string,
+  fallbackLink: string,
+) {
+  if (rows.length === 0) return null
+  const more = Math.max(0, total - rows.length)
+  return (
+    <div key={title} style={{
+      background: '#fff',
+      border: `1px solid ${color}33`,
+      borderLeft: `4px solid ${color}`,
+      borderRadius: 10,
+      padding: '14px 16px',
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color }}>{title}</div>
+        <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{total}</div>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+        {rows.map(r => (
+          <button
+            key={r.id}
+            type="button"
+            onClick={() => navigate(`/orders/${r.id}`)}
+            style={{
+              textAlign: 'left',
+              background: '#fafbfc',
+              border: '1px solid #ecf0f1',
+              borderRadius: 6,
+              padding: '6px 10px',
+              cursor: 'pointer',
+              transition: 'background 0.12s',
+            }}
+            onMouseEnter={e => (e.currentTarget.style.background = '#f0f6ff')}
+            onMouseLeave={e => (e.currentTarget.style.background = '#fafbfc')}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+              <span style={{ fontSize: 13, fontWeight: 500, color: '#2c3e50' }}>
+                #{r.id} · {r.client_name}
+              </span>
+              {r.problem_date && (
+                <span style={{ fontSize: 11, color: '#7f8c8d' }}>
+                  {new Date(r.problem_date).toLocaleDateString('ru')}
+                </span>
+              )}
+            </div>
+            {r.address && (
+              <div style={{ fontSize: 11, color: '#7f8c8d', marginTop: 2, lineHeight: 1.2 }}>
+                {r.address.length > 60 ? r.address.slice(0, 57) + '…' : r.address}
               </div>
             )}
-          </section>
-        )
-      })()}
+          </button>
+        ))}
+      </div>
+      {more > 0 && (
+        <button
+          type="button"
+          onClick={() => navigate(fallbackLink)}
+          style={{
+            marginTop: 8,
+            background: 'none',
+            border: 'none',
+            color,
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 500,
+            padding: 0,
+          }}
+        >
+          и ещё {more} — открыть все →
+        </button>
+      )}
     </div>
   )
 }

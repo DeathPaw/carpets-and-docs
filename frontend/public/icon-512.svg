@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="80" fill="#2c3e50"/>
+  <text x="50%" y="50%" dy=".35em" text-anchor="middle"
+        font-family="-apple-system, system-ui, sans-serif" font-size="80" font-weight="700" fill="#ffffff">
+    УЧЁТ
+  </text>
+  <text x="50%" y="50%" dy="2em" text-anchor="middle"
+        font-family="-apple-system, system-ui, sans-serif" font-size="56" font-weight="500" fill="#16a085">
+    ЗАКАЗОВ
+  </text>
+</svg>

@@ -2,6 +2,8 @@ package ru.carpet.controller;
 
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.*;
 import ru.carpet.dto.*;
 import ru.carpet.model.*;
@@ -10,6 +12,7 @@ import ru.carpet.service.OrderItemService;
 import ru.carpet.service.OrderItemServiceInstanceService;
 import ru.carpet.service.OrderService;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -21,14 +24,17 @@ public class OrderController {
     private final OrderItemService orderItemService;
     private final OrderItemServiceInstanceService serviceInstanceService;
     private final OrderItemPhotoRepository photoRepository;
+    private final NamedParameterJdbcTemplate jdbc;
 
     public OrderController(OrderService service, OrderItemService orderItemService,
                            OrderItemServiceInstanceService serviceInstanceService,
-                           OrderItemPhotoRepository photoRepository) {
+                           OrderItemPhotoRepository photoRepository,
+                           NamedParameterJdbcTemplate jdbc) {
         this.service = service;
         this.orderItemService = orderItemService;
         this.serviceInstanceService = serviceInstanceService;
         this.photoRepository = photoRepository;
+        this.jdbc = jdbc;
     }
 
     @GetMapping
@@ -108,6 +114,33 @@ public class OrderController {
     public Order updateActualDates(@PathVariable Long id, @RequestBody UpdateActualDatesRequest request) {
         return service.updateActualDates(id, request.actualPickupDate(), request.actualPickupTimeSlot(),
                 request.actualDeliveryDate(), request.actualDeliveryTimeSlot());
+    }
+
+    /**
+     * Назначить/снять водителя (Спринт D, фидбэк 11 мая). Используется на странице
+     * «Логистика»: оператор смотрит на карточку заказа в дне, кликает по чипу
+     * «Водитель» и выбирает из плиток сотрудников.
+     *
+     * <p>body: {@code {"employee_id": 12}} или {@code {"employee_id": null}} для снятия.
+     */
+    @PatchMapping("/{id}/driver")
+    public Map<String, Object> setDriver(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Object raw = body.get("employee_id");
+        Long employeeId = raw instanceof Number n ? n.longValue() : null;
+        // MapSqlParameterSource — допускает null в значениях, в отличие от Map.of.
+        jdbc.update("""
+            UPDATE orders SET assigned_driver_id = :eid, updated_at = NOW()
+             WHERE id = :id
+            """, new MapSqlParameterSource().addValue("eid", employeeId).addValue("id", id));
+        var rows = jdbc.queryForList("""
+            SELECT o.assigned_driver_id, e.name AS driver_name
+              FROM orders o
+              LEFT JOIN employees e ON e.id = o.assigned_driver_id
+             WHERE o.id = :id
+            """, Map.of("id", id));
+        Map<String, Object> result = new HashMap<>(rows.isEmpty() ? Map.of() : rows.get(0));
+        result.put("ok", true);
+        return result;
     }
 
     @PostMapping("/{id}/pay")

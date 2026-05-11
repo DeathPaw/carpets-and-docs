@@ -51,7 +51,7 @@ export const assignServiceEmployees = (
 export const addServiceToItem = (
   orderId: number,
   itemId: number,
-  data: { service_def_id: number },
+  data: { sku_id: number },
 ) =>
   client
     .post<OrderItemService>(`/api/orders/${orderId}/items/${itemId}/services`, data)

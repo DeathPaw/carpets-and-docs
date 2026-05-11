@@ -165,3 +165,82 @@
   }
   .sidebar-back { margin: 4px; }
 }
+
+/* ============================================================================
+   Баннер тренажёра — горизонтальная полоса наверху страницы.
+   Видна только в режиме `VITE_TRAINING=1` (см. Layout.tsx → isTrainingMode).
+   Цвет — болотно-зелёный, чтобы:
+     • было заметно, что это не боевая система,
+     • но не сливалось с супервизорской оранжевой рамкой.
+   ============================================================================ */
+.training-banner {
+  background: #16a085;
+  color: #ffffff;
+  padding: 8px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  font-size: 13px;
+  font-weight: 500;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.training-banner__label {
+  letter-spacing: 0.3px;
+}
+
+.training-banner__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.training-banner__btn {
+  background: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.training-banner__btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+
+.training-banner__btn--reset {
+  background: rgba(231, 76, 60, 0.25);
+  border-color: rgba(231, 76, 60, 0.6);
+}
+
+.training-banner__btn--reset:hover {
+  background: rgba(231, 76, 60, 0.45);
+}
+
+.training-banner__btn:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* Обёртка для main-content + баннера: сайдбар остаётся слева, а баннер
+   приклеен к верху контентной части. min-width: 0 нужен, чтобы внутренние
+   таблицы со скроллом не растягивали родителя.
+
+   --challenge-panel-width — задаётся через JS в ChallengePanel.tsx когда
+   панель челленджа открыта; сдвигает main-content, чтобы панель не
+   перекрывала контент (баг, замеченный пользователем на скриншоте). */
+.app-with-banner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  margin-right: var(--challenge-panel-width, 0);
+  transition: margin-right 0.2s;
+}
+

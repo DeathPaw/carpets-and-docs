@@ -113,4 +113,31 @@ public class EmployeeRepository {
                 ") ORDER BY e.id",
                 Map.of("tid", itemTypeId), ROW_MAPPER);
     }
+
+    /**
+     * Сотрудники-водители для модалки логистики.
+     *
+     * <p>V10: «водитель» — это сотрудник, у которого роль связана с item_type,
+     * на который ссылается хотя бы один auto-add SKU (через атрибут
+     * {@code item_type}). На практике это «Логист» с item_type'ами «Доставка»/«Приём» —
+     * подцепляется автоматически без хардкода имён.
+     *
+     * <p>В отличие от {@link #findActiveSuitableForItemType}, универсалов (role_id IS NULL)
+     * сюда НЕ включаем — обратная связь от оператора: «должны быть только водители,
+     * не любые активные сотрудники».
+     */
+    public List<Employee> findActiveDrivers() {
+        return jdbc.query(
+                "SELECT " + COLS + " FROM employees e " +
+                "WHERE e.active = TRUE AND e.role_id IS NOT NULL AND EXISTS (" +
+                "  SELECT 1 FROM employee_role_item_types rt " +
+                "  JOIN sku_attributes sa " +
+                "    ON sa.attr_key = 'item_type' " +
+                "   AND sa.attr_value = rt.item_type_id::text " +
+                "  JOIN skus s ON s.id = sa.sku_id AND s.is_auto_add = TRUE " +
+                "                AND s.is_active = TRUE AND s.is_deleted = FALSE " +
+                "  WHERE rt.role_id = e.role_id " +
+                ") ORDER BY e.id",
+                Map.of(), ROW_MAPPER);
+    }
 }

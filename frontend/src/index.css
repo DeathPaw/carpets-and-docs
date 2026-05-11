@@ -145,6 +145,9 @@ input:focus, select:focus, textarea:focus {
 .badge-partially_done { background: #fff3cd; color: #856404; }
 .badge-done { background: #d4edda; color: #155724; }
 .badge-delivered { background: #cce5ff; color: #004085; }
+/* V9: «Частично доставлен» — багровый, чтобы оператор сразу заметил
+   (часть позиций потеряна, нужна гарантия/решение). */
+.badge-partially_delivered { background: #e8d5f0; color: #5b2c83; }
 .badge-completed { background: #2c3e50; color: #fff; }
 .badge-cancelled { background: #f8d7da; color: #721c24; }
 .badge-for_pickup { background-color: #17a2b8; color: white; }
@@ -167,6 +170,11 @@ input:focus, select:focus, textarea:focus {
   max-width: 520px;
   width: 100%;
   box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+  /* Если контент выше окна — скроллим внутри, а не уходим за viewport.
+     Раньше длинные модалки (редактор SKU с EAV-атрибутами) частично уходили
+     под низ экрана, и нижние кнопки были недоступны без zoom-out. */
+  max-height: 90vh;
+  overflow-y: auto;
 }
 
 .modal.large {

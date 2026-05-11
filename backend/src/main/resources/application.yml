@@ -28,7 +28,7 @@ spring:
 app:
   admin:
     username: ${APP_ADMIN_USERNAME:admin}
-    password: ${APP_ADMIN_PASSWORD:foxyisgood}
+    password: ${APP_ADMIN_PASSWORD:foxy}
 
 # Swagger UI — http://localhost:8080/swagger-ui.html
 # OpenAPI спецификация — http://localhost:8080/v3/api-docs
