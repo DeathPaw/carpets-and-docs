@@ -17,14 +17,20 @@ export const getSkus = () =>
 export const getSku = (id: number) =>
   client.get<Sku>(`/api/skus/${id}`).then(r => r.data)
 
+/**
+ * Тело POST/PUT для /api/skus. Имена snake_case — Jackson на бэке настроен на
+ * {@code SNAKE_CASE}, поэтому camelCase-поля он просто проигнорирует и в БД
+ * прилетят NULL'ы (мы один раз наступили на это, см. GlobalExceptionHandler-логи
+ * от 11 мая). Если решим добавлять новое поле — называем сразу в snake_case.
+ */
 export interface SkuRequest {
-  groupId: number
+  group_id: number
   name: string
-  pricingType: SkuPricingType
+  pricing_type: SkuPricingType
   price: number | null
-  costPrice: number | null
-  isAutoAdd: boolean
-  freeThreshold: number | null
+  cost_price: number | null
+  is_auto_add: boolean
+  free_threshold: number | null
   attributes: Record<string, string[]>
 }
 

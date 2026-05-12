@@ -570,13 +570,13 @@ function SkuEditorModal({
       if (filtered.length > 0) cleanedAttrs[k] = filtered
     }
     const body: SkuRequest = {
-      groupId,
+      group_id: groupId,
       name: name.trim(),
-      pricingType,
+      pricing_type: pricingType,
       price: price.trim() === '' ? null : Number(price),
-      costPrice: costPrice.trim() === '' ? null : Number(costPrice),
-      isAutoAdd,
-      freeThreshold: freeThreshold.trim() === '' ? null : Number(freeThreshold),
+      cost_price: costPrice.trim() === '' ? null : Number(costPrice),
+      is_auto_add: isAutoAdd,
+      free_threshold: freeThreshold.trim() === '' ? null : Number(freeThreshold),
       attributes: cleanedAttrs,
     }
     setSaving(true)
