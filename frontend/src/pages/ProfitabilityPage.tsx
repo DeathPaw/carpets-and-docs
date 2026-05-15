@@ -7,7 +7,7 @@ import {
   type ProfitByEmployeeService, type ProfitByDistrict, type ProfitByOrder,
 } from '../api/analytics'
 
-type Tab = 'item-type' | 'client' | 'employee' | 'district' | 'order'
+type Tab = 'item-type' | 'client' | 'employee' | 'district' | 'order' | 'pnl'
 
 const TAB_LABELS: Record<Tab, string> = {
   'item-type': 'По типам позиций',
@@ -15,9 +15,10 @@ const TAB_LABELS: Record<Tab, string> = {
   'employee': 'По сотрудникам',
   'district': 'По районам',
   'order': 'По заказам',
+  'pnl': 'P&L за месяц',
 }
 
-const TABS: Tab[] = ['item-type', 'client', 'employee', 'district', 'order']
+const TABS: Tab[] = ['item-type', 'client', 'employee', 'district', 'order', 'pnl']
 
 const fmt = (n: number | string | null | undefined) => {
   const v = Number(n ?? 0)
@@ -297,8 +298,51 @@ export default function ProfitabilityPage() {
               </table>
             )
           })()}
+
+          {tab === 'pnl' && <PnlTab />}
         </>
       )}
+    </div>
+  )
+}
+
+/** V11: P&L за месяц — выручка, себестоимость, расходы, прибыль. */
+function PnlTab() {
+  const now = new Date()
+  const [yearMonth, setYearMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
+  const [data, setData] = useState<{
+    revenue: number; cogs: number; gross_profit: number; expenses: number; net_profit: number
+  } | null>(null)
+  const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    setLoading(true)
+    fetch(`/api/expenses/pnl?yearMonth=${yearMonth}`, {
+      headers: { 'Authorization': `Basic ${sessionStorage.getItem('auth')}` },
+    })
+      .then(r => r.json())
+      .then(setData)
+      .catch(() => setData(null))
+      .finally(() => setLoading(false))
+  }, [yearMonth])
+
+  return (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <label>Месяц: </label>
+        <input type="month" value={yearMonth} onChange={e => setYearMonth(e.target.value)} />
+      </div>
+      {loading ? <div className="loading">Загрузка...</div> : data ? (
+        <table>
+          <tbody>
+            <tr><td style={{ fontWeight: 600 }}>Выручка</td><td style={{ textAlign: 'right' }}>{fmt(data.revenue)}</td></tr>
+            <tr><td>Себестоимость (COGS)</td><td style={{ textAlign: 'right', color: '#e74c3c' }}>−{fmt(data.cogs)}</td></tr>
+            <tr style={{ background: '#eafaf1', fontWeight: 600 }}><td>Валовая прибыль</td><td style={{ textAlign: 'right', color: profitColor(data.gross_profit) }}>{fmt(data.gross_profit)}</td></tr>
+            <tr><td>Расходы</td><td style={{ textAlign: 'right', color: '#e74c3c' }}>−{fmt(data.expenses)}</td></tr>
+            <tr style={{ background: '#fef9e7', fontWeight: 700, fontSize: '1.1em' }}><td>Чистая прибыль</td><td style={{ textAlign: 'right', color: profitColor(data.net_profit) }}>{fmt(data.net_profit)}</td></tr>
+          </tbody>
+        </table>
+      ) : <div style={{ color: '#888' }}>Нет данных</div>}
     </div>
   )
 }

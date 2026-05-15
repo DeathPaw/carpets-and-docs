@@ -6,33 +6,41 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import jakarta.servlet.http.HttpServletResponse;
+import ru.carpet.model.AppUser;
+import ru.carpet.repository.AppUserRepository;
 
 import java.util.List;
 
+/**
+ * V11: авторизация через таблицу {@code users} в БД.
+ *
+ * <p>При первом старте (таблица {@code users} пуста) создаёт дефолтного
+ * суперпользователя из {@code app.admin.username / password} в application.yml.
+ * После этого управление пользователями — через UI (страница «Пользователи»).
+ *
+ * <p>Роли из БД ({@code SUPERVISOR}, {@code ADMIN}, {@code OPERATOR}, {@code READONLY})
+ * маппятся в Spring Security authorities: {@code ROLE_SUPERVISOR}, {@code ROLE_ADMIN} и т.д.
+ */
 @Configuration
 @EnableWebSecurity
 public class SecurityConfig {
 
-    /**
-     * Логин/пароль администратора берутся из properties (см. application.yml: app.admin.*).
-     * В проде задаются через env-переменные APP_ADMIN_USERNAME / APP_ADMIN_PASSWORD,
-     * чтобы боевые значения не лежали в репозитории.
-     */
     @Value("${app.admin.username:admin}")
-    private String adminUsername;
+    private String defaultUsername;
 
-    @Value("${app.admin.password:foxyisgood}")
-    private String adminPassword;
+    @Value("${app.admin.password:foxy}")
+    private String defaultPassword;
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
@@ -41,10 +49,6 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                // /api/worker/** — личный кабинет работника (Спринт D). Авторизация
-                // по 4-значному PIN внутри API, без Basic Auth. На локальном стенде
-                // и за NAT'ом это безопасно; на проде с белым IP сюда можно навесить
-                // rate-limit или подписанный JWT на коротком сроке.
                 .requestMatchers("/api/worker/**").permitAll()
                 .requestMatchers("/api/**").authenticated()
                 .anyRequest().permitAll()
@@ -53,7 +57,8 @@ public class SecurityConfig {
                 .authenticationEntryPoint((request, response, authException) -> {
                     response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
                     response.setContentType("application/json");
-                    response.getWriter().write("{\"error\":\"Unauthorized\",\"message\":\"Требуется авторизация\"}");
+                    response.getWriter().write(
+                        "{\"error\":\"Unauthorized\",\"message\":\"Требуется авторизация\"}");
                 })
             );
         return http.build();
@@ -71,14 +76,26 @@ public class SecurityConfig {
         return source;
     }
 
+    /**
+     * UserDetailsService читает из таблицы {@code users}. Если таблица пуста —
+     * сидит дефолтного суперпользователя из application.yml (один раз).
+     */
     @Bean
-    public UserDetailsService userDetailsService(PasswordEncoder encoder) {
-        var user = User.builder()
-            .username(adminUsername)
-            .password(encoder.encode(adminPassword))
-            .roles("ADMIN")
-            .build();
-        return new InMemoryUserDetailsManager(user);
+    public UserDetailsService userDetailsService(AppUserRepository userRepo, PasswordEncoder encoder) {
+        // Seed default user if table is empty
+        if (userRepo.count() == 0) {
+            userRepo.create(defaultUsername, encoder.encode(defaultPassword),
+                    "Администратор", "SUPERVISOR", null);
+        }
+        return username -> {
+            AppUser appUser = userRepo.findByUsername(username)
+                    .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
+            return new User(
+                    appUser.username(),
+                    appUser.passwordHash(),
+                    List.of(new SimpleGrantedAuthority("ROLE_" + appUser.role()))
+            );
+        };
     }
 
     @Bean

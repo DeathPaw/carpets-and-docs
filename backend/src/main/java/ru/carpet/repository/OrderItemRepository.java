@@ -47,6 +47,9 @@ public class OrderItemRepository {
         this.jdbc = jdbc;
     }
 
+    /** Для сложных ad-hoc запросов из OrderService (exclude_from_status_calc и т.п.). */
+    public NamedParameterJdbcTemplate getJdbc() { return jdbc; }
+
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +

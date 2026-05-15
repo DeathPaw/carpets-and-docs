@@ -1,56 +1,41 @@
-import { useState, useEffect } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import FeedbackButton from './FeedbackButton'
+import NotificationBell from './NotificationBell'
 import TrainingBanner from '../training/TrainingBanner'
 import { isTrainingMode } from '../training'
-import { isViewerMode } from '../utils/viewer'
+import { useAuth } from '../auth/AuthContext'
 import './Layout.css'
 
 /**
- * Боковая навигация — вертикальный sidebar слева. Заменил горизонтальный navbar,
- * который не вмещал ~15 разделов (особенно с включённым режимом супервизора).
+ * V11: роль определяется при логине (SUPERVISOR / ADMIN / OPERATOR / READONLY).
+ * Тумблер «Супервизор ВКЛ» и чекбокс «Режим просмотра» убраны.
  *
- * Структура:
- *   • Бренд сверху
- *   • Секция «Оператор» — повседневные страницы
- *   • Секция «Супервизор» — настройки и логи (видна только в режиме супервизора)
- *   • Внизу — переключатель режима, кнопка «Назад» и выход
- *
- * В режиме тренажёра (VITE_TRAINING=1) сверху появляется зелёный баннер
- * «Тренажёр — изменения не сохраняются» с кнопками «Начать тур» и «Начать заново».
+ * Видимость разделов:
+ *   SUPERVISOR — всё, включая Пользователи / Доходность / Логи
+ *   ADMIN      — Справочники / Сотрудники / Обращения (без Логов, Доходности, Пользователей)
+ *   OPERATOR   — Заказы / Позиции / Логистика / Производство / Аналитика / Клиенты
+ *   READONLY   — то же что OPERATOR, но с баннером «Только просмотр» и скрытыми кнопками мутаций
  */
 export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const trainingMode = isTrainingMode()
-  const viewerMode = isViewerMode()
-
-  // Режим супервизора: скрывает «системные» разделы от обычного оператора —
-  // справочники, сотрудников, логи, доходность. Хранится в localStorage.
-  const [supervisorMode, setSupervisorMode] = useState<boolean>(
-    () => localStorage.getItem('supervisor_mode') === '1'
-  )
-  useEffect(() => {
-    localStorage.setItem('supervisor_mode', supervisorMode ? '1' : '0')
-  }, [supervisorMode])
+  const { user, isSupervisor, isAdmin, isReadonly } = useAuth()
 
   const logout = () => {
     sessionStorage.removeItem('auth')
-    navigate('/login')
+    window.location.href = '/login'
   }
 
-  // Кнопка «Назад» скрыта только на login.
   const ROOT_PATHS = new Set(['/login'])
   const showBack = !ROOT_PATHS.has(location.pathname)
 
-  // Хелпер для NavLink с одинаковыми классами — меньше JSX-шума.
-  // tour — id для data-tour, чтобы Joyride мог подсветить пункт.
   const navClass = (extra = '') =>
     ({ isActive }: { isActive: boolean }) =>
       `nav-link${extra ? ' ' + extra : ''}${isActive ? ' active' : ''}`
 
   return (
-    <div className={`app${supervisorMode ? ' supervisor-frame' : ''}`}>
+    <div className={`app${isSupervisor ? ' supervisor-frame' : ''}`}>
       <aside className="app-sidebar">
         <div className="sidebar-brand">
           Учёт заказов
@@ -74,34 +59,39 @@ export default function Layout() {
           <NavLink to="/clients"    className={navClass()} data-tour="nav-clients">Клиенты</NavLink>
         </nav>
 
-        {supervisorMode && (
+        {/* Админские разделы: SUPERVISOR + ADMIN */}
+        {isAdmin && (
           <>
-            <div className="sidebar-section-label" style={{ color: '#e67e22' }}>Супервизор</div>
+            <div className="sidebar-section-label" style={{ color: '#e67e22' }}>
+              {isSupervisor ? 'Супервизор' : 'Администратор'}
+            </div>
             <nav className="sidebar-nav">
-              <NavLink to="/profitability" className={navClass('supervisor-link')}>Доходность</NavLink>
+              {isSupervisor && <NavLink to="/profitability" className={navClass('supervisor-link')}>Доходность</NavLink>}
               <NavLink to="/references"    className={navClass('supervisor-link')}>Справочники</NavLink>
               <NavLink to="/employees"     className={navClass('supervisor-link')}>Сотрудники</NavLink>
               <NavLink to="/feedback"      className={navClass('supervisor-link')}>Обращения</NavLink>
-              <NavLink to="/error-log"     className={navClass('supervisor-link')}>Лог ошибок</NavLink>
-              <NavLink to="/audit-log"     className={navClass('supervisor-link')}>Лог действий</NavLink>
+              {isSupervisor && <NavLink to="/expenses" className={navClass('supervisor-link')}>Расходы</NavLink>}
+              {isSupervisor && <NavLink to="/users" className={navClass('supervisor-link')}>Пользователи</NavLink>}
+              {isSupervisor && <NavLink to="/error-log"  className={navClass('supervisor-link')}>Лог ошибок</NavLink>}
+              {isSupervisor && <NavLink to="/audit-log"  className={navClass('supervisor-link')}>Лог действий</NavLink>}
             </nav>
           </>
         )}
 
         <div className="sidebar-footer">
-          <button
-            onClick={() => setSupervisorMode(s => !s)}
-            className="nav-link"
-            title={supervisorMode ? 'Выключить режим супервизора' : 'Включить режим супервизора'}
-            data-tour="supervisor-toggle"
-            style={{
-              background: supervisorMode ? 'rgba(230, 126, 34, 0.25)' : 'transparent',
-              color: supervisorMode ? '#f5b041' : '#bdc3c7',
-              fontWeight: supervisorMode ? 500 : 400,
-            }}
-          >
-            👑 {supervisorMode ? 'Супервизор: ВКЛ' : 'Режим супервизора'}
-          </button>
+          {/* Информация о пользователе вместо тумблера */}
+          {user && (
+            <div style={{
+              padding: '6px 12px', fontSize: 12, color: '#95a5a6',
+              borderTop: '1px solid rgba(255,255,255,0.1)', marginBottom: 4,
+            }}>
+              <div style={{ fontWeight: 500, color: '#bdc3c7' }}>{user.display_name}</div>
+              <div>{user.role === 'SUPERVISOR' ? '👑 Супервизор' :
+                    user.role === 'ADMIN' ? '🔧 Администратор' :
+                    user.role === 'READONLY' ? '👁 Только просмотр' :
+                    '👤 Оператор'}</div>
+            </div>
+          )}
           <button onClick={logout} className="nav-link" style={{ opacity: 0.7 }}>
             Выход
           </button>
@@ -110,24 +100,14 @@ export default function Layout() {
 
       <div className="app-with-banner">
         {trainingMode && <TrainingBanner />}
-        {/* Полоса «Режим просмотра» — видна на всех страницах оператора в viewer-mode.
-            Сделана тёмно-серой, чтобы заметно отличалось от обычного UI и от
-            тренажёрного зелёного. */}
-        {viewerMode && (
+        {/* Полоса READONLY — аналог старого «Режим просмотра» */}
+        {isReadonly && (
           <div style={{
             background: '#34495e', color: '#fff', padding: '6px 16px',
             fontSize: 13, fontWeight: 500, letterSpacing: 0.3,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            display: 'flex', justifyContent: 'center', alignItems: 'center',
           }}>
-            <span>👁 Режим просмотра — изменения отключены</span>
-            <button
-              onClick={() => { sessionStorage.removeItem('viewer_mode'); window.location.reload() }}
-              style={{
-                background: 'rgba(255,255,255,0.15)', color: '#fff',
-                border: '1px solid rgba(255,255,255,0.3)', padding: '4px 10px',
-                borderRadius: 4, fontSize: 12, cursor: 'pointer',
-              }}
-            >Выключить режим просмотра</button>
+            👁 Режим просмотра — изменения отключены
           </div>
         )}
         <main className="main-content">
@@ -135,8 +115,8 @@ export default function Layout() {
         </main>
       </div>
 
-      {/* Плавающая кнопка «Связь с разработчиком» — глобально, на всех авторизованных страницах. */}
       <FeedbackButton />
+      {!isReadonly && <NotificationBell />}
     </div>
   )
 }

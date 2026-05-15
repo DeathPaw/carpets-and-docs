@@ -220,11 +220,13 @@ public class OrderController {
     }
 
     @PatchMapping("/{orderId}/items/{itemId}/dimensions")
-    public OrderItem updateItemDimensions(@PathVariable Long orderId,
+    public Map<String, Object> updateItemDimensions(@PathVariable Long orderId,
                                           @PathVariable Long itemId,
                                           @Valid @RequestBody UpdateOrderItemDimensionsRequest request) {
-        return orderItemService.updateDimensions(itemId, request.length(), request.width(), request.weight(),
+        OrderItem updated = orderItemService.updateDimensions(itemId, request.length(), request.width(), request.weight(),
                 request.area(), request.runningMeters());
+        var switches = orderItemService.getLastSwitches();
+        return Map.of("item", updated, "sku_switches", switches);
     }
 
     @GetMapping("/{id}/modifiers")

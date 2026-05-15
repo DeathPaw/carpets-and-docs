@@ -6,7 +6,7 @@ import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import { hashColor } from '../components/Tiles'
 import { formatOrderNumber } from '../utils/format'
-import { isViewerMode } from '../utils/viewer'
+import { useAuth } from '../auth/AuthContext'
 import type { Order, Employee } from '../types'
 
 type CardType = 'pickup' | 'delivery'
@@ -84,6 +84,7 @@ function daysSince(createdAt: string): number {
 export default function LogisticsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
+  const { isReadonly } = useAuth()
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date().toISOString().slice(0,10)))
   // Мультивыборы: пустой массив = «все».
   const [typeFilters, setTypeFilters] = useState<CardType[]>([])
@@ -416,7 +417,7 @@ export default function LogisticsPage() {
     // - двойной: тип (pickup/delivery) сверху, слот снизу. Делаем градиент.
     const typeColor = isPickup ? '#3498db' : '#27ae60'
     const sColor = slotColor(card.timeSlot)
-    const viewer = isViewerMode()
+    const viewer = isReadonly
     return (
       <div
         key={`${card.order.id}-${card.type}`}

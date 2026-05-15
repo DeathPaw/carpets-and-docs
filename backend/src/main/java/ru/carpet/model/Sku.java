@@ -37,6 +37,23 @@ public record Sku(
         boolean isActive,
         boolean isDeleted,
         Long currentVersionId,
+        /**
+         * V11 lifecycle: при каком статусе ЗАКАЗА автоматически завершить услугу.
+         * Пример: Оформление → auto_complete_on_status = "CREATED".
+         * null = не завершать автоматически.
+         */
+        String autoCompleteOnStatus,
+        /**
+         * V11 lifecycle: какой статус заказа выставить, когда ЭТА услуга завершена.
+         * Пример: Доставка → triggers_order_status = "DELIVERED".
+         * null = не выставлять.
+         */
+        String triggersOrderStatus,
+        /**
+         * V11 lifecycle: исключить из вычисления общего статуса заказа.
+         * Оформление/Доставка/Приём не должны блокировать переход в DONE.
+         */
+        boolean excludeFromStatusCalc,
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
         /**

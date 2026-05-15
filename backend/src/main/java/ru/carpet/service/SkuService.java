@@ -38,17 +38,21 @@ public class SkuService {
     @Transactional
     public Sku create(Long groupId, String name, String pricingType, BigDecimal price,
                       BigDecimal costPrice, boolean isAutoAdd, BigDecimal freeThreshold,
+                      String autoCompleteOnStatus, String triggersOrderStatus, boolean excludeFromStatusCalc,
                       Map<String, List<String>> attributes) {
         return repository.create(groupId, name, pricingType, price, costPrice, isAutoAdd, freeThreshold,
+                autoCompleteOnStatus, triggersOrderStatus, excludeFromStatusCalc,
                 attributes, AuditUser.current());
     }
 
     @Transactional
     public Sku update(Long id, Long groupId, String name, String pricingType, BigDecimal price,
                       BigDecimal costPrice, boolean isAutoAdd, BigDecimal freeThreshold,
+                      String autoCompleteOnStatus, String triggersOrderStatus, boolean excludeFromStatusCalc,
                       Map<String, List<String>> attributes) {
         repository.findById(id).orElseThrow(() -> new EntityNotFoundException("Sku not found: " + id));
         return repository.update(id, groupId, name, pricingType, price, costPrice, isAutoAdd, freeThreshold,
+                autoCompleteOnStatus, triggersOrderStatus, excludeFromStatusCalc,
                 attributes, AuditUser.current());
     }
 
@@ -62,6 +66,30 @@ public class SkuService {
 
     /** SKU с auto-add — для авто-добавления при создании заказа. */
     public List<Sku> findAutoAdd() { return repository.findAutoAdd(); }
+
+    /**
+     * V11: проверка — подходит ли конкретная SKU к параметрам позиции.
+     */
+    public boolean checkMatch(Sku sku, ru.carpet.model.OrderItem item) {
+        return matches(sku, item.itemTypeId(),
+                item.weight(), item.area(), item.perimeter(),
+                item.length(), item.width(), item.runningMeters());
+    }
+
+    /**
+     * V11: найти замену для SKU, которая перестала подходить к позиции.
+     * Ищем в той же группе активную SKU, которая matches. Если несколько — первую.
+     * Если ни одной — null.
+     */
+    public Sku findBestReplacement(Sku currentSku, ru.carpet.model.OrderItem item) {
+        return repository.findAll(false).stream()
+                .filter(s -> s.groupId().equals(currentSku.groupId()))
+                .filter(Sku::isActive)
+                .filter(s -> !s.id().equals(currentSku.id()))
+                .filter(s -> checkMatch(s, item))
+                .findFirst()
+                .orElse(null);
+    }
 
     /**
      * Подбор подходящих SKU из группы под параметры позиции.

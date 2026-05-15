@@ -31,6 +31,10 @@ export interface SkuRequest {
   cost_price: number | null
   is_auto_add: boolean
   free_threshold: number | null
+  /** V11 lifecycle */
+  auto_complete_on_status?: string | null
+  triggers_order_status?: string | null
+  exclude_from_status_calc?: boolean
   attributes: Record<string, string[]>
 }
 

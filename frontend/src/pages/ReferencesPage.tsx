@@ -536,6 +536,10 @@ function SkuEditorModal({
   const [costPrice, setCostPrice] = useState<string>(existing?.cost_price?.toString() ?? '')
   const [isAutoAdd, setIsAutoAdd] = useState<boolean>(existing?.is_auto_add ?? false)
   const [freeThreshold, setFreeThreshold] = useState<string>(existing?.free_threshold?.toString() ?? '')
+  // V11 lifecycle
+  const [autoCompleteOn, setAutoCompleteOn] = useState<string>(existing?.auto_complete_on_status ?? '')
+  const [triggersStatus, setTriggersStatus] = useState<string>(existing?.triggers_order_status ?? '')
+  const [excludeCalc, setExcludeCalc] = useState<boolean>(existing?.exclude_from_status_calc ?? false)
   const [attrValues, setAttrValues] = useState<Record<string, string[]>>(existing?.attributes ?? {})
   const [err, setErr] = useState('')
   const [saving, setSaving] = useState(false)
@@ -577,6 +581,9 @@ function SkuEditorModal({
       cost_price: costPrice.trim() === '' ? null : Number(costPrice),
       is_auto_add: isAutoAdd,
       free_threshold: freeThreshold.trim() === '' ? null : Number(freeThreshold),
+      auto_complete_on_status: autoCompleteOn || null,
+      triggers_order_status: triggersStatus || null,
+      exclude_from_status_calc: excludeCalc,
       attributes: cleanedAttrs,
     }
     setSaving(true)
@@ -638,6 +645,41 @@ function SkuEditorModal({
             <input type="number" step="0.01" value={freeThreshold} onChange={e => setFreeThreshold(e.target.value)} placeholder="например, 4000" />
           </div>
         </div>
+
+        {/* V11 lifecycle — видно только если auto-add включён */}
+        {isAutoAdd && (
+          <div style={{ border: '1px solid #ffeaa7', borderRadius: 6, padding: 12, marginBottom: 12, background: '#fffef5' }}>
+            <div style={{ fontSize: '0.85em', fontWeight: 600, color: '#f39c12', marginBottom: 8 }}>Lifecycle (авто-добавляемые SKU)</div>
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <div className="form-group" style={{ flex: '1 1 200px', marginBottom: 0 }}>
+                <label>Авто-завершить при статусе заказа</label>
+                <select value={autoCompleteOn} onChange={e => setAutoCompleteOn(e.target.value)}>
+                  <option value="">— нет —</option>
+                  <option value="CREATED">Создан</option>
+                  <option value="FOR_PICKUP">К забору</option>
+                  <option value="IN_PROGRESS">В работе</option>
+                  <option value="DONE">Готов</option>
+                  <option value="DELIVERED">Доставлен</option>
+                </select>
+              </div>
+              <div className="form-group" style={{ flex: '1 1 200px', marginBottom: 0 }}>
+                <label>При завершении → статус заказа</label>
+                <select value={triggersStatus} onChange={e => setTriggersStatus(e.target.value)}>
+                  <option value="">— нет —</option>
+                  <option value="CREATED">Создан</option>
+                  <option value="FOR_PICKUP">К забору</option>
+                  <option value="IN_PROGRESS">В работе</option>
+                  <option value="DONE">Готов</option>
+                  <option value="DELIVERED">Доставлен</option>
+                </select>
+              </div>
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', marginTop: 20 }}>
+                <input type="checkbox" checked={excludeCalc} onChange={e => setExcludeCalc(e.target.checked)} />
+                Не учитывать при вычислении статуса заказа
+              </label>
+            </div>
+          </div>
+        )}
 
         <div className="form-group">
           <label style={{ display: 'flex', justifyContent: 'space-between' }}>

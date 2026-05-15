@@ -39,13 +39,17 @@ public class SkuController {
     @PostMapping
     public Sku create(@RequestBody SkuRequest body) {
         return service.create(body.groupId, body.name, body.pricingType, body.price, body.costPrice,
-                body.isAutoAdd, body.freeThreshold, body.attributes);
+                body.isAutoAdd, body.freeThreshold,
+                body.autoCompleteOnStatus, body.triggersOrderStatus, body.excludeFromStatusCalc,
+                body.attributes);
     }
 
     @PutMapping("/{id}")
     public Sku update(@PathVariable Long id, @RequestBody SkuRequest body) {
         return service.update(id, body.groupId, body.name, body.pricingType, body.price, body.costPrice,
-                body.isAutoAdd, body.freeThreshold, body.attributes);
+                body.isAutoAdd, body.freeThreshold,
+                body.autoCompleteOnStatus, body.triggersOrderStatus, body.excludeFromStatusCalc,
+                body.attributes);
     }
 
     @DeleteMapping("/{id}")
@@ -80,6 +84,10 @@ public class SkuController {
         public BigDecimal costPrice;
         public boolean isAutoAdd;
         public BigDecimal freeThreshold;
+        /** V11 lifecycle */
+        public String autoCompleteOnStatus;
+        public String triggersOrderStatus;
+        public boolean excludeFromStatusCalc;
         public Map<String, List<String>> attributes;
     }
 }

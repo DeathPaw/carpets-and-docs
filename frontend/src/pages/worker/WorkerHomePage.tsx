@@ -33,6 +33,8 @@ export default function WorkerHomePage() {
 
     const employeeId = Number(sessionStorage.getItem('worker_id') || 0)
     const employeeName = sessionStorage.getItem('worker_name') || ''
+    // V11: нераспределённые услуги, подходящие по роли
+    const [available, setAvailable] = useState<any[]>([])
 
     useEffect(() => {
         if (!employeeId) { navigate('/worker-login', { replace: true }); return }
@@ -42,15 +44,40 @@ export default function WorkerHomePage() {
 
     const reload = async () => {
         try {
-            const [data, route] = await Promise.all([
+            const [data, route, avail] = await Promise.all([
                 myServices(employeeId),
-                myRoute(employeeId).catch(() => []), // если route не загрузился — просто не показываем кнопку
+                myRoute(employeeId).catch(() => []),
+                fetch(`/api/worker/${employeeId}/available`).then(r => r.json()).catch(() => []),
             ])
             setServices(data)
             setHasRoute(route.length > 0)
+            setAvailable(avail)
         } catch {
             setError('Не удалось загрузить услуги. Проверьте интернет.')
         }
+    }
+
+    const takeService = async (serviceId: number) => {
+        try {
+            await fetch(`/api/worker/${employeeId}/take/${serviceId}`, { method: 'POST' })
+            await reload()
+        } catch {}
+    }
+
+    const pickupOrder = async (orderId: number) => {
+        try {
+            await fetch(`/api/worker/${employeeId}/orders/${orderId}/pickup`, { method: 'POST' })
+            await reload()
+        } catch {}
+    }
+
+    const deliverOrder = async (orderId: number) => {
+        try {
+            const res = await fetch(`/api/worker/${employeeId}/orders/${orderId}/deliver`, { method: 'POST' })
+            const data = await res.json()
+            if (data.message) alert(data.message)
+            await reload()
+        } catch {}
     }
 
     const logout = () => {
@@ -143,6 +170,55 @@ export default function WorkerHomePage() {
             </div>
 
             {error && <div style={{ padding: '10px 16px', color: '#c0392b' }}>{error}</div>}
+
+            {/* V11: кнопки Забрал/Доставил для водителей */}
+            {hasRoute && (
+                <div style={{ padding: '8px 16px', display: 'flex', gap: 8 }}>
+                    <button
+                        onClick={() => {
+                            const oid = prompt('Номер заказа для забора:')
+                            if (oid) void pickupOrder(Number(oid))
+                        }}
+                        style={{ flex: 1, padding: '12px', borderRadius: 8, border: 'none',
+                                 background: '#3498db', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+                    >📦 Забрал</button>
+                    <button
+                        onClick={() => {
+                            const oid = prompt('Номер заказа для доставки:')
+                            if (oid) void deliverOrder(Number(oid))
+                        }}
+                        style={{ flex: 1, padding: '12px', borderRadius: 8, border: 'none',
+                                 background: '#27ae60', color: '#fff', fontSize: 15, fontWeight: 600, cursor: 'pointer' }}
+                    >🚚 Доставил</button>
+                </div>
+            )}
+
+            {/* V11: нераспределённые услуги */}
+            {available.length > 0 && (
+                <div style={{ padding: '12px 16px' }}>
+                    <div style={{ fontSize: 11, color: '#e67e22', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
+                        Доступные · {available.length}
+                    </div>
+                    {available.map((a: any) => (
+                        <div key={a.service_id} style={{
+                            background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+                            border: '1px dashed #f39c12', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        }}>
+                            <div>
+                                <div style={{ fontWeight: 600 }}>{a.service_name}</div>
+                                <div style={{ fontSize: 12, color: '#7f8c8d' }}>
+                                    {a.item_type_name} · Заказ #{a.order_id} · {a.client_name}
+                                </div>
+                            </div>
+                            <button
+                                onClick={() => void takeService(a.service_id)}
+                                style={{ padding: '8px 16px', borderRadius: 6, border: 'none',
+                                         background: '#f39c12', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
+                            >Взять</button>
+                        </div>
+                    ))}
+                </div>
+            )}
 
             {/* Активные услуги */}
             <div style={{ padding: '12px 16px' }}>

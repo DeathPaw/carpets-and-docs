@@ -1,16 +1,19 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { setViewerMode } from '../utils/viewer'
+import { useAuth } from '../auth/AuthContext'
 
+/**
+ * V11: логин определяет роль пользователя (SUPERVISOR / ADMIN / OPERATOR / READONLY).
+ * Тумблер «Супервизор ВКЛ» и чекбокс «Режим просмотра» убраны — роль берётся из БД.
+ * Пользователи управляются на странице «Пользователи» (доступна только SUPERVISOR).
+ */
 export default function LoginPage() {
   const navigate = useNavigate()
+  const { refresh } = useAuth()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
-  // Спринт D: галка «открыть в режиме просмотра». При логине дополнительно
-  // ставит viewer_mode=1; UI скрывает кнопки изменения, оставляя только чтение.
-  const [viewerLogin, setViewerLogin] = useState(false)
 
   const submit = async () => {
     if (!username.trim() || !password.trim()) {
@@ -23,8 +26,8 @@ export default function LoginPage() {
     const token = btoa(`${username}:${password}`)
 
     try {
-      // Проверяем авторизацию запросом к API
-      const response = await fetch('/api/employees', {
+      // Проверяем авторизацию + получаем роль
+      const response = await fetch('/api/me', {
         headers: { 'Authorization': `Basic ${token}` },
       })
 
@@ -34,11 +37,11 @@ export default function LoginPage() {
         return
       }
 
-      // Сохраняем токен и переходим
+      // Сохраняем токен
       sessionStorage.setItem('auth', token)
-      setViewerMode(viewerLogin)
-      // В режиме просмотра удобнее открывать дашборд (там цифры и проблемные заказы).
-      navigate(viewerLogin ? '/dashboard' : '/orders')
+      // Обновляем AuthContext
+      await refresh()
+      navigate('/orders')
     } catch {
       setError('Ошибка подключения к серверу')
     } finally {
@@ -56,8 +59,8 @@ export default function LoginPage() {
         boxShadow: '0 4px 20px rgba(0,0,0,0.1)', width: 360,
       }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1 }}>КОВРОВОЕ ПРОИЗВОДСТВО</div>
-          <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>Система учёта заказов</div>
+          <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1 }}>УЧЁТ ЗАКАЗОВ</div>
+          <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>Система управления производством</div>
         </div>
 
         <div className="form-group">
@@ -81,21 +84,6 @@ export default function LoginPage() {
           />
         </div>
 
-        {/* Чекбокс «Только просмотр» — для моноблока. Логин стандартный,
-            но кнопки изменения скрыты. */}
-        <label style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          marginBottom: 12, fontSize: 13, color: '#7f8c8d', cursor: 'pointer',
-        }}>
-          <input
-            type="checkbox"
-            checked={viewerLogin}
-            onChange={e => setViewerLogin(e.target.checked)}
-            style={{ width: 'auto' }}
-          />
-          Войти в режиме просмотра (для моноблока)
-        </label>
-
         {error && <div className="error-msg" style={{ marginBottom: 12 }}>{error}</div>}
 
         <button
@@ -104,12 +92,9 @@ export default function LoginPage() {
           disabled={loading}
           style={{ width: '100%', padding: '10px', fontSize: 15 }}
         >
-          {loading ? 'Вход...' : (viewerLogin ? 'Войти на просмотр' : 'Войти')}
+          {loading ? 'Вход...' : 'Войти'}
         </button>
 
-        {/* Альтернатива — личный кабинет работника (Спринт D).
-            Намеренно мелким текстом, не равным с операторским — операторы привычно
-            идут сюда, работники сразу видят, что для них «другая дверь». */}
         <div style={{ textAlign: 'center', marginTop: 16 }}>
           <button
             type="button"

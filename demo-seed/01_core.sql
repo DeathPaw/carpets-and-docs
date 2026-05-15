@@ -144,3 +144,17 @@ INSERT INTO client_modifiers (client_id, modifier_id) VALUES (1, 1);
 
 COMMIT;
 SELECT 'core_seed_done' AS status;
+
+-- ---------- 10. Пользователи (V11) ----------
+-- Дефолтный admin/foxy создаётся автоматически SecurityConfig при пустой таблице users.
+-- Здесь добавляем операторов для демо.
+-- BCrypt hash для 'demo': $2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy
+-- Но проще создавать их через UI после первого запуска.
+
+-- ---------- 11. Категории расходов (V11) ----------
+INSERT INTO expense_categories (name, is_fixed, default_amount, sort_order) VALUES
+  ('Аренда',          TRUE,  150000.00, 10),
+  ('ФОТ',             TRUE,  500000.00, 20),
+  ('Электричество',   FALSE, NULL,       30),
+  ('Расходные материалы', FALSE, NULL,    40),
+  ('Транспорт',       FALSE, NULL,       50);

@@ -9,9 +9,12 @@ import ru.carpet.exception.EntityNotFoundException;
 import ru.carpet.model.*;
 import ru.carpet.repository.*;
 
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
+
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class OrderService {
@@ -28,6 +31,7 @@ public class OrderService {
     private final PriceModifierRepository priceModifierRepository;
     private final ClientModifierRepository clientModifierRepository;
     private final ClientEventRepository clientEventRepository;
+    private final AppUserRepository userRepository;
 
     public OrderService(
             OrderRepository repository,
@@ -41,7 +45,8 @@ public class OrderService {
             OrderModifierRepository orderModifierRepository,
             PriceModifierRepository priceModifierRepository,
             ClientModifierRepository clientModifierRepository,
-            ClientEventRepository clientEventRepository
+            ClientEventRepository clientEventRepository,
+            AppUserRepository userRepository
     ) {
         this.repository = repository;
         this.itemRepository = itemRepository;
@@ -55,6 +60,7 @@ public class OrderService {
         this.priceModifierRepository = priceModifierRepository;
         this.clientModifierRepository = clientModifierRepository;
         this.clientEventRepository = clientEventRepository;
+        this.userRepository = userRepository;
     }
 
     public List<Order> findAll(OrderStatus status, int page, int size) {
@@ -126,20 +132,41 @@ public class OrderService {
      */
     private void attachAutoAddSkus(Long orderId) {
         var autoSkus = skuService.findAutoAdd();
+        // V11: текущий оператор из SecurityContext — для авто-назначения на «Оформление».
+        Long currentEmployeeId = resolveCurrentEmployeeId();
+
         for (var sku : autoSkus) {
-            // Какой item_type использовать? Первый из атрибутов sku.attributes["item_type"].
             var typeIds = sku.attributes().get("item_type");
             if (typeIds == null || typeIds.isEmpty()) continue;
             Long itemTypeId;
             try { itemTypeId = Long.parseLong(typeIds.get(0)); }
             catch (NumberFormatException e) { continue; }
             OrderItem item = itemRepository.save(orderId, itemTypeId, null);
-            // Цена SKU + free_threshold учитываются в recalculateAutoAddPrices()
             BigDecimal price = sku.price() == null ? BigDecimal.ZERO : sku.price();
-            serviceInstanceRepository.saveOne(item.id(), sku.id(), price);
-            // Цена позиции = цена услуги (для default-позиций одна услуга = одна цена).
+            Long serviceId = serviceInstanceRepository.saveOne(item.id(), sku.id(), price);
             itemRepository.updatePrice(item.id(), price);
+
+            // V11: если у SKU есть auto_complete_on_status (lifecycle SKU) и мы знаем employee_id
+            // текущего оператора — назначаем его исполнителем сразу. Иначе услуге не сменить статус
+            // (валидация требует хотя бы одного исполнителя).
+            if (currentEmployeeId != null && sku.autoCompleteOnStatus() != null) {
+                serviceInstanceRepository.assignEmployee(serviceId, currentEmployeeId);
+            }
         }
+    }
+
+    /**
+     * V11: достаёт employee_id текущего пользователя из SecurityContext → users.employee_id.
+     * Если пользователь не привязан к сотруднику — null.
+     */
+    private Long resolveCurrentEmployeeId() {
+        try {
+            String username = ru.carpet.audit.AuditUser.current();
+            if ("system".equals(username)) return null;
+            return userRepository.findByUsername(username)
+                    .map(ru.carpet.model.AppUser::employeeId)
+                    .orElse(null);
+        } catch (Exception e) { return null; }
     }
 
     /**
@@ -225,6 +252,11 @@ public class OrderService {
         auditLogService.log("ORDER", orderId, "STATUS_CHANGE",
                 "Статус заказа #" + orderId + " изменён: " + oldStatus + " → " + newStatus
                         + (newStatus == OrderStatus.CANCELLED ? " (причина: " + reasonTrimmed + ")" : ""));
+
+        // V11 lifecycle: авто-завершаем услуги, у которых SKU.auto_complete_on_status = newStatus.
+        // Например, LEAD → CREATED → услуга «Оформление» (auto_complete_on_status=CREATED) → DONE.
+        autoCompleteServicesOnOrderStatus(orderId, newStatus);
+
         return repository.findById(orderId).orElseThrow();
     }
 
@@ -282,11 +314,20 @@ public class OrderService {
         }
     }
 
+    /**
+     * V11: вычисляет статус заказа, учитывая {@code exclude_from_status_calc} на SKU.
+     * Позиции, ВСЕ услуги которых ссылаются на SKU с exclude=true, не участвуют
+     * в подсчёте. Если значимых позиций нет — считаем по всем.
+     */
     private OrderStatus computeOrderStatus(List<OrderItem> items) {
-        // V10: «дефолтность» позиции теперь определяется по auto-add SKU её услуги.
-        // Считаем все позиции одинаково — auto-add позиции (доставка) обычно
-        // CREATED в начале и DONE в конце, не ломают статус заказа.
-        List<OrderItem> target = items;
+        // Собираем ID исключённых позиций через SQL (exclude_from_status_calc = TRUE на SKU).
+        // Это дешевле, чем грузить все услуги: один запрос.
+        Set<Long> excludedItemIds = findExcludedItemIds(items);
+
+        List<OrderItem> meaningful = items.stream()
+                .filter(i -> !excludedItemIds.contains(i.id()))
+                .toList();
+        List<OrderItem> target = meaningful.isEmpty() ? items : meaningful;
 
         long doneCount = target.stream().filter(i -> i.status() == OrderItemStatus.DONE).count();
         long cancelledCount = target.stream().filter(i -> i.status() == OrderItemStatus.CANCELLED).count();
@@ -294,20 +335,79 @@ public class OrderService {
         long partiallyDoneCount = target.stream().filter(i -> i.status() == OrderItemStatus.PARTIALLY_DONE).count();
         long doneOrCancelledCount = doneCount + cancelledCount;
 
-        // Если все позиции выполнены или отменены
         if (doneOrCancelledCount == target.size()) {
             if (doneCount > 0) return OrderStatus.DONE;
             return OrderStatus.CANCELLED;
         }
-
-        // Если есть выполненные или частично выполненные
         if (doneCount > 0 || partiallyDoneCount > 0) return OrderStatus.PARTIALLY_DONE;
-
-        // Если есть позиции в работе
         if (inProgressCount > 0) return OrderStatus.IN_PROGRESS;
+        return null;
+    }
 
-        // Все позиции ещё CREATED — не меняем статус заказа назад
-        return null; // null = не менять
+    /**
+     * Возвращает ID позиций, которые привязаны к SKU с {@code exclude_from_status_calc = TRUE}.
+     * Позиция «исключена», если ХОТЯ БЫ ОДНА её услуга ссылается на такую SKU.
+     */
+    private Set<Long> findExcludedItemIds(List<OrderItem> items) {
+        if (items.isEmpty()) return Set.of();
+        var ids = items.stream().map(OrderItem::id).toList();
+        var rows = itemRepository.getJdbc().queryForList(
+                "SELECT DISTINCT ois.order_item_id " +
+                "FROM order_item_services ois " +
+                "JOIN skus s ON s.id = ois.sku_id AND s.exclude_from_status_calc = TRUE " +
+                "WHERE ois.order_item_id IN (:ids)",
+                new MapSqlParameterSource("ids", ids));
+        return rows.stream()
+                .map(r -> ((Number) r.get("order_item_id")).longValue())
+                .collect(java.util.stream.Collectors.toSet());
+    }
+
+    /**
+     * V11 lifecycle: при смене статуса заказа находим все услуги с
+     * {@code SKU.auto_complete_on_status = newStatus} и ставим им DONE.
+     * Например, заказ LEAD→CREATED → услуга «Оформление» (auto_complete_on_status=CREATED) → DONE.
+     */
+    private void autoCompleteServicesOnOrderStatus(Long orderId, OrderStatus newStatus) {
+        List<OrderItem> items = itemRepository.findByOrderId(orderId);
+        for (OrderItem item : items) {
+            var services = serviceInstanceRepository.findByOrderItemId(item.id());
+            for (var svc : services) {
+                if (svc.status() == ServiceStatus.DONE || svc.status() == ServiceStatus.CANCELLED) continue;
+                if (svc.skuId() == null) continue;
+                try {
+                    Sku sku = skuService.findById(svc.skuId());
+                    if (sku.autoCompleteOnStatus() != null
+                            && sku.autoCompleteOnStatus().equals(newStatus.name())) {
+                        serviceInstanceRepository.updateStatus(svc.id(), ServiceStatus.DONE);
+                        // Пересчитываем статус позиции
+                        orderItemService.recalculateItemStatus(item.id());
+                    }
+                } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    /**
+     * V11 lifecycle: когда услуга с {@code SKU.triggers_order_status} завершается,
+     * переводим заказ в этот статус. Вызывается из
+     * {@link OrderItemServiceInstanceService#updateStatus}.
+     */
+    public void checkServiceTrigger(Long orderItemId, Long skuId) {
+        if (skuId == null) return;
+        try {
+            Sku sku = skuService.findById(skuId);
+            if (sku.triggersOrderStatus() == null) return;
+            OrderItem item = itemRepository.findById(orderItemId).orElse(null);
+            if (item == null) return;
+            OrderStatus targetStatus = OrderStatus.valueOf(sku.triggersOrderStatus());
+            Order order = findById(item.orderId());
+            // Не понижаем статус (например, не переводим DELIVERED→CREATED)
+            if (order.status().ordinal() >= targetStatus.ordinal()) return;
+            repository.updateStatus(item.orderId(), targetStatus);
+            historyRepository.save(item.orderId(), order.status(), targetStatus);
+            auditLogService.log("ORDER", item.orderId(), "LIFECYCLE_TRIGGER",
+                    "SKU «" + sku.name() + "» завершена → заказ #" + item.orderId() + " → " + targetStatus);
+        } catch (Exception ignored) {}
     }
 
     /** Оплата заказа */

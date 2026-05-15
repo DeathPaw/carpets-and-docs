@@ -239,6 +239,10 @@ public class TrainingDataSeeder implements CommandLineRunner {
                 feedback_messages,
                 error_log,
                 audit_log,
+                notifications,
+                monthly_expenses,
+                expense_categories,
+                users,
                 districts
             RESTART IDENTITY CASCADE
         """, Map.of());

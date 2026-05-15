@@ -137,6 +137,12 @@ export interface Sku {
   is_active: boolean
   is_deleted: boolean
   current_version_id: number | null
+  /** V11 lifecycle: при каком статусе заказа авто-завершить услугу. */
+  auto_complete_on_status: string | null
+  /** V11 lifecycle: какой статус заказа выставить когда услуга завершена. */
+  triggers_order_status: string | null
+  /** V11 lifecycle: не учитывать при вычислении общего статуса заказа. */
+  exclude_from_status_calc: boolean
   /** Атрибуты как map key → [values]. Один ключ может иметь несколько значений. */
   attributes: Record<string, string[]>
 }

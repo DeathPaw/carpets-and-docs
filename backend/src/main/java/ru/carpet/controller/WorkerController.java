@@ -394,7 +394,67 @@ public class WorkerController {
         """, Map.of("oid", orderId));
     }
 
-    // ---------- 9. Установить PIN при первом входе ----------
+    // ---------- 9. Доступные (нераспределённые) услуги по роли ----------
+
+    /**
+     * V11: услуги без исполнителя, подходящие по роли текущего работника.
+     * Работник может «взять» их себе (см. /take).
+     */
+    @GetMapping("/{employeeId}/available")
+    public List<Map<String, Object>> availableServices(@PathVariable Long employeeId) {
+        return jdbc.queryForList("""
+            SELECT
+                ois.id              AS service_id,
+                ois.status          AS service_status,
+                ois.price           AS service_price,
+                COALESCE(sv.name, s.name) AS service_name,
+                oi.id               AS item_id,
+                oi.description      AS item_description,
+                it.name             AS item_type_name,
+                o.id                AS order_id,
+                o.client_name       AS client_name
+              FROM order_item_services ois
+              JOIN order_items oi ON oi.id = ois.order_item_id
+              JOIN orders o ON o.id = oi.order_id
+              JOIN item_types it ON it.id = oi.item_type_id
+              LEFT JOIN skus s ON s.id = ois.sku_id
+              LEFT JOIN sku_versions sv ON sv.id = ois.sku_version_id
+             WHERE ois.status = 'CREATED'
+               AND NOT EXISTS (SELECT 1 FROM service_assignees sa WHERE sa.order_item_service_id = ois.id)
+               AND s.exclude_from_status_calc = FALSE
+               AND (
+                   -- Роль сотрудника включает этот item_type, ИЛИ сотрудник без роли
+                   EXISTS (SELECT 1 FROM employees e WHERE e.id = :eid AND e.role_id IS NULL)
+                   OR EXISTS (
+                       SELECT 1 FROM employees e
+                       JOIN employee_role_item_types rt ON rt.role_id = e.role_id AND rt.item_type_id = oi.item_type_id
+                       WHERE e.id = :eid
+                   )
+               )
+             ORDER BY o.id, oi.id
+        """, Map.of("eid", employeeId));
+    }
+
+    /**
+     * V11: работник берёт услугу себе — назначает себя исполнителем и ставит IN_PROGRESS.
+     */
+    @PostMapping("/{employeeId}/take/{serviceId}")
+    public ResponseEntity<?> takeService(@PathVariable Long employeeId, @PathVariable Long serviceId) {
+        // Проверяем что услуга ещё не назначена
+        Long cnt = jdbc.queryForObject(
+                "SELECT COUNT(*) FROM service_assignees WHERE order_item_service_id = :s",
+                Map.of("s", serviceId), Long.class);
+        if (cnt != null && cnt > 0) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Услуга уже назначена другому исполнителю"));
+        }
+        jdbc.update("INSERT INTO service_assignees (order_item_service_id, employee_id) VALUES (:s, :e)",
+                Map.of("s", serviceId, "e", employeeId));
+        jdbc.update("UPDATE order_item_services SET status = 'IN_PROGRESS', updated_at = NOW() WHERE id = :s AND status = 'CREATED'",
+                Map.of("s", serviceId));
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    // ---------- 10. Установить PIN при первом входе ----------
 
     @PostMapping("/set-pin")
     public ResponseEntity<?> setPin(@RequestBody Map<String, Object> body) {
@@ -439,5 +499,105 @@ public class WorkerController {
         if (v instanceof Number n)    return new BigDecimal(n.toString());
         if (v instanceof String s && !s.isBlank()) return new BigDecimal(s);
         return null;
+    }
+
+    // ================================================================
+    // V11: Водитель — забрал / доставил
+    // ================================================================
+
+    /**
+     * Водитель забрал заказ. Проставляет «Приём» → DONE, назначает водителя исполнителем.
+     * Заказ двигается по lifecycle (если у SKU «Приём» задан triggers_order_status).
+     */
+    @PostMapping("/{employeeId}/orders/{orderId}/pickup")
+    public ResponseEntity<?> pickup(@PathVariable Long employeeId, @PathVariable Long orderId) {
+        // Найти услугу «Приём» (auto-add SKU с item_type=Приём) для этого заказа
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            SELECT ois.id AS service_id, ois.order_item_id, ois.sku_id
+              FROM order_item_services ois
+              JOIN order_items oi ON oi.id = ois.order_item_id
+              JOIN skus s ON s.id = ois.sku_id
+             WHERE oi.order_id = :oid
+               AND s.is_auto_add = TRUE
+               AND ois.status != 'DONE' AND ois.status != 'CANCELLED'
+               AND EXISTS (SELECT 1 FROM sku_attributes sa WHERE sa.sku_id = s.id AND sa.attr_key = 'item_type'
+                           AND sa.attr_value IN (SELECT CAST(id AS text) FROM item_types WHERE name = 'Приём'))
+             LIMIT 1
+        """, Map.of("oid", orderId));
+
+        if (rows.isEmpty()) {
+            return ResponseEntity.ok(Map.of("ok", false, "message", "Услуга «Приём» не найдена или уже выполнена"));
+        }
+        Long serviceId = ((Number) rows.get(0).get("service_id")).longValue();
+        Long orderItemId = ((Number) rows.get(0).get("order_item_id")).longValue();
+        Long skuId = ((Number) rows.get(0).get("sku_id")).longValue();
+
+        // Назначить водителя исполнителем
+        jdbc.update("INSERT INTO service_assignees (order_item_service_id, employee_id) VALUES (:s, :e) ON CONFLICT DO NOTHING",
+                Map.of("s", serviceId, "e", employeeId));
+        // Поставить DONE
+        jdbc.update("UPDATE order_item_services SET status = 'DONE', updated_at = NOW() WHERE id = :id",
+                Map.of("id", serviceId));
+        // Обновить actual_pickup_date если не заполнена
+        jdbc.update("UPDATE orders SET actual_pickup_date = CURRENT_DATE, actual_pickup_time_slot = '08:00-12:00' WHERE id = :oid AND actual_pickup_date IS NULL",
+                Map.of("oid", orderId));
+
+        return ResponseEntity.ok(Map.of("ok", true, "message", "Забор зафиксирован"));
+    }
+
+    /**
+     * Водитель доставил заказ. Проставляет «Доставка» → DONE, назначает водителя.
+     * Заказ → DELIVERED (если у SKU «Доставка» задан triggers_order_status).
+     */
+    @PostMapping("/{employeeId}/orders/{orderId}/deliver")
+    public ResponseEntity<?> deliver(@PathVariable Long employeeId, @PathVariable Long orderId) {
+        // Проверяем: все не-excluded позиции DONE?
+        Long notDone = jdbc.queryForObject("""
+            SELECT COUNT(*)
+              FROM order_items oi
+             WHERE oi.order_id = :oid AND oi.status NOT IN ('DONE', 'CANCELLED')
+               AND NOT EXISTS (
+                   SELECT 1 FROM order_item_services ois
+                   JOIN skus s ON s.id = ois.sku_id AND s.exclude_from_status_calc = TRUE
+                   WHERE ois.order_item_id = oi.id
+               )
+        """, Map.of("oid", orderId), Long.class);
+
+        boolean allReady = notDone == null || notDone == 0;
+
+        // Найти услугу «Доставка»
+        List<Map<String, Object>> rows = jdbc.queryForList("""
+            SELECT ois.id AS service_id, ois.order_item_id, ois.sku_id
+              FROM order_item_services ois
+              JOIN order_items oi ON oi.id = ois.order_item_id
+              JOIN skus s ON s.id = ois.sku_id
+             WHERE oi.order_id = :oid
+               AND s.is_auto_add = TRUE
+               AND ois.status != 'DONE' AND ois.status != 'CANCELLED'
+               AND EXISTS (SELECT 1 FROM sku_attributes sa WHERE sa.sku_id = s.id AND sa.attr_key = 'item_type'
+                           AND sa.attr_value IN (SELECT CAST(id AS text) FROM item_types WHERE name = 'Доставка'))
+             LIMIT 1
+        """, Map.of("oid", orderId));
+
+        if (rows.isEmpty()) {
+            return ResponseEntity.ok(Map.of("ok", false, "message", "Услуга «Доставка» не найдена или уже выполнена"));
+        }
+        Long serviceId = ((Number) rows.get(0).get("service_id")).longValue();
+
+        // Назначить водителя
+        jdbc.update("INSERT INTO service_assignees (order_item_service_id, employee_id) VALUES (:s, :e) ON CONFLICT DO NOTHING",
+                Map.of("s", serviceId, "e", employeeId));
+        // DONE
+        jdbc.update("UPDATE order_item_services SET status = 'DONE', updated_at = NOW() WHERE id = :id",
+                Map.of("id", serviceId));
+        // Обновить actual_delivery_date
+        jdbc.update("UPDATE orders SET actual_delivery_date = CURRENT_DATE, actual_delivery_time_slot = '12:00-18:00' WHERE id = :oid AND actual_delivery_date IS NULL",
+                Map.of("oid", orderId));
+        // Заказ → DELIVERED
+        jdbc.update("UPDATE orders SET status = 'DELIVERED', version = version + 1, updated_at = NOW() WHERE id = :oid",
+                Map.of("oid", orderId));
+
+        return ResponseEntity.ok(Map.of("ok", true, "all_ready", allReady,
+                "message", allReady ? "Доставлено" : "Доставлено (предупреждение: не все позиции были готовы)"));
     }
 }

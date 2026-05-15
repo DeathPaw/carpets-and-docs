@@ -5,7 +5,7 @@ import { getOrdersQuery } from '../api/orders'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import CreateOrderModal from '../components/orders/CreateOrderModal'
-import { isViewerMode } from '../utils/viewer'
+import { useAuth } from '../auth/AuthContext'
 import type { Order, OrderStatus } from '../types'
 
 // Подписи и список статусов теперь общие — см. constants/statuses.ts
@@ -31,6 +31,7 @@ function StatusBadge({ status }: { status: string }) {
 export default function OrdersPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const { isReadonly } = useAuth()
   const [searchParams] = useSearchParams()
   const [orders, setOrders] = useState<Order[]>([])
   const [totalElements, setTotalElements] = useState(0)
@@ -235,7 +236,7 @@ export default function OrdersPage() {
         <div style={{ display: 'flex', gap: 8 }}>
           <button className="btn-secondary" onClick={exportXLSX}>Экспорт Excel</button>
           {/* В viewer-mode (моноблок) скрываем мутирующие кнопки. */}
-          {!isViewerMode() && (
+          {!isReadonly && (
             <button className="btn-primary" onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
           )}
         </div>

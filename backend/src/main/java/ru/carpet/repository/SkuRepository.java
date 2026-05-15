@@ -34,6 +34,7 @@ public class SkuRepository {
         s.id, s.group_id, g.name AS group_name, s.name, s.pricing_type,
         s.price, s.cost_price, s.is_auto_add, s.free_threshold,
         s.is_active, s.is_deleted, s.current_version_id,
+        s.auto_complete_on_status, s.triggers_order_status, s.exclude_from_status_calc,
         s.created_at, s.updated_at
         """;
 
@@ -54,6 +55,9 @@ public class SkuRepository {
             rs.getBoolean("is_active"),
             rs.getBoolean("is_deleted"),
             rs.getObject("current_version_id", Long.class),
+            rs.getString("auto_complete_on_status"),
+            rs.getString("triggers_order_status"),
+            rs.getBoolean("exclude_from_status_calc"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime(),
             // Атрибуты грузим отдельным запросом для каждого id (batchByIds ниже).
@@ -109,6 +113,7 @@ public class SkuRepository {
             out.add(new Sku(s.id(), s.groupId(), s.groupName(), s.name(), s.pricingType(),
                     s.price(), s.costPrice(), s.isAutoAdd(), s.freeThreshold(),
                     s.isActive(), s.isDeleted(), s.currentVersionId(),
+                    s.autoCompleteOnStatus(), s.triggersOrderStatus(), s.excludeFromStatusCalc(),
                     s.createdAt(), s.updatedAt(),
                     byId.getOrDefault(s.id(), Map.of())));
         }
@@ -119,11 +124,13 @@ public class SkuRepository {
 
     public Sku create(Long groupId, String name, String pricingType, BigDecimal price,
                       BigDecimal costPrice, boolean isAutoAdd, BigDecimal freeThreshold,
+                      String autoCompleteOnStatus, String triggersOrderStatus, boolean excludeFromStatusCalc,
                       Map<String, List<String>> attributes, String changedBy) {
         var keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
-            INSERT INTO skus (group_id, name, pricing_type, price, cost_price, is_auto_add, free_threshold)
-            VALUES (:g, :n, :pt, :p, :cp, :aa, :ft)
+            INSERT INTO skus (group_id, name, pricing_type, price, cost_price, is_auto_add, free_threshold,
+                              auto_complete_on_status, triggers_order_status, exclude_from_status_calc)
+            VALUES (:g, :n, :pt, :p, :cp, :aa, :ft, :acs, :tos, :exc)
         """, new MapSqlParameterSource()
                 .addValue("g",  groupId)
                 .addValue("n",  name)
@@ -131,7 +138,10 @@ public class SkuRepository {
                 .addValue("p",  price)
                 .addValue("cp", costPrice)
                 .addValue("aa", isAutoAdd)
-                .addValue("ft", freeThreshold),
+                .addValue("ft", freeThreshold)
+                .addValue("acs", autoCompleteOnStatus)
+                .addValue("tos", triggersOrderStatus)
+                .addValue("exc", excludeFromStatusCalc),
             keyHolder, new String[]{"id"});
         Long skuId = keyHolder.getKey().longValue();
         saveAttributes(skuId, attributes);
@@ -143,6 +153,7 @@ public class SkuRepository {
 
     public Sku update(Long id, Long groupId, String name, String pricingType, BigDecimal price,
                       BigDecimal costPrice, boolean isAutoAdd, BigDecimal freeThreshold,
+                      String autoCompleteOnStatus, String triggersOrderStatus, boolean excludeFromStatusCalc,
                       Map<String, List<String>> attributes, String changedBy) {
         // 1. Закрываем текущую версию
         jdbc.update("UPDATE sku_versions SET valid_to = NOW() WHERE master_id = :id AND valid_to IS NULL",
@@ -156,6 +167,8 @@ public class SkuRepository {
         jdbc.update("""
             UPDATE skus SET group_id = :g, name = :n, pricing_type = :pt, price = :p,
                             cost_price = :cp, is_auto_add = :aa, free_threshold = :ft,
+                            auto_complete_on_status = :acs, triggers_order_status = :tos,
+                            exclude_from_status_calc = :exc,
                             current_version_id = :v, updated_at = NOW()
              WHERE id = :id
         """, new MapSqlParameterSource()
@@ -167,6 +180,9 @@ public class SkuRepository {
                 .addValue("cp", costPrice)
                 .addValue("aa", isAutoAdd)
                 .addValue("ft", freeThreshold)
+                .addValue("acs", autoCompleteOnStatus)
+                .addValue("tos", triggersOrderStatus)
+                .addValue("exc", excludeFromStatusCalc)
                 .addValue("v",  versionId));
         // 4. Перезаписываем атрибуты целиком (проще, чем diff)
         jdbc.update("DELETE FROM sku_attributes WHERE sku_id = :id", Map.of("id", id));

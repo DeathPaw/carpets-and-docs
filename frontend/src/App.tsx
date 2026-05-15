@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import { ToastProvider } from './components/Toast'
+import { AuthProvider } from './auth/AuthContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import LoginPage from './pages/LoginPage'
 import OrdersPage from './pages/OrdersPage'
@@ -18,6 +19,8 @@ import DashboardPage from './pages/DashboardPage'
 import ProductionPage from './pages/ProductionPage'
 import ProfitabilityPage from './pages/ProfitabilityPage'
 import FeedbackPage from './pages/FeedbackPage'
+import UsersPage from './pages/UsersPage'
+import ExpensesPage from './pages/ExpensesPage'
 import WorkerLoginPage from './pages/worker/WorkerLoginPage'
 import WorkerHomePage from './pages/worker/WorkerHomePage'
 import WorkerRoutePage from './pages/worker/WorkerRoutePage'
@@ -39,6 +42,7 @@ export default function App() {
   return (
     <ErrorBoundary>
       <ToastProvider>
+        <AuthProvider>
         <BrowserRouter>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
@@ -64,9 +68,12 @@ export default function App() {
               <Route path="error-log" element={<ErrorLogPage />} />
               <Route path="audit-log" element={<AuditLogPage />} />
               <Route path="feedback" element={<FeedbackPage />} />
+              <Route path="users" element={<UsersPage />} />
+              <Route path="expenses" element={<ExpensesPage />} />
             </Route>
           </Routes>
         </BrowserRouter>
+        </AuthProvider>
       </ToastProvider>
     </ErrorBoundary>
   )

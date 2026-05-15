@@ -1,5 +1,6 @@
 package ru.carpet.service;
 
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import ru.carpet.dto.OrderItemServiceWithAssignees;
@@ -29,6 +30,7 @@ public class OrderItemServiceInstanceService {
     private final OrderItemRepository orderItemRepository;
     private final OrderItemService orderItemService;
     private final SkuService skuService;
+    private final OrderService orderService;
 
     public OrderItemServiceInstanceService(
             OrderItemServiceInstanceRepository repository,
@@ -36,7 +38,8 @@ public class OrderItemServiceInstanceService {
             EmployeeRepository employeeRepository,
             OrderItemRepository orderItemRepository,
             OrderItemService orderItemService,
-            SkuService skuService
+            SkuService skuService,
+            @Lazy OrderService orderService
     ) {
         this.repository = repository;
         this.assigneeRepository = assigneeRepository;
@@ -44,6 +47,7 @@ public class OrderItemServiceInstanceService {
         this.orderItemRepository = orderItemRepository;
         this.orderItemService = orderItemService;
         this.skuService = skuService;
+        this.orderService = orderService;
     }
 
     public List<OrderItemServiceInstance> findByOrderItemId(Long orderItemId) {
@@ -154,6 +158,12 @@ public class OrderItemServiceInstanceService {
             repository.updateStatus(serviceId, status);
         }
         orderItemService.recalculateItemStatus(instance.orderItemId());
+
+        // V11 lifecycle: если услуга стала DONE и у SKU есть triggers_order_status — двигаем заказ.
+        if (status == ServiceStatus.DONE && instance.skuId() != null) {
+            orderService.checkServiceTrigger(instance.orderItemId(), instance.skuId());
+        }
+
         return repository.findById(serviceId).orElseThrow();
     }
 

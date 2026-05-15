@@ -180,6 +180,12 @@ export function AddItemModal({
                 style={{
                   position: 'relative',
                   padding: '20px 12px',
+                  minWidth: 120,
+                  minHeight: 70,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  textAlign: 'center' as const,
                   borderRadius: 10,
                   border: count > 0 ? `2px solid ${c.text}` : '1px solid #d6dbdf',
                   background: c.bg,
@@ -187,7 +193,6 @@ export function AddItemModal({
                   cursor: 'pointer',
                   fontSize: 16,
                   fontWeight: 600,
-                  textAlign: 'center',
                   transition: 'transform 0.08s, box-shadow 0.15s',
                   boxShadow: count > 0 ? `0 0 0 3px ${c.bg}` : 'none',
                 }}

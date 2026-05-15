@@ -59,7 +59,7 @@ function Badge({ status, labels }: { status: string; labels: Record<string, stri
 
 // formatOrderNumber теперь общая — см. utils/format.ts
 import { formatOrderNumber } from '../utils/format'
-import { isViewerMode } from '../utils/viewer'
+import { useAuth } from '../auth/AuthContext'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
 function checkDimensionsForPricing(pricingType: string | null | undefined, item: OrderItem): { ok: boolean; missing: string } {
@@ -904,6 +904,7 @@ export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
   const { showToast } = useToast()
+  const { isReadonly } = useAuth()
   const orderId = Number(id)
 
   const [order, setOrder] = useState<Order | null>(null)
@@ -1313,7 +1314,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
   // Заказ нельзя редактировать в финальных статусах. DELIVERED ещё можно править
   // (оператор может уточнить дату доставки и оплатить), а COMPLETED/CANCELLED — нет.
   // В режиме просмотра (моноблок) — всегда readonly.
-  const isEditable = !isViewerMode()
+  const isEditable = !isReadonly
                   && order.status !== 'DELIVERED'
                   && order.status !== 'COMPLETED'
                   && order.status !== 'CANCELLED'
@@ -1603,7 +1604,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
         </div>
 
         <div className="actions" style={{ marginTop: 16 }}>
-          {!isViewerMode() && ALLOWED_TRANSITIONS[order.status]?.length > 0 && (() => {
+          {!isReadonly && ALLOWED_TRANSITIONS[order.status]?.length > 0 && (() => {
             // Раньше — обычный select «Сменить статус». Заменено на плитки-кнопки:
             // оператор делает это многократно за день, дроп-даун — два клика вместо
             // одного (Миша, встреча 11 мая: «дропдауны на ≤5 значений бесят»).
@@ -1626,18 +1627,18 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             )
           })()}
           {/* Оплата возможна только когда заказ доставлен. После оплаты заказ становится «Завершённым». */}
-          {!isViewerMode() && !order.paid && order.status === 'DELIVERED' && (
+          {!isReadonly && !order.paid && order.status === 'DELIVERED' && (
             <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить и завершить</button>
           )}
           {/* В статусе DONE — клиент пришёл забрать сам и хочет сразу заплатить.
               Кнопка делает три операции одной транзакцией клиента: отмечаем доставку,
               переводим в DELIVERED, открываем PayModal — после оплаты заказ становится COMPLETED. */}
-          {!isViewerMode() && !order.paid && order.status === 'DONE' && (
+          {!isReadonly && !order.paid && order.status === 'DONE' && (
             <button className="btn-success" onClick={() => setShowDeliverAndPay(true)}>
               Принять оплату
             </button>
           )}
-          {!isViewerMode() && (order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
+          {!isReadonly && (order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
           )}
           <button className="btn-secondary" onClick={() => {

@@ -99,6 +99,12 @@ public class OrderItemServiceInstanceRepository {
         """, Map.of("oid", orderItemId, "sku", skuId, "p", price), Long.class);
     }
 
+    /** V11: назначить исполнителя на услугу (для auto-add lifecycle). */
+    public void assignEmployee(Long serviceId, Long employeeId) {
+        jdbc.update("INSERT INTO service_assignees (order_item_service_id, employee_id) VALUES (:s, :e) ON CONFLICT DO NOTHING",
+                Map.of("s", serviceId, "e", employeeId));
+    }
+
     public List<OrderItemServiceInstance> findByOrderItemId(Long orderItemId) {
         return jdbc.query(
                 "SELECT " + SELECT_COLS + FROM_JOINS +
@@ -145,6 +151,17 @@ public class OrderItemServiceInstanceRepository {
                 "UPDATE order_item_services SET price = :price, updated_at = NOW() WHERE id = :id AND is_manual_price = FALSE",
                 Map.of("price", price, "id", id)
         );
+    }
+
+    /** V11: подменить SKU на услуге (auto-switch при смене размеров). */
+    public void switchSku(Long serviceId, Long newSkuId) {
+        jdbc.update("""
+            UPDATE order_item_services
+               SET sku_id = :sku,
+                   sku_version_id = (SELECT current_version_id FROM skus WHERE id = :sku),
+                   updated_at = NOW()
+             WHERE id = :id
+        """, Map.of("id", serviceId, "sku", newSkuId));
     }
 
     public java.math.BigDecimal sumPriceByOrderItemId(Long orderItemId) {

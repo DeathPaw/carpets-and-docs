@@ -25,6 +25,11 @@ DELETE FROM sku_attributes;
 DELETE FROM skus;
 DELETE FROM sku_groups;
 
+DELETE FROM notifications;
+DELETE FROM monthly_expenses;
+DELETE FROM expense_categories;
+DELETE FROM users;
+
 DELETE FROM employee_role_item_types;
 DELETE FROM employees;
 DELETE FROM employee_roles;

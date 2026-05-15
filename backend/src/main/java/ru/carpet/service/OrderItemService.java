@@ -101,9 +101,13 @@ public class OrderItemService {
                     "Нельзя редактировать параметры позиции для заказа в статусе " + order.status());
         }
         orderItemRepository.updateDimensions(itemId, length, width, weight, area, runningMeters);
-        recalculateServicePrices(itemId);
+        lastSwitches = recalculateServicePrices(itemId);
         return orderItemRepository.findById(itemId).orElseThrow();
     }
+
+    /** V11: результат последнего recalculate для передачи в контроллер. */
+    private List<SkuSwitchInfo> lastSwitches = List.of();
+    public List<SkuSwitchInfo> getLastSwitches() { return lastSwitches; }
 
     @Transactional
     public void recalculateItemStatus(Long orderItemId) {
@@ -126,24 +130,58 @@ public class OrderItemService {
     }
 
     /**
-     * V10: при изменении размеров позиции пересчитываем цены услуг через
-     * {@link PricingHelper}. SKU.price × соответствующий параметр позиции.
-     * Услуги с is_manual_price=true оставляем как есть.
+     * V10+V11: при изменении размеров пересчитываем + автозамена SKU.
+     *
+     * <p>Логика: для каждой услуги (не manual, не exclude) проверяем, подходит ли
+     * текущая SKU к обновлённым параметрам позиции через {@link SkuService#findMatching}.
+     * Если нет — ищем замену и подменяем. Возвращаем список замен для тоста на фронте.
      */
     @Transactional
-    public void recalculateServicePrices(Long orderItemId) {
+    public List<SkuSwitchInfo> recalculateServicePrices(Long orderItemId) {
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(orderItemId);
+        List<SkuSwitchInfo> switches = new java.util.ArrayList<>();
+
         for (OrderItemServiceInstance service : services) {
             if (service.isManualPrice()) continue;
             if (service.skuId() == null) continue;
-            Sku sku = null;
-            try { sku = skuService.findById(service.skuId()); } catch (Exception ignored) {}
-            if (sku == null) continue;
-            BigDecimal newPrice = PricingHelper.calculate(sku.price(), service.pricingType(), item);
-            serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+            Sku currentSku;
+            try { currentSku = skuService.findById(service.skuId()); } catch (Exception e) { continue; }
+            if (currentSku.excludeFromStatusCalc()) {
+                // Lifecycle-SKU (доставка/приём/оформление) — не трогаем, цена от размеров не зависит
+                continue;
+            }
+
+            // Проверяем: matches ли текущая SKU к обновлённым параметрам?
+            boolean matches = skuService.checkMatch(currentSku, item);
+            if (matches) {
+                // Подходит — просто пересчитываем цену
+                BigDecimal newPrice = PricingHelper.calculate(currentSku.price(), currentSku.pricingType(), item);
+                serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+            } else {
+                // Не подходит — ищем замену
+                Sku replacement = skuService.findBestReplacement(currentSku, item);
+                if (replacement != null) {
+                    // Подменяем SKU
+                    serviceInstanceRepository.switchSku(service.id(), replacement.id());
+                    BigDecimal newPrice = PricingHelper.calculate(replacement.price(), replacement.pricingType(), item);
+                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+                    switches.add(new SkuSwitchInfo(currentSku.name(), replacement.name(), newPrice));
+                } else {
+                    // Не нашли замену — пересчитываем как есть, помечать будем на фронте
+                    BigDecimal newPrice = PricingHelper.calculate(currentSku.price(), currentSku.pricingType(), item);
+                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+                    switches.add(new SkuSwitchInfo(currentSku.name(), null, newPrice));
+                }
+            }
         }
         recalculateItemPrice(orderItemId);
+        return switches;
+    }
+
+    /** Информация о замене SKU для тоста на фронте. */
+    public record SkuSwitchInfo(String oldSkuName, String newSkuName, BigDecimal newPrice) {
+        public boolean switched() { return newSkuName != null; }
     }
 
     private OrderItemStatus computeItemStatus(List<OrderItemServiceInstance> services) {
