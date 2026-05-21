@@ -38,7 +38,12 @@ client.interceptors.response.use(
   error => {
     if (error.response?.status === 401) {
       sessionStorage.removeItem('auth')
-      window.location.href = '/login'
+      // Не редиректим если мы уже на /login или /worker-login —
+      // иначе AuthContext делает /api/me → 401 → перезагрузка → цикл (5 раз в сек.).
+      const path = window.location.pathname
+      if (path !== '/login' && path !== '/worker-login') {
+        window.location.href = '/login'
+      }
     }
     return Promise.reject(error)
   }

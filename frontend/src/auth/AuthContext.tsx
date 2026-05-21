@@ -36,6 +36,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true)
 
   const refresh = async () => {
+    // Если в sessionStorage нет токена — не дёргаем /api/me (получим 401 → редирект → цикл).
+    if (!sessionStorage.getItem('auth')) {
+      setUser(null)
+      setLoading(false)
+      return
+    }
     try {
       const res = await client.get<AuthUser>('/api/me')
       const u = res.data
