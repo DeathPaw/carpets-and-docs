@@ -81,18 +81,18 @@ export default function NotificationBell() {
       <button
         onClick={() => setOpen(o => !o)}
         style={{
-          position: 'relative', background: '#fff', border: '1px solid #ddd',
-          borderRadius: '50%', width: 40, height: 40, cursor: 'pointer',
-          fontSize: 18, boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+          position: 'relative', background: 'transparent', border: 'none',
+          width: 40, height: 40, cursor: 'pointer', fontSize: 22,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
         title="Уведомления"
       >
         🔔
         {count > 0 && (
           <span style={{
-            position: 'absolute', top: -4, right: -4,
-            background: '#e74c3c', color: '#fff', fontSize: 11, fontWeight: 700,
-            borderRadius: '50%', minWidth: 18, height: 18, lineHeight: '18px',
+            position: 'absolute', top: 2, right: 2,
+            background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700,
+            borderRadius: '50%', minWidth: 16, height: 16, lineHeight: '16px',
             textAlign: 'center', padding: '0 4px',
           }}>{count > 99 ? '99+' : count}</span>
         )}

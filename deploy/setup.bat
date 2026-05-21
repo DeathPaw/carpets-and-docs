@@ -59,13 +59,12 @@ call mvn clean package -DskipTests -q || goto :err
 
 echo.
 echo === [5/6] Registering auto-update task (every 5 minutes) ===
-schtasks /Query /TN "CarpetOrdersAutoUpdate" >nul 2>&1
-if errorlevel 1 (
-    schtasks /Create /SC MINUTE /MO 5 /TN "CarpetOrdersAutoUpdate" /TR "\"%ROOT%\deploy\update.bat\"" /F >nul || goto :err
-    echo Task registered.
-) else (
-    echo Task already exists.
-)
+REM /RL HIGHEST — задача запускается с админ-правами (нужно для taskkill).
+REM /RU %USERNAME% — от текущего пользователя (чтобы был доступ к git config).
+REM Сначала удаляем старую задачу (если параметры менялись).
+schtasks /Delete /TN "CarpetOrdersAutoUpdate" /F >nul 2>&1
+schtasks /Create /SC MINUTE /MO 5 /TN "CarpetOrdersAutoUpdate" /TR "\"%ROOT%\deploy\update.bat\"" /RL HIGHEST /RU "%USERNAME%" /F >nul || goto :err
+echo Task registered with HIGHEST privileges.
 
 echo.
 echo === [6/6] Starting application ===

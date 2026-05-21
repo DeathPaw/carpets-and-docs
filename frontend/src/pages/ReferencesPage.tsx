@@ -173,7 +173,7 @@ function ItemTypesCard({ types, reload, setConfirm, showToast }: CardProps<{ typ
                   ) : (
                     <>
                       <button className="btn-secondary btn-sm" onClick={() => { setEditId(t.id); setEditName(t.name) }}>✏️</button>
-                      <button className="btn-danger btn-sm" onClick={() => remove(t.id)}>🗑️</button>
+                      <button className="btn-danger btn-sm" onClick={() => remove(t.id)}>✕</button>
                     </>
                   )}
                 </div>
@@ -253,7 +253,7 @@ function SkuGroupsCard({ groups, reload, setConfirm, showToast }: CardProps<{ gr
                   ) : (
                     <>
                       <button className="btn-secondary btn-sm" onClick={() => { setEditId(g.id); setEditName(g.name) }}>✏️</button>
-                      <button className="btn-danger btn-sm" onClick={() => remove(g.id)}>🗑️</button>
+                      <button className="btn-danger btn-sm" onClick={() => remove(g.id)}>✕</button>
                     </>
                   )}
                 </div>
@@ -326,7 +326,7 @@ function AttributeDefinitionsCard({ attrs, reload, setConfirm, showToast }: Card
               <td>{a.value_type}</td>
               <td>{a.unit || '—'}</td>
               <td>
-                <button className="btn-danger btn-sm" onClick={() => remove(a.key)}>🗑️</button>
+                <button className="btn-danger btn-sm" onClick={() => remove(a.key)}>✕</button>
               </td>
             </tr>
           ))}
@@ -418,7 +418,7 @@ function SkuCatalogCard({
               <td>
                 <div className="actions">
                   <button className="btn-secondary btn-sm" onClick={() => setEditingId(s.id)}>✏️</button>
-                  {!s.is_deleted && <button className="btn-danger btn-sm" onClick={() => remove(s.id)}>🗑️</button>}
+                  {!s.is_deleted && <button className="btn-danger btn-sm" onClick={() => remove(s.id)}>✕</button>}
                 </div>
               </td>
             </tr>
@@ -818,7 +818,7 @@ function PriceModifiersCard({ modifiers, reload, setConfirm, showToast }: CardPr
                       <button className="btn-secondary btn-sm" onClick={() => {
                         setEditId(m.id); setEditName(m.name); setEditPercent(String(m.percent))
                       }}>✏️</button>
-                      <button className="btn-danger btn-sm" onClick={() => remove(m.id)}>🗑️</button>
+                      <button className="btn-danger btn-sm" onClick={() => remove(m.id)}>✕</button>
                     </>
                   )}
                 </div>
@@ -918,7 +918,7 @@ function DistrictsCard({ districts, reload, setConfirm, showToast }: CardProps<{
                       <button className="btn-secondary btn-sm" onClick={() => {
                         setEditId(d.id); setEditName(d.name); setEditActive(d.is_active)
                       }}>✏️</button>
-                      <button className="btn-danger btn-sm" onClick={() => remove(d.id)}>🗑️</button>
+                      <button className="btn-danger btn-sm" onClick={() => remove(d.id)}>✕</button>
                     </>
                   )}
                 </div>
