@@ -30,6 +30,12 @@ if "%OLD_HASH%"=="%NEW_HASH%" (
 
 echo Updates pulled: %OLD_HASH% -^> %NEW_HASH% >> "%LOG%"
 
+REM Стопим Java, чтобы не держала файлы (vite EPERM на dist/assets)
+taskkill /F /IM java.exe /T >> "%LOG%" 2>&1
+timeout /t 1 /nobreak >nul
+if exist "%ROOT%\frontend\dist"  rmdir /S /Q "%ROOT%\frontend\dist"  >> "%LOG%" 2>&1
+if exist "%ROOT%\backend\target" rmdir /S /Q "%ROOT%\backend\target" >> "%LOG%" 2>&1
+
 REM Rebuild frontend
 cd /d "%ROOT%\frontend"
 call npm install >> "%LOG%" 2>&1

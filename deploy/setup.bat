@@ -19,6 +19,13 @@ set ROOT=%CD%
 set PGPASSWORD=postgres
 title Carpet Orders - Setup
 
+REM Ранняя очистка: убиваем все java.exe (могут держать файлы), чистим dist/target.
+REM Без этого vite падает EPERM при попытке очистить frontend\dist\assets.
+taskkill /F /IM java.exe /T >nul 2>&1
+timeout /t 1 /nobreak >nul
+if exist "%ROOT%\frontend\dist"  rmdir /S /Q "%ROOT%\frontend\dist"  2>nul
+if exist "%ROOT%\backend\target" rmdir /S /Q "%ROOT%\backend\target" 2>nul
+
 echo.
 echo === [1/6] Checking tools ===
 where java >nul 2>&1 || (echo X java not found & goto :err)
