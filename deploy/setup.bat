@@ -22,9 +22,14 @@ title Carpet Orders - Setup
 REM Ранняя очистка: убиваем все java.exe (могут держать файлы), чистим dist/target.
 REM Без этого vite падает EPERM при попытке очистить frontend\dist\assets.
 taskkill /F /IM java.exe /T >nul 2>&1
-timeout /t 1 /nobreak >nul
+timeout /t 2 /nobreak >nul
 if exist "%ROOT%\frontend\dist"  rmdir /S /Q "%ROOT%\frontend\dist"  2>nul
 if exist "%ROOT%\backend\target" rmdir /S /Q "%ROOT%\backend\target" 2>nul
+
+REM Сброс к точной копии origin/main — на сервере не должно быть локальных коммитов.
+REM Без этого `git pull --ff-only` потом ругается на diverging branches.
+git fetch origin >nul 2>&1
+git reset --hard origin/main >nul 2>&1
 
 echo.
 echo === [1/6] Checking tools ===

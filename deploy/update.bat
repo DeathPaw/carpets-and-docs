@@ -20,7 +20,9 @@ echo === %DATE% %TIME% === >> "%LOG%"
 
 for /f %%i in ('git rev-parse HEAD 2^>nul') do set OLD_HASH=%%i
 git fetch --quiet >> "%LOG%" 2>&1
-git pull --ff-only --quiet >> "%LOG%" 2>&1
+REM Сервер — точная копия remote. Локальных коммитов быть не должно.
+REM reset --hard выкинет случайные правки если они есть (предотвращает diverging branches).
+git reset --hard origin/main --quiet >> "%LOG%" 2>&1
 for /f %%i in ('git rev-parse HEAD 2^>nul') do set NEW_HASH=%%i
 
 if "%OLD_HASH%"=="%NEW_HASH%" (
