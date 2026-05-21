@@ -1,0 +1,50 @@
+# ============================================================================
+# Production profile — для сервера.
+# Активируется: java -jar app.jar --spring.profiles.active=prod
+# ============================================================================
+
+spring:
+  datasource:
+    # Локальный PostgreSQL, дефолтный postgres/postgres.
+    # Чтобы поменять — задать env: SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME, SPRING_DATASOURCE_PASSWORD
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/carpet_db}
+    username: ${SPRING_DATASOURCE_USERNAME:postgres}
+    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    baseline-version: 0
+    locations: classpath:db/migration
+
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    default-property-inclusion: non_null
+
+  # SPA: при отсутствии файла отдаём index.html, чтобы React-роутинг работал.
+  web:
+    resources:
+      static-locations: classpath:/static/
+
+# Дефолтный логин для первого входа. Дальше управляется через UI «Пользователи».
+# Меняется только до первого старта (после — пароль сменить через UI).
+app:
+  admin:
+    username: ${APP_ADMIN_USERNAME:admin}
+    password: ${APP_ADMIN_PASSWORD:foxy}
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+
+server:
+  port: ${SERVER_PORT:8080}
+  # Включаем сжатие для статики
+  compression:
+    enabled: true
+    mime-types: text/html,text/css,application/javascript,application/json

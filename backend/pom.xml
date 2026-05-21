@@ -79,6 +79,20 @@
     </dependencies>
 
     <build>
+        <!-- Положить готовый фронт в classpath:/static/. Перед `mvn package`
+             должен быть выполнен `npm run build` в ../frontend → dist/. -->
+        <resources>
+            <resource>
+                <directory>src/main/resources</directory>
+            </resource>
+            <resource>
+                <directory>${project.basedir}/../frontend/dist</directory>
+                <targetPath>static</targetPath>
+                <!-- Опциональный — если папки нет, билд не падает (для dev). -->
+                <filtering>false</filtering>
+            </resource>
+        </resources>
+
         <plugins>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
