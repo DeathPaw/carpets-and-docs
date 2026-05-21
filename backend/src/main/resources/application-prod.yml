@@ -43,7 +43,10 @@ springdoc:
     path: /v3/api-docs
 
 server:
-  port: ${SERVER_PORT:8080}
+  # Порт 8080 на Windows часто занят EDB Postgres management UI после установки
+  # PostgreSQL. Чтобы не конфликтовать — используем 9090. Переопределить можно
+  # через env-переменную SERVER_PORT.
+  port: ${SERVER_PORT:9090}
   # Включаем сжатие для статики
   compression:
     enabled: true

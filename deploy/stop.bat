@@ -11,8 +11,8 @@ for /f "tokens=2" %%i in ('tasklist /V /FI "WINDOWTITLE eq CarpetOrders" /FO LIS
     taskkill /F /PID %%i >nul 2>&1
 )
 
-REM Подстраховка: убить любой java.exe слушающий 8080
-for /f "tokens=5" %%i in ('netstat -ano ^| findstr ":8080" ^| findstr "LISTENING"') do (
+REM Подстраховка: убить любой java.exe слушающий 9090 (наш порт)
+for /f "tokens=5" %%i in ('netstat -ano ^| findstr ":9090" ^| findstr "LISTENING"') do (
     taskkill /F /PID %%i >nul 2>&1
 )
 
