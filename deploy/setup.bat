@@ -77,8 +77,8 @@ call "%ROOT%\deploy\start.bat"
 
 echo.
 echo ============================================================================
-echo READY. Open http://localhost:9090  (login: admin / foxy)
-echo (port 8080 obychno zanyat EDB Postgres management UI, ispolzuem 9090)
+echo READY. Open http://localhost:3000  (login: admin / foxy)
+echo (port 8080 obychno zanyat EDB Postgres management UI, ispolzuem 3000)
 echo Auto-update runs every 5 minutes via Task Scheduler.
 echo Logs: %ROOT%\deploy\app.log
 echo ============================================================================

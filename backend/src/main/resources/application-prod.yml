@@ -44,9 +44,9 @@ springdoc:
 
 server:
   # Порт 8080 на Windows часто занят EDB Postgres management UI после установки
-  # PostgreSQL. Чтобы не конфликтовать — используем 9090. Переопределить можно
-  # через env-переменную SERVER_PORT.
-  port: ${SERVER_PORT:9090}
+  # PostgreSQL. Стандартный 3000 обычно открыт и не конфликтует.
+  # Переопределить можно через env-переменную SERVER_PORT.
+  port: ${SERVER_PORT:3000}
   # Включаем сжатие для статики
   compression:
     enabled: true
