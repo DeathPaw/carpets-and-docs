@@ -64,12 +64,17 @@ call mvn clean package -DskipTests -q || goto :err
 
 echo.
 echo === [5/6] Registering auto-update task (every 5 minutes) ===
-REM /RL HIGHEST — задача запускается с админ-правами (нужно для taskkill).
-REM /RU %USERNAME% — от текущего пользователя (чтобы был доступ к git config).
-REM Сначала удаляем старую задачу (если параметры менялись).
+REM /RU SYSTEM — задача работает даже когда никто не залогинен и компьютер на батарее.
+REM /RL HIGHEST — админ-права (для taskkill чужих процессов).
+REM SYSTEM-user не имеет user-profile (нет %USERPROFILE%\.gitconfig), но git pull
+REM по HTTPS без auth (публичное репо) работает.
 schtasks /Delete /TN "CarpetOrdersAutoUpdate" /F >nul 2>&1
-schtasks /Create /SC MINUTE /MO 5 /TN "CarpetOrdersAutoUpdate" /TR "\"%ROOT%\deploy\update.bat\"" /RL HIGHEST /RU "%USERNAME%" /F >nul || goto :err
-echo Task registered with HIGHEST privileges.
+schtasks /Create /SC MINUTE /MO 5 /TN "CarpetOrdersAutoUpdate" /TR "\"%ROOT%\deploy\update.bat\"" /RL HIGHEST /RU SYSTEM /F >nul || goto :err
+
+REM Дополнительно: убрать ограничения по питанию через PowerShell (schtasks /Create не умеет это напрямую)
+powershell -NoProfile -Command "$t=Get-ScheduledTask -TaskName 'CarpetOrdersAutoUpdate'; $t.Settings.DisallowStartIfOnBatteries=$false; $t.Settings.StopIfGoingOnBatteries=$false; $t.Settings.ExecutionTimeLimit='PT0S'; Set-ScheduledTask -InputObject $t" >nul 2>&1
+
+echo Task registered (SYSTEM user, no battery limits, no logon required).
 
 echo.
 echo === [6/6] Starting application ===
