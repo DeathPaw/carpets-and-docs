@@ -617,11 +617,20 @@ function ItemRow({
       }
     }
     try {
+      // Авто-подсчёт площади: если оператор задал длину и ширину, но не заполнил
+      // площадь — рассчитываем как L × W. Если ковёр круглый/овальный — оператор
+      // потом перезапишет area вручную (и при следующем сохранении мы её сохраним).
+      const lenN  = dimensions.length ? Number(dimensions.length) : null
+      const widN  = dimensions.width ? Number(dimensions.width) : null
+      let   areaN = dimensions.area ? Number(dimensions.area) : null
+      if (areaN == null && lenN != null && widN != null) {
+        areaN = Math.round(lenN * widN * 100) / 100  // 2 знака после запятой
+      }
       await updateOrderItemDimensions(orderId, item.id, {
-        length: dimensions.length ? Number(dimensions.length) : undefined,
-        width: dimensions.width ? Number(dimensions.width) : undefined,
+        length: lenN ?? undefined,
+        width:  widN ?? undefined,
         weight: dimensions.weight ? Number(dimensions.weight) : undefined,
-        area: dimensions.area ? Number(dimensions.area) : undefined,
+        area:   areaN ?? undefined,
         running_meters: dimensions.running_meters ? Number(dimensions.running_meters) : undefined,
       })
       setEditDimensions(false)
@@ -707,14 +716,31 @@ function ItemRow({
                   type="number" min={0} step="0.01"
                   placeholder="Длина"
                   value={dimensions.length}
-                  onChange={e => setDimensions(d => ({...d, length: e.target.value}))}
+                  onChange={e => setDimensions(d => {
+                    // Авто-площадь = L × W (если оператор не задал руками)
+                    const lenVal = e.target.value
+                    const widNum = d.width ? Number(d.width) : null
+                    const lenNum = lenVal ? Number(lenVal) : null
+                    const autoArea = (lenNum != null && widNum != null)
+                      ? String(Math.round(lenNum * widNum * 100) / 100)
+                      : d.area
+                    return {...d, length: lenVal, area: autoArea}
+                  })}
                   style={{ width: 60 }}
                 />
                 <input
                   type="number" min={0} step="0.01"
                   placeholder="Ширина"
                   value={dimensions.width}
-                  onChange={e => setDimensions(d => ({...d, width: e.target.value}))}
+                  onChange={e => setDimensions(d => {
+                    const widVal = e.target.value
+                    const lenNum = d.length ? Number(d.length) : null
+                    const widNum = widVal ? Number(widVal) : null
+                    const autoArea = (lenNum != null && widNum != null)
+                      ? String(Math.round(lenNum * widNum * 100) / 100)
+                      : d.area
+                    return {...d, width: widVal, area: autoArea}
+                  })}
                   style={{ width: 60 }}
                 />
                 <input

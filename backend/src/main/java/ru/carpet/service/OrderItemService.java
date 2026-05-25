@@ -100,6 +100,11 @@ public class OrderItemService {
             throw new ru.carpet.exception.BusinessRuleException(
                     "Нельзя редактировать параметры позиции для заказа в статусе " + order.status());
         }
+        // Авто-площадь = длина × ширина, если оператор её не задал.
+        // Для круглых/овальных ковров оператор отправит area явно, она пройдёт как есть.
+        if (area == null && length != null && width != null) {
+            area = length.multiply(width).setScale(2, java.math.RoundingMode.HALF_UP);
+        }
         orderItemRepository.updateDimensions(itemId, length, width, weight, area, runningMeters);
         lastSwitches = recalculateServicePrices(itemId);
         return orderItemRepository.findById(itemId).orElseThrow();
