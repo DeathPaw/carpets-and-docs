@@ -83,8 +83,13 @@ public class OrderItemService {
 
     public OrderItem updatePrice(Long itemId, BigDecimal price) {
         OrderItem item = findById(itemId);
-        orderItemRepository.updatePrice(itemId, price);
-        orderService.recalculateTotalAmount(item.orderId());
+        if (price == null) {
+            // V11+: null = «вернуть к авто-расчёту». Цена позиции = сумма цен услуг.
+            recalculateItemPrice(itemId);
+        } else {
+            orderItemRepository.updatePrice(itemId, price);
+            orderService.recalculateTotalAmount(item.orderId());
+        }
         return orderItemRepository.findById(itemId).orElseThrow();
     }
 

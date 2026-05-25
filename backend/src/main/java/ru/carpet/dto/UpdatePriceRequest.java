@@ -1,6 +1,6 @@
 package ru.carpet.dto;
 
-import jakarta.validation.constraints.NotNull;
 import java.math.BigDecimal;
 
-public record UpdatePriceRequest(@NotNull BigDecimal price) {}
+/** price=null означает «вернуть к авто-расчёту» (сумма цен услуг позиции). */
+public record UpdatePriceRequest(BigDecimal price) {}

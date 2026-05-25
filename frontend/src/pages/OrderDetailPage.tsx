@@ -201,23 +201,33 @@ function ServicesPanel({
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка добавления услуги'; showToast(msg, 'error') }
   }
 
-  const openPriceEdit = (serviceId: number, currentPrice: number) => {
+  /** Открыть редактирование — поле всегда пустое (placeholder = текущая цена). */
+  const openPriceEdit = (serviceId: number) => {
     setEditingPrice(serviceId)
-    setPriceValue(String(currentPrice))
+    setPriceValue('')
   }
 
   const savePriceEdit = async () => {
     if (editingPrice === null) return
     try {
-      // Пустое поле → отправляем null → бэк снимает is_manual_price и пересчитывает
-      // цену автоматически через SKU.price × параметр позиции.
-      // Цифра 0 — валидная ручная цена (например, для самовывоза).
+      // Пустое поле → null → бэк снимает is_manual_price и пересчитывает
+      // через SKU.price × параметр позиции. 0 — валидная ручная цена.
       const priceParam = priceValue.trim() === '' ? null : Number(priceValue)
       await updateServicePrice(orderId, itemId, editingPrice, { price: priceParam as number })
       setEditingPrice(null)
+      setPriceValue('')
       await load()
       onRefresh()
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка изменения цены'; showToast(msg, 'error') }
+  }
+
+  /** Кнопка «А» — мгновенный сброс ручной цены, без открытия редактирования. */
+  const resetServicePriceToAuto = async (serviceId: number) => {
+    try {
+      await updateServicePrice(orderId, itemId, serviceId, { price: null as unknown as number })
+      await load()
+      onRefresh()
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка'; showToast(msg, 'error') }
   }
 
   if (loading) return <div className="loading">Загрузка услуг...</div>
@@ -321,20 +331,19 @@ function ServicesPanel({
                             value={priceValue}
                             onChange={e => setPriceValue(e.target.value)}
                             style={{ width: 80 }}
-                            placeholder="авто"
+                            placeholder={`авто (${Number(s.price).toFixed(0)} ₽)`}
+                            autoFocus
                           />
-                          <button className="btn-success btn-sm" onClick={savePriceEdit}>&#10003;</button>
-                          <button className="btn-secondary btn-sm" onClick={() => setEditingPrice(null)}>&#10005;</button>
+                          <button className="btn-success btn-sm" onClick={savePriceEdit} title="Сохранить">&#10003;</button>
+                          <button className="btn-secondary btn-sm" onClick={() => { setEditingPrice(null); setPriceValue('') }} title="Отмена">&#10005;</button>
                         </div>
-                        <span style={{ fontSize: '0.7em', color: '#888' }}>
-                          пусто — авто-расчёт
-                        </span>
+                        <span style={{ fontSize: '0.7em', color: '#888' }}>пусто = авто-расчёт</span>
                       </div>
                     ) : (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
                         <span
                           style={{ cursor: isEditable ? 'pointer' : 'default' }}
-                          onClick={() => isEditable && openPriceEdit(s.id, s.price)}
+                          onClick={() => isEditable && openPriceEdit(s.id)}
                         >
                           {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' \u270F\uFE0F' : ''}
                         </span>
@@ -342,6 +351,14 @@ function ServicesPanel({
                           <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена установлена вручную">
                             (ручная)
                           </span>
+                        )}
+                        {isEditable && s.is_manual_price && (
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() => void resetServicePriceToAuto(s.id)}
+                            title="Авто-расчёт цены (SKU × параметр позиции)"
+                            style={{ padding: '2px 8px', fontSize: '0.85em' }}
+                          >А</button>
                         )}
                       </span>
                     )}
@@ -548,7 +565,9 @@ function ItemRow({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [descValue, setDescValue] = useState(item.description || '')
   const [defectsValue, setDefectsValue] = useState(item.defects || '')
-  const [price, setPrice] = useState(String(item.price))
+  // Цена позиции редактируется пустым полем — пустое значит «авто-расчёт».
+  // Хранить старую ручную цену не нужно: оператор либо вводит новое число, либо оставляет пустым.
+  const [price, setPrice] = useState('')
   const [dimensions, setDimensions] = useState({
     length: item.length?.toString() || '',
     width: item.width?.toString() || '',
@@ -597,10 +616,21 @@ function ItemRow({
 
   const savePrice = async () => {
     try {
-      await setOrderItemPrice(orderId, item.id, { price: Number(price) })
+      // Пустое поле → null → бэк вернёт цену к авто-расчёту (сумма услуг позиции).
+      const priceParam = price.trim() === '' ? null : Number(price)
+      await setOrderItemPrice(orderId, item.id, { price: priceParam as number })
       setEditPrice(false)
+      setPrice('')
       onRefresh()
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка изменения цены'; showToast(msg, 'error') }
+  }
+
+  /** Сразу вернуть цену к авто-расчёту, без открытия редактирования. */
+  const resetPriceToAuto = async () => {
+    try {
+      await setOrderItemPrice(orderId, item.id, { price: null as unknown as number })
+      onRefresh()
+    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка'; showToast(msg, 'error') }
   }
 
   const saveDimensions = async () => {
@@ -798,17 +828,36 @@ function ItemRow({
         <td><Badge status={item.status} labels={ITEM_STATUS_LABELS} /></td>
         <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
           {isEditable && editPrice ? (
-            <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-              <input value={price} onChange={e => setPrice(e.target.value)} style={{ width: 80 }} />
-              <button className="btn-success btn-sm" onClick={savePrice}>&#10003;</button>
-              <button className="btn-secondary btn-sm" onClick={() => setEditPrice(false)}>&#10005;</button>
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+              <div style={{ display: 'flex', gap: 4 }}>
+                <input
+                  value={price}
+                  onChange={e => setPrice(e.target.value)}
+                  style={{ width: 80 }}
+                  placeholder={`\u0430\u0432\u0442\u043E (${Number(item.price).toFixed(0)} \u20BD)`}
+                  autoFocus
+                />
+                <button className="btn-success btn-sm" onClick={savePrice} title="\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C">&#10003;</button>
+                <button className="btn-secondary btn-sm" onClick={() => { setEditPrice(false); setPrice('') }} title="\u041E\u0442\u043C\u0435\u043D\u0430">&#10005;</button>
+              </div>
+              <span style={{ fontSize: '0.7em', color: '#888' }}>\u043F\u0443\u0441\u0442\u043E = \u0430\u0432\u0442\u043E-\u0440\u0430\u0441\u0447\u0451\u0442</span>
             </div>
           ) : (
-            <span
-              style={{ cursor: isEditable ? 'pointer' : 'default' }}
-              onClick={() => isEditable && setEditPrice(true)}
-            >
-              {Number(item.price).toFixed(2)} &#8381;{isEditable ? ' \u270F\uFE0F' : ''}
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+              <span
+                style={{ cursor: isEditable ? 'pointer' : 'default' }}
+                onClick={() => { if (isEditable) { setPrice(''); setEditPrice(true) } }}
+              >
+                {Number(item.price).toFixed(2)} &#8381;{isEditable ? ' \u270F\uFE0F' : ''}
+              </span>
+              {isEditable && (
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => void resetPriceToAuto()}
+                  title="\u0410\u0432\u0442\u043E-\u0440\u0430\u0441\u0447\u0451\u0442 \u0446\u0435\u043D\u044B (\u0441\u0443\u043C\u043C\u0430 \u0443\u0441\u043B\u0443\u0433)"
+                  style={{ padding: '2px 8px', fontSize: '0.85em' }}
+                >\u0410</button>
+              )}
             </span>
           )}
         </td>
