@@ -46,6 +46,13 @@ exit /b 1
 
 :after_clean
 
+REM Task Scheduler потом крутится от SYSTEM, а репозиторий клонировал юзер. Git с 2.35+
+REM блокирует операции на «чужих» репах (dubious ownership: «owned by CARPET\local but
+REM current user is NT AUTHORITY\СИСТЕМА»). --system пишет в общесистемный gitconfig
+REM (C:\ProgramData\Git\config), применяется для всех юзеров включая SYSTEM.
+git config --system --add safe.directory "%ROOT:\=/%" >nul 2>&1
+git config --system --add safe.directory "*" >nul 2>&1
+
 REM Сброс к точной копии origin/main — на сервере не должно быть локальных коммитов.
 REM Без этого `git pull --ff-only` потом ругается на diverging branches.
 git fetch origin >nul 2>&1

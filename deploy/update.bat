@@ -18,6 +18,17 @@ for %%I in ("%LOG%") do if %%~zI GTR 1048576 move /Y "%LOG%" "%LOG%.old" >nul
 echo. >> "%LOG%"
 echo === %DATE% %TIME% === >> "%LOG%"
 
+REM Task Scheduler крутится от SYSTEM, а репозиторий клонировал юзер CARPET\local.
+REM Git с 2.35+ блокирует операции на «чужих» репах (dubious ownership), безусловно
+REM прописываем доверие к рабочей папке. --system пишет в общесистемный gitconfig,
+REM применяется для всех юзеров (включая SYSTEM). Идемпотентно — лишних записей нет.
+git config --system --get-all safe.directory | findstr /C:"%ROOT:\=/%" >nul
+if errorlevel 1 (
+    git config --system --add safe.directory "%ROOT:\=/%" >> "%LOG%" 2>&1
+    git config --system --add safe.directory "*" >> "%LOG%" 2>&1
+    echo Added safe.directory for %ROOT% >> "%LOG%"
+)
+
 for /f %%i in ('git rev-parse HEAD 2^>nul') do set OLD_HASH=%%i
 git fetch --quiet >> "%LOG%" 2>&1
 REM Сервер — точная копия remote. Локальных коммитов быть не должно.
