@@ -22,9 +22,29 @@ title Carpet Orders - Setup
 REM Ранняя очистка: убиваем все java.exe (могут держать файлы), чистим dist/target.
 REM Без этого vite падает EPERM при попытке очистить frontend\dist\assets.
 taskkill /F /IM java.exe /T >nul 2>&1
-timeout /t 2 /nobreak >nul
-if exist "%ROOT%\frontend\dist"  rmdir /S /Q "%ROOT%\frontend\dist"  2>nul
-if exist "%ROOT%\backend\target" rmdir /S /Q "%ROOT%\backend\target" 2>nul
+timeout /t 3 /nobreak >nul
+
+REM Несколько попыток rmdir с задержкой — Windows Defender может держать файл
+REM пару секунд после освобождения процессом.
+call :force_rmdir "%ROOT%\frontend\dist"
+call :force_rmdir "%ROOT%\backend\target"
+goto :after_clean
+
+:force_rmdir
+set "DIR=%~1"
+if not exist "%DIR%" exit /b 0
+for /L %%i in (1,1,5) do (
+    rmdir /S /Q "%DIR%" 2>nul
+    if not exist "%DIR%" exit /b 0
+    timeout /t 2 /nobreak >nul
+)
+echo.
+echo ОШИБКА: не удалось удалить папку %DIR%
+echo Закройте Проводник/IDE открытые на этой папке, или добавьте папку C:\carpets
+echo в исключения антивируса (Windows Defender / Касперский / прочее).
+exit /b 1
+
+:after_clean
 
 REM Сброс к точной копии origin/main — на сервере не должно быть локальных коммитов.
 REM Без этого `git pull --ff-only` потом ругается на diverging branches.
