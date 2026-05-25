@@ -171,8 +171,18 @@ public class OrderItemServiceInstanceService {
     public OrderItemServiceInstance updatePrice(Long serviceId, java.math.BigDecimal price) {
         OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
-        repository.updatePrice(serviceId, price);
-        orderItemService.recalculateItemPrice(instance.orderItemId());
+
+        // V11+: если оператор стёр ручную цену (передал null) — снимаем флаг
+        // is_manual_price и пересчитываем цену через PricingHelper (SKU × параметр позиции).
+        // Это позволяет «откатить» ручное редактирование и вернуть авто-расчёт.
+        // Цена 0 НЕ сбрасывает флаг (0 — валидное значение, например для «Самовывоз»).
+        if (price == null) {
+            repository.clearManualPriceFlag(serviceId);
+            orderItemService.recalculateServicePrices(instance.orderItemId());
+        } else {
+            repository.updatePrice(serviceId, price);
+            orderItemService.recalculateItemPrice(instance.orderItemId());
+        }
         return repository.findById(serviceId).orElseThrow();
     }
 

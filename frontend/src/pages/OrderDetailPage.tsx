@@ -209,7 +209,11 @@ function ServicesPanel({
   const savePriceEdit = async () => {
     if (editingPrice === null) return
     try {
-      await updateServicePrice(orderId, itemId, editingPrice, { price: Number(priceValue) })
+      // Пустое поле → отправляем null → бэк снимает is_manual_price и пересчитывает
+      // цену автоматически через SKU.price × параметр позиции.
+      // Цифра 0 — валидная ручная цена (например, для самовывоза).
+      const priceParam = priceValue.trim() === '' ? null : Number(priceValue)
+      await updateServicePrice(orderId, itemId, editingPrice, { price: priceParam as number })
       setEditingPrice(null)
       await load()
       onRefresh()
@@ -311,14 +315,20 @@ function ServicesPanel({
                   {!isDefaultType && (
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {isEditable && editingPrice === s.id ? (
-                      <div style={{ display: 'flex', gap: 4, justifyContent: 'flex-end' }}>
-                        <input
-                          value={priceValue}
-                          onChange={e => setPriceValue(e.target.value)}
-                          style={{ width: 80 }}
-                        />
-                        <button className="btn-success btn-sm" onClick={savePriceEdit}>&#10003;</button>
-                        <button className="btn-secondary btn-sm" onClick={() => setEditingPrice(null)}>&#10005;</button>
+                      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                        <div style={{ display: 'flex', gap: 4 }}>
+                          <input
+                            value={priceValue}
+                            onChange={e => setPriceValue(e.target.value)}
+                            style={{ width: 80 }}
+                            placeholder="авто"
+                          />
+                          <button className="btn-success btn-sm" onClick={savePriceEdit}>&#10003;</button>
+                          <button className="btn-secondary btn-sm" onClick={() => setEditingPrice(null)}>&#10005;</button>
+                        </div>
+                        <span style={{ fontSize: '0.7em', color: '#888' }}>
+                          пусто — авто-расчёт
+                        </span>
                       </div>
                     ) : (
                       <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>

@@ -146,6 +146,14 @@ public class OrderItemServiceInstanceRepository {
         );
     }
 
+    /** V11+: сбросить флаг ручной цены, чтобы пересчёт снова работал автоматически. */
+    public void clearManualPriceFlag(Long id) {
+        jdbc.update(
+                "UPDATE order_item_services SET is_manual_price = FALSE, updated_at = NOW() WHERE id = :id",
+                Map.of("id", id)
+        );
+    }
+
     public void updateCalculatedPrice(Long id, java.math.BigDecimal price) {
         jdbc.update(
                 "UPDATE order_item_services SET price = :price, updated_at = NOW() WHERE id = :id AND is_manual_price = FALSE",
