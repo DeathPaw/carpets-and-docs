@@ -156,6 +156,18 @@ public class OrderItemServiceInstanceRepository {
         );
     }
 
+    /**
+     * Массовый сброс ручного флага у всех услуг позиции. Вызывается при изменении размеров
+     * позиции: старая ручная цена услуги уже неактуальна для новых размеров, надо считать заново.
+     */
+    public void clearAllManualPriceFlagsForItem(Long orderItemId) {
+        jdbc.update(
+                "UPDATE order_item_services SET is_manual_price = FALSE, updated_at = NOW() " +
+                "WHERE order_item_id = :oid AND is_manual_price = TRUE",
+                Map.of("oid", orderItemId)
+        );
+    }
+
     public void updateCalculatedPrice(Long id, java.math.BigDecimal price) {
         jdbc.update(
                 "UPDATE order_item_services SET price = :price, updated_at = NOW() WHERE id = :id AND is_manual_price = FALSE",

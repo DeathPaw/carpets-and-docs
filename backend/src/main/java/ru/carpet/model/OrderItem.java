@@ -20,8 +20,6 @@ public record OrderItem(
         /** Периметр (V10). Самостоятельная мера; формула 2(L+W) работает только
          *  для прямоугольника, а у нас бывают овальные/круглые ковры. */
         BigDecimal perimeter,
-        /** V13: TRUE = оператор настроил цену вручную; auto-пересчёты её не трогают. */
-        Boolean isManualPrice,
         String cancellationReason,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

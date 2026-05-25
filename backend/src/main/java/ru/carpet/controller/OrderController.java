@@ -212,12 +212,9 @@ public class OrderController {
         return orderItemService.updateDescription(itemId, body.get("description"), body.get("defects"));
     }
 
-    @PatchMapping("/{orderId}/items/{itemId}/price")
-    public OrderItem updateItemPrice(@PathVariable Long orderId,
-                                     @PathVariable Long itemId,
-                                     @Valid @RequestBody UpdatePriceRequest request) {
-        return orderItemService.updatePrice(itemId, request.price());
-    }
+    // Эндпоинт PATCH /items/{itemId}/price удалён: цена позиции = сумма цен услуг,
+    // вручную её не редактируем (иначе путались модель и UX). Ручная цена остаётся
+    // только на уровне услуги — /services/{serviceId}/price.
 
     @PatchMapping("/{orderId}/items/{itemId}/dimensions")
     public Map<String, Object> updateItemDimensions(@PathVariable Long orderId,

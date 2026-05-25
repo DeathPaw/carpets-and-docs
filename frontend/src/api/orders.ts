@@ -96,8 +96,8 @@ export const addOrderItem = (orderId: number, data: AddOrderItemRequest) =>
 export const updateOrderItemStatus = (orderId: number, itemId: number, data: UpdateStatusRequest) =>
   client.patch<OrderItem>(`/api/orders/${orderId}/items/${itemId}/status`, data).then(r => r.data)
 
-export const setOrderItemPrice = (orderId: number, itemId: number, data: { price: number }) =>
-  client.patch<OrderItem>(`/api/orders/${orderId}/items/${itemId}/price`, data).then(r => r.data)
+// setOrderItemPrice удалён: цена позиции = сумма цен услуг, вручную не редактируется
+// (ручная цена теперь только на уровне услуги — см. api/services.ts updateServicePrice).
 
 // Order Item Description & Defects
 export const updateOrderItemDescription = (orderId: number, itemId: number, data: { description?: string | null, defects?: string | null }) =>

@@ -81,29 +81,6 @@ public class OrderItemService {
         return orderItemRepository.findById(itemId).orElseThrow();
     }
 
-    public OrderItem updatePrice(Long itemId, BigDecimal price) {
-        OrderItem item = findById(itemId);
-        if (price == null) {
-            // V11+: null = «вернуть к авто-расчёту». Сбрасываем флаг и пересчитываем.
-            orderItemRepository.clearManualPriceFlag(itemId);
-            recalculateItemPrice(itemId);
-            return orderItemRepository.findById(itemId).orElseThrow();
-        }
-        // Issue #4: если введённая цена совпадает с авто-расчётом (сумма услуг)
-        // и позиция ещё не была manual — не помечаем как manual. Пресекает
-        // «открыл, посмотрел, нажал ✓ → залочилась на ручной цене».
-        BigDecimal autoPrice = serviceInstanceRepository.sumPriceByOrderItemId(itemId);
-        boolean matchesAuto = autoPrice != null && autoPrice.compareTo(price) == 0;
-        if (matchesAuto && !Boolean.TRUE.equals(item.isManualPrice())) {
-            return item; // ничего не изменилось — выходим тихо
-        }
-        // V13: ручная установка цены — флаг is_manual_price=TRUE, чтобы auto-recalc
-        // (free_threshold, сумма услуг) больше не затирали значение.
-        orderItemRepository.updatePrice(itemId, price);
-        orderService.recalculateTotalAmount(item.orderId());
-        return orderItemRepository.findById(itemId).orElseThrow();
-    }
-
     @Transactional
     public OrderItem updateDimensions(Long itemId, BigDecimal length, BigDecimal width, BigDecimal weight,
                                        BigDecimal area, BigDecimal runningMeters) {
@@ -122,6 +99,11 @@ public class OrderItemService {
             area = length.multiply(width).setScale(2, java.math.RoundingMode.HALF_UP);
         }
         orderItemRepository.updateDimensions(itemId, length, width, weight, area, runningMeters);
+        // Смена размеров = полный авто-пересчёт цен. Любая ручная цена услуги стирается:
+        // оператор поменял ключевой параметр (вес/площадь/…), старая ручная сумма уже невалидна.
+        // recalculateServicePrices умеет считать только не-manual услуги, поэтому сначала
+        // сбрасываем флаги, потом он пройдётся по всем как по чистому списку.
+        serviceInstanceRepository.clearAllManualPriceFlagsForItem(itemId);
         lastSwitches = recalculateServicePrices(itemId);
         return orderItemRepository.findById(itemId).orElseThrow();
     }
@@ -146,10 +128,10 @@ public class OrderItemService {
     public void recalculateItemPrice(Long orderItemId) {
         BigDecimal totalServicePrice = serviceInstanceRepository.sumPriceByOrderItemId(orderItemId);
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
-        // V13: если оператор зафиксировал цену вручную — не трогаем. Авто-сумма услуг
-        // применяется только к позициям без ручного override (updateCalculatedPrice
-        // имеет WHERE is_manual_price = FALSE).
-        orderItemRepository.updateCalculatedPrice(orderItemId, totalServicePrice);
+        // Цена позиции всегда = сумма цен её активных услуг. Ручной правки на уровне
+        // позиции больше нет (упрощение модели после первого прода) — менять цену
+        // оператор может только на конкретной услуге через её editPrice/«А».
+        orderItemRepository.updatePrice(orderItemId, totalServicePrice);
         orderService.recalculateTotalAmount(item.orderId());
     }
 

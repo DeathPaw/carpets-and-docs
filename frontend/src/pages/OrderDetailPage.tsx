@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, payOrder, createWarrantyOrder,
-  setOrderItemPrice, updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
+  updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient,
@@ -591,7 +591,6 @@ function ItemRow({
 }) {
   const { showToast } = useToast()
   const [expanded, setExpanded] = useState(!!freshlyAdded)
-  const [editPrice, setEditPrice] = useState(false)
   const [editDimensions, setEditDimensions] = useState(!!freshlyAdded && isEditable)
   const [editDesc, setEditDesc] = useState(!!freshlyAdded && isEditable)
   const [photos, setPhotos] = useState<{id: number, filename: string, content_type: string, data: string}[]>(
@@ -603,9 +602,6 @@ function ItemRow({
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const [descValue, setDescValue] = useState(item.description || '')
   const [defectsValue, setDefectsValue] = useState(item.defects || '')
-  // Цена позиции редактируется пустым полем — пустое значит «авто-расчёт».
-  // Хранить старую ручную цену не нужно: оператор либо вводит новое число, либо оставляет пустым.
-  const [price, setPrice] = useState('')
   const [dimensions, setDimensions] = useState({
     length: item.length?.toString() || '',
     width: item.width?.toString() || '',
@@ -652,24 +648,8 @@ function ItemRow({
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения описания'; showToast(msg, 'error') }
   }
 
-  const savePrice = async () => {
-    try {
-      // Пустое поле → null → бэк вернёт цену к авто-расчёту (сумма услуг позиции).
-      const priceParam = price.trim() === '' ? null : Number(price)
-      await setOrderItemPrice(orderId, item.id, { price: priceParam as number })
-      setEditPrice(false)
-      setPrice('')
-      onRefresh()
-    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка изменения цены'; showToast(msg, 'error') }
-  }
-
-  /** Сразу вернуть цену к авто-расчёту, без открытия редактирования. */
-  const resetPriceToAuto = async () => {
-    try {
-      await setOrderItemPrice(orderId, item.id, { price: null as unknown as number })
-      onRefresh()
-    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка'; showToast(msg, 'error') }
-  }
+  // Ручное редактирование цены позиции удалено: цена = сумма цен услуг, оператор
+  // меняет цену только на уровне услуги (там есть ✏️, ✓, кнопка «А» для сброса).
 
   const saveDimensions = async () => {
     // Валидация: только положительные числа в разумных пределах. Защищает от опечаток
@@ -864,45 +844,10 @@ function ItemRow({
           )}
         </td>
         <td><Badge status={item.status} labels={ITEM_STATUS_LABELS} /></td>
+        {/* Цена позиции — только чтение. Сумма цен услуг этой позиции. Если оператору
+            нужно подкрутить — пусть правит цену конкретной услуги (там есть ✏️ и «А»). */}
         <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-          {isEditable && editPrice ? (
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <input
-                  value={price}
-                  onChange={e => setPrice(e.target.value)}
-                  style={{ width: 80 }}
-                  placeholder={`авто (${Number(item.price).toFixed(0)} ₽)`}
-                  autoFocus
-                />
-                <button className="btn-success btn-sm" onClick={savePrice} title="Сохранить">&#10003;</button>
-                <button className="btn-secondary btn-sm" onClick={() => { setEditPrice(false); setPrice('') }} title="Отмена">&#10005;</button>
-              </div>
-              <span style={{ fontSize: '0.7em', color: '#888' }}>пусто = авто-расчёт</span>
-            </div>
-          ) : (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-              <span
-                style={{ cursor: isEditable ? 'pointer' : 'default' }}
-                onClick={() => { if (isEditable) { setPrice(''); setEditPrice(true) } }}
-              >
-                {Number(item.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
-              </span>
-              {item.is_manual_price && (
-                <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена позиции зафиксирована вручную (auto-расчёт её не трогает)">
-                  (ручная)
-                </span>
-              )}
-              {isEditable && item.is_manual_price && (
-                <button
-                  className="btn-secondary btn-sm"
-                  onClick={() => void resetPriceToAuto()}
-                  title="Сбросить к авто-расчёту (сумма цен услуг)"
-                  style={{ padding: '2px 8px', fontSize: '0.85em' }}
-                >А</button>
-              )}
-            </span>
-          )}
+          {Number(item.price).toFixed(2)} &#8381;
         </td>
         {isEditable && (
           <td style={{ textAlign: 'right' }}>

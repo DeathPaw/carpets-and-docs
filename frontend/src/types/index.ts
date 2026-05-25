@@ -83,8 +83,6 @@ export interface OrderItem {
   weight: number | null
   area: number | null
   running_meters: number | null
-  /** V13: TRUE = цена позиции зафиксирована вручную (auto-recalc/free_threshold её не трогают). */
-  is_manual_price?: boolean
   cancellation_reason: string | null
   created_at: string
   updated_at: string
