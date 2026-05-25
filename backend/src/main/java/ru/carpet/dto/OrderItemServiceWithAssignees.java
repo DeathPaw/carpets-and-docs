@@ -20,6 +20,7 @@ public record OrderItemServiceWithAssignees(
         String skuName,
         String skuGroupName,
         String pricingType,
+        BigDecimal skuUnitPrice, // базовая цена SKU из версии — для UI-разбивки «480 ₽/м² × 6 = 2880 ₽»
         ServiceStatus status,
         BigDecimal price,
         Boolean isManualPrice,

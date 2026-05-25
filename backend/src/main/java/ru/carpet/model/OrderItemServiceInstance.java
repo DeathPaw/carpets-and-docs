@@ -18,6 +18,7 @@ public record OrderItemServiceInstance(
         String skuName,        // JOIN'ится в RowMapper (snapshot названия)
         String skuGroupName,   // тоже из JOIN
         String pricingType,    // тоже из JOIN на текущую версию SKU
+        BigDecimal skuUnitPrice, // базовая цена SKU из версии (для разбивки «480 ₽/м² × 6»)
         ServiceStatus status,
         BigDecimal price,
         Boolean isManualPrice,

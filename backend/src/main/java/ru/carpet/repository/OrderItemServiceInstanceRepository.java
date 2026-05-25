@@ -34,6 +34,7 @@ public class OrderItemServiceInstanceRepository {
         COALESCE(sv.name, s.name)              AS sku_name,
         COALESCE(g_v.name, g.name)             AS sku_group_name,
         COALESCE(sv.pricing_type, s.pricing_type) AS pricing_type,
+        COALESCE(sv.price, s.price)            AS sku_unit_price,
         ois.status, ois.price, ois.is_manual_price, ois.cancellation_reason,
         ois.created_at, ois.updated_at
         """;
@@ -54,6 +55,7 @@ public class OrderItemServiceInstanceRepository {
             rs.getString("sku_name"),
             rs.getString("sku_group_name"),
             rs.getString("pricing_type"),
+            rs.getBigDecimal("sku_unit_price"),
             ServiceStatus.valueOf(rs.getString("status")),
             rs.getBigDecimal("price"),
             rs.getBoolean("is_manual_price"),

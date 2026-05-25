@@ -199,15 +199,19 @@ public class OrderService {
                 .map(OrderItem::price)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
         // Пересчёт цены каждой auto-add позиции по free_threshold.
+        // V13: позиции с is_manual_price=TRUE пропускаем — оператор зафиксировал цену вручную,
+        // free_threshold её больше не трогает. Это починило баг «отредактировал ковёр →
+        // доставка занулилась»: пока оператор сам не нажмёт «А» (сброс к авто), цена остаётся.
         for (var sku : autoSkus) {
             if (sku.freeThreshold() == null) continue;
             for (var item : items) {
                 if (!java.util.Objects.equals(itemToSkuId.get(item.id()), sku.id())) continue;
+                if (Boolean.TRUE.equals(item.isManualPrice())) continue;
                 BigDecimal newPrice = nonAutoSum.compareTo(sku.freeThreshold()) >= 0
                         ? BigDecimal.ZERO
                         : (sku.price() == null ? BigDecimal.ZERO : sku.price());
                 if (newPrice.compareTo(item.price()) != 0) {
-                    itemRepository.updatePrice(item.id(), newPrice);
+                    itemRepository.updateCalculatedPrice(item.id(), newPrice);
                 }
             }
         }

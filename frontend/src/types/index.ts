@@ -83,6 +83,8 @@ export interface OrderItem {
   weight: number | null
   area: number | null
   running_meters: number | null
+  /** V13: TRUE = цена позиции зафиксирована вручную (auto-recalc/free_threshold её не трогают). */
+  is_manual_price?: boolean
   cancellation_reason: string | null
   created_at: string
   updated_at: string
@@ -96,6 +98,8 @@ export interface OrderItemService {
   sku_name?: string
   sku_group_name?: string
   pricing_type?: string
+  /** Базовая цена SKU из снапшота версии (без множителя). Для UI-разбивки «480 ₽/м² × 6». */
+  sku_unit_price?: number
   status: ServiceStatus
   price: number
   is_manual_price?: boolean

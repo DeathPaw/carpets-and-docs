@@ -84,12 +84,23 @@ public class OrderItemService {
     public OrderItem updatePrice(Long itemId, BigDecimal price) {
         OrderItem item = findById(itemId);
         if (price == null) {
-            // V11+: null = «вернуть к авто-расчёту». Цена позиции = сумма цен услуг.
+            // V11+: null = «вернуть к авто-расчёту». Сбрасываем флаг и пересчитываем.
+            orderItemRepository.clearManualPriceFlag(itemId);
             recalculateItemPrice(itemId);
-        } else {
-            orderItemRepository.updatePrice(itemId, price);
-            orderService.recalculateTotalAmount(item.orderId());
+            return orderItemRepository.findById(itemId).orElseThrow();
         }
+        // Issue #4: если введённая цена совпадает с авто-расчётом (сумма услуг)
+        // и позиция ещё не была manual — не помечаем как manual. Пресекает
+        // «открыл, посмотрел, нажал ✓ → залочилась на ручной цене».
+        BigDecimal autoPrice = serviceInstanceRepository.sumPriceByOrderItemId(itemId);
+        boolean matchesAuto = autoPrice != null && autoPrice.compareTo(price) == 0;
+        if (matchesAuto && !Boolean.TRUE.equals(item.isManualPrice())) {
+            return item; // ничего не изменилось — выходим тихо
+        }
+        // V13: ручная установка цены — флаг is_manual_price=TRUE, чтобы auto-recalc
+        // (free_threshold, сумма услуг) больше не затирали значение.
+        orderItemRepository.updatePrice(itemId, price);
+        orderService.recalculateTotalAmount(item.orderId());
         return orderItemRepository.findById(itemId).orElseThrow();
     }
 
@@ -135,7 +146,10 @@ public class OrderItemService {
     public void recalculateItemPrice(Long orderItemId) {
         BigDecimal totalServicePrice = serviceInstanceRepository.sumPriceByOrderItemId(orderItemId);
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
-        orderItemRepository.updatePrice(orderItemId, totalServicePrice);
+        // V13: если оператор зафиксировал цену вручную — не трогаем. Авто-сумма услуг
+        // применяется только к позициям без ручного override (updateCalculatedPrice
+        // имеет WHERE is_manual_price = FALSE).
+        orderItemRepository.updateCalculatedPrice(orderItemId, totalServicePrice);
         orderService.recalculateTotalAmount(item.orderId());
     }
 

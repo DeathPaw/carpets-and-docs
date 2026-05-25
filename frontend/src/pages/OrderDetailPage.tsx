@@ -78,6 +78,36 @@ function checkDimensionsForPricing(pricingType: string | null | undefined, item:
   }
 }
 
+// Разбивка цены услуги: «480 ₽/м² × 6 = 2880 ₽» — оператор сразу видит,
+// откуда взялась сумма (помогает заметить кривую расценку или забытый параметр).
+// Возвращает null если разбивка неуместна (FIXED, ручная цена, нет данных).
+function formatPriceBreakdown(svc: OrderItemService, item: OrderItem): string | null {
+  if (svc.is_manual_price) return null
+  if (svc.sku_unit_price == null) return null
+  const unit = svc.sku_unit_price
+  const pt = svc.pricing_type
+  // Для FIXED показывать «480 ₽ × 1 = 480 ₽» бессмысленно — просто прячем разбивку.
+  if (!pt || pt === 'FIXED') return null
+  let factor: number | null = null
+  let unitLabel = ''
+  switch (pt) {
+    case 'BY_WEIGHT':         factor = item.weight ?? null;         unitLabel = 'кг'; break
+    case 'BY_AREA':           factor = item.area ?? null;           unitLabel = 'м²'; break
+    case 'BY_PERIMETER':
+      // Периметр клиент не вводит — берём 2·(L+W) если есть размеры.
+      factor = (item.length != null && item.width != null) ? 2 * (item.length + item.width) : null
+      unitLabel = 'м'
+      break
+    case 'BY_LENGTH':         factor = item.length ?? null;         unitLabel = 'м';  break
+    case 'BY_WIDTH':          factor = item.width ?? null;          unitLabel = 'м';  break
+    case 'BY_RUNNING_METERS': factor = item.running_meters ?? null; unitLabel = 'п.м.'; break
+    default: return null
+  }
+  if (factor == null) return null
+  const total = unit * factor
+  return `${unit.toFixed(0)} ₽/${unitLabel} × ${factor} = ${total.toFixed(0)} ₽`
+}
+
 // ---- Services Panel ----
 function ServicesPanel({
   orderId, item, itemTypeId, employees, roles, onRefresh, isEditable, onOpenDimensions, isDefaultType,
@@ -320,8 +350,8 @@ function ServicesPanel({
                       </div>
                     )}
                   </td>
-                  {/* \u041A\u043E\u043B\u043E\u043D\u043A\u0430 \u00AB\u0421\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C\u00BB \u2014 \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u041D\u0415 \u0434\u0435\u0444\u043E\u043B\u0442\u043D\u044B\u0445. \u0414\u043B\u044F \u0434\u0435\u0444\u043E\u043B\u0442\u043E\u0432 <td> \u0432\u043E\u043E\u0431\u0449\u0435
-                      \u043D\u0435 \u0432\u044B\u0432\u043E\u0434\u0438\u043C, \u0447\u0442\u043E\u0431\u044B \u043D\u0435 \u043F\u043B\u043E\u0434\u0438\u0442\u044C \u043F\u0443\u0441\u0442\u044B\u0435 \u044F\u0447\u0435\u0439\u043A\u0438. */}
+                  {/* Колонка «Стоимость» — только для НЕ дефолтных. Для дефолтов <td> вообще
+                      не выводим, чтобы не плодить пустые ячейки. */}
                   {!isDefaultType && (
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {isEditable && editingPrice === s.id ? (
@@ -339,29 +369,37 @@ function ServicesPanel({
                         </div>
                         <span style={{ fontSize: '0.7em', color: '#888' }}>пусто = авто-расчёт</span>
                       </div>
-                    ) : (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                        <span
-                          style={{ cursor: isEditable ? 'pointer' : 'default' }}
-                          onClick={() => isEditable && openPriceEdit(s.id)}
-                        >
-                          {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' \u270F\uFE0F' : ''}
-                        </span>
-                        {s.is_manual_price && (
-                          <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена установлена вручную">
-                            (ручная)
+                    ) : (() => {
+                      const breakdown = formatPriceBreakdown(s, item)
+                      return (
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
+                            <span
+                              style={{ cursor: isEditable ? 'pointer' : 'default' }}
+                              onClick={() => isEditable && openPriceEdit(s.id)}
+                            >
+                              {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
+                            </span>
+                            {s.is_manual_price && (
+                              <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена установлена вручную">
+                                (ручная)
+                              </span>
+                            )}
+                            {isEditable && s.is_manual_price && (
+                              <button
+                                className="btn-secondary btn-sm"
+                                onClick={() => void resetServicePriceToAuto(s.id)}
+                                title="Авто-расчёт цены (SKU × параметр позиции)"
+                                style={{ padding: '2px 8px', fontSize: '0.85em' }}
+                              >А</button>
+                            )}
                           </span>
-                        )}
-                        {isEditable && s.is_manual_price && (
-                          <button
-                            className="btn-secondary btn-sm"
-                            onClick={() => void resetServicePriceToAuto(s.id)}
-                            title="Авто-расчёт цены (SKU × параметр позиции)"
-                            style={{ padding: '2px 8px', fontSize: '0.85em' }}
-                          >А</button>
-                        )}
-                      </span>
-                    )}
+                          {breakdown && (
+                            <span style={{ fontSize: '0.75em', color: '#888' }}>{breakdown}</span>
+                          )}
+                        </div>
+                      )
+                    })()}
                   </td>
                   )}
                   <td>
@@ -687,7 +725,7 @@ function ItemRow({
             onClick={() => setExpanded(e => !e)}
             style={{ marginRight: 8 }}
           >
-            {expanded ? '\u25B2' : '\u25BC'}
+            {expanded ? '▲' : '▼'}
           </button>
           #{index}
         </td>
@@ -739,7 +777,7 @@ function ItemRow({
               style={{ cursor: isEditable ? 'pointer' : 'default' }}
               onClick={() => isEditable && setEditDesc(true)}
             >
-              <div>{item.description || '—'}{isEditable ? ' \u270F\uFE0F' : ''}</div>
+              <div>{item.description || '—'}{isEditable ? ' ✏️' : ''}</div>
               {item.defects && (
                 <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>
                   Дефекты: {item.defects}
@@ -817,11 +855,11 @@ function ItemRow({
               style={{ cursor: isEditable ? 'pointer' : 'default' }}
               onClick={() => isEditable && setEditDimensions(true)}
             >
-              {item.length ? `${item.length}\u00D7${item.width || 0}` : '—'}
-              {item.weight ? ` (${item.weight}\u043A\u0433)` : ''}
+              {item.length ? `${item.length}×${item.width || 0}` : '—'}
+              {item.weight ? ` (${item.weight}кг)` : ''}
               {item.area ? ` S=${item.area}` : ''}
-              {item.running_meters ? ` ${item.running_meters}\u043F.\u043C.` : ''}
-              {isEditable ? ' \u270F\uFE0F' : ''}
+              {item.running_meters ? ` ${item.running_meters}п.м.` : ''}
+              {isEditable ? ' ✏️' : ''}
             </span>
           )}
         </td>
@@ -834,13 +872,13 @@ function ItemRow({
                   value={price}
                   onChange={e => setPrice(e.target.value)}
                   style={{ width: 80 }}
-                  placeholder={`\u0430\u0432\u0442\u043E (${Number(item.price).toFixed(0)} \u20BD)`}
+                  placeholder={`авто (${Number(item.price).toFixed(0)} ₽)`}
                   autoFocus
                 />
-                <button className="btn-success btn-sm" onClick={savePrice} title="\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C">&#10003;</button>
-                <button className="btn-secondary btn-sm" onClick={() => { setEditPrice(false); setPrice('') }} title="\u041E\u0442\u043C\u0435\u043D\u0430">&#10005;</button>
+                <button className="btn-success btn-sm" onClick={savePrice} title="Сохранить">&#10003;</button>
+                <button className="btn-secondary btn-sm" onClick={() => { setEditPrice(false); setPrice('') }} title="Отмена">&#10005;</button>
               </div>
-              <span style={{ fontSize: '0.7em', color: '#888' }}>\u043F\u0443\u0441\u0442\u043E = \u0430\u0432\u0442\u043E-\u0440\u0430\u0441\u0447\u0451\u0442</span>
+              <span style={{ fontSize: '0.7em', color: '#888' }}>пусто = авто-расчёт</span>
             </div>
           ) : (
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
@@ -848,15 +886,20 @@ function ItemRow({
                 style={{ cursor: isEditable ? 'pointer' : 'default' }}
                 onClick={() => { if (isEditable) { setPrice(''); setEditPrice(true) } }}
               >
-                {Number(item.price).toFixed(2)} &#8381;{isEditable ? ' \u270F\uFE0F' : ''}
+                {Number(item.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
               </span>
-              {isEditable && (
+              {item.is_manual_price && (
+                <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена позиции зафиксирована вручную (auto-расчёт её не трогает)">
+                  (ручная)
+                </span>
+              )}
+              {isEditable && item.is_manual_price && (
                 <button
                   className="btn-secondary btn-sm"
                   onClick={() => void resetPriceToAuto()}
-                  title="\u0410\u0432\u0442\u043E-\u0440\u0430\u0441\u0447\u0451\u0442 \u0446\u0435\u043D\u044B (\u0441\u0443\u043C\u043C\u0430 \u0443\u0441\u043B\u0443\u0433)"
+                  title="Сбросить к авто-расчёту (сумма цен услуг)"
                   style={{ padding: '2px 8px', fontSize: '0.85em' }}
-                >\u0410</button>
+                >А</button>
               )}
             </span>
           )}
@@ -992,6 +1035,8 @@ export default function OrderDetailPage() {
   const { isReadonly } = useAuth()
   const orderId = Number(id)
 
+  // Скрывать отменённые позиции (тумблер в карточке + автоматически в PDF).
+  const [hideCanceledItems, setHideCanceledItems] = useState(false)
   const [order, setOrder] = useState<Order | null>(null)
   const [items, setItems] = useState<OrderItem[]>([])
   // Все фото по заказу одним батчем — раздаём в ItemRow через initialPhotos.
@@ -1263,9 +1308,12 @@ export default function OrderDetailPage() {
 
     // V10: «авто-добавленные» позиции теперь определяются на уровне SKU (is_auto_add),
     // а не типа позиции. Здесь для печати считаем, что все позиции одинаково значимы.
-    const itemRows = items.map((it, idx) => {
+    // Отменённые позиции из печатной формы исключаем всегда — клиенту они не нужны.
+    const visibleItems = items.filter(i => i.status !== 'CANCELLED')
+    const itemRows = visibleItems.map((it, idx) => {
       const isDefault = false
-      const svcList = servicesByItem.get(it.id) || []
+      // Отменённые услуги тоже не показываем в печатке.
+      const svcList = (servicesByItem.get(it.id) || []).filter(s => s.status !== 'CANCELLED')
       const svcRows = svcList.map(s =>
         `<tr style="background:#fafafa;font-size:11px">
           <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.sku_name || 'Услуга #' + s.sku_id}
@@ -1746,9 +1794,20 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
       <div className="card" data-tour="order-items">
         <div className="page-header" style={{ marginBottom: 12 }}>
           <h2 style={{ margin: 0 }}>Позиции заказа</h2>
-          {isEditable && (
-            <button className="btn-primary" onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
-          )}
+          <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+            <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: '0.9em', color: '#7f8c8d' }}>
+              <input
+                type="checkbox"
+                checked={hideCanceledItems}
+                onChange={e => setHideCanceledItems(e.target.checked)}
+                style={{ width: 'auto' }}
+              />
+              Скрыть отменённые
+            </label>
+            {isEditable && (
+              <button className="btn-primary" onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
+            )}
+          </div>
         </div>
         <table className="items-table">
           <thead>
@@ -1768,7 +1827,8 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             ) : (() => {
                 // V10: «по умолчанию»-сортировки нет — порядок добавления сохраняется,
                 // потому что auto-add теперь живёт на SKU и не влияет на тип позиции.
-                const sorted = items
+                // Тумблер «Скрыть отменённые» убирает CANCELLED-позиции из таблицы (но не из заказа).
+                const sorted = hideCanceledItems ? items.filter(i => i.status !== 'CANCELLED') : items
                 return sorted.map((item, idx) => (
                   <ItemRow
                     key={item.id}

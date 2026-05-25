@@ -81,7 +81,7 @@ public class OrderItemServiceInstanceService {
             List<Employee> assignees = empIds.stream().map(empMap::get).filter(Objects::nonNull).toList();
             return new OrderItemServiceWithAssignees(
                     s.id(), s.orderItemId(), s.skuId(), s.skuName(), s.skuGroupName(),
-                    s.pricingType(), s.status(), s.price(), s.isManualPrice(),
+                    s.pricingType(), s.skuUnitPrice(), s.status(), s.price(), s.isManualPrice(),
                     assignees, s.cancellationReason(), s.createdAt(), s.updatedAt()
             );
         }).toList();
@@ -179,10 +179,29 @@ public class OrderItemServiceInstanceService {
         if (price == null) {
             repository.clearManualPriceFlag(serviceId);
             orderItemService.recalculateServicePrices(instance.orderItemId());
+            return repository.findById(serviceId).orElseThrow();
+        }
+
+        // Issue #4: если оператор нажал ✓ без фактического изменения (введённая цена
+        // равна тому, что дал бы авто-расчёт) — НЕ помечаем как manual. Это убирает
+        // ловушку «открыл, посмотрел, закрыл → услуга залочилась на ручной цене».
+        OrderItem orderItem = orderItemRepository.findById(instance.orderItemId()).orElse(null);
+        java.math.BigDecimal autoPrice = (instance.skuUnitPrice() != null && orderItem != null)
+                ? PricingHelper.calculate(instance.skuUnitPrice(), instance.pricingType(), orderItem)
+                : null;
+        boolean matchesAuto = autoPrice != null && autoPrice.compareTo(price) == 0;
+        if (matchesAuto && Boolean.FALSE.equals(instance.isManualPrice())) {
+            // Ничего не меняется — цена уже совпадает, флаг и так FALSE. Молча выходим.
+            return instance;
+        }
+        if (matchesAuto) {
+            // Цена совпадает с авто-расчётом, но услуга была manual — снимаем флаг.
+            repository.clearManualPriceFlag(serviceId);
+            repository.updateCalculatedPrice(serviceId, price);
         } else {
             repository.updatePrice(serviceId, price);
-            orderItemService.recalculateItemPrice(instance.orderItemId());
         }
+        orderItemService.recalculateItemPrice(instance.orderItemId());
         return repository.findById(serviceId).orElseThrow();
     }
 
@@ -221,7 +240,7 @@ public class OrderItemServiceInstanceService {
                 .filter(Objects::nonNull).toList();
         return new OrderItemServiceWithAssignees(
                 s.id(), s.orderItemId(), s.skuId(), s.skuName(), s.skuGroupName(),
-                s.pricingType(), s.status(), s.price(), s.isManualPrice(),
+                s.pricingType(), s.skuUnitPrice(), s.status(), s.price(), s.isManualPrice(),
                 assignees, s.cancellationReason(), s.createdAt(), s.updatedAt()
         );
     }

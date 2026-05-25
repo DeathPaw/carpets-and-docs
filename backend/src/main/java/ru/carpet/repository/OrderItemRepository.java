@@ -38,6 +38,7 @@ public class OrderItemRepository {
             rs.getBigDecimal("area"),
             rs.getBigDecimal("running_meters"),
             rs.getBigDecimal("perimeter"),
+            rs.getBoolean("is_manual_price"),
             rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime()
@@ -53,7 +54,7 @@ public class OrderItemRepository {
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.is_manual_price, oi.cancellation_reason, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
@@ -126,10 +127,35 @@ public class OrderItemRepository {
         );
     }
 
+    /**
+     * Ручное обновление цены. is_manual_price=TRUE — auto-пересчёты её больше не трогают.
+     * Использовать когда оператор явно правит цену через UI.
+     */
     public void updatePrice(Long id, BigDecimal price) {
         jdbc.update(
-                "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() WHERE id = :id",
+                "UPDATE order_items SET price = :price, is_manual_price = TRUE, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("price", price, "id", id)
+        );
+    }
+
+    /**
+     * Авто-обновление цены (из recalculate-методов). is_manual_price НЕ трогаем —
+     * остаётся как было. При этом если флаг TRUE — апдейт пропустит позицию через
+     * WHERE-условие (вызывающий код сам отвечает за проверку флага).
+     */
+    public void updateCalculatedPrice(Long id, BigDecimal price) {
+        jdbc.update(
+                "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() " +
+                "WHERE id = :id AND is_manual_price = FALSE",
+                Map.of("price", price, "id", id)
+        );
+    }
+
+    /** Снять флаг ручной цены — позиция снова доступна для авто-расчёта. */
+    public void clearManualPriceFlag(Long id) {
+        jdbc.update(
+                "UPDATE order_items SET is_manual_price = FALSE, version = version + 1, updated_at = NOW() WHERE id = :id",
+                Map.of("id", id)
         );
     }
 
@@ -172,7 +198,7 @@ public class OrderItemRepository {
     public Optional<OrderItem> findById(Long id) {
         List<OrderItem> result = jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.is_manual_price, oi.cancellation_reason, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
