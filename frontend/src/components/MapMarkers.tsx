@@ -88,6 +88,9 @@ export interface MapPoint {
   kind: MarkerKind
   title?: string
   description?: string
+  /** V12: явный цвет маркера (для раскраски по дню недели в логистике).
+   *  Если задан — используется вместо цвета по kind. */
+  color?: string
 }
 
 interface Props {
@@ -99,7 +102,8 @@ interface Props {
 
 const SPB_CENTER: [number, number] = [59.9342802, 30.3350986]
 
-const singleIconFor = (kind: MarkerKind): L.DivIcon => {
+const singleIconFor = (kind: MarkerKind, color?: string): L.DivIcon => {
+  if (color) return createSingleIcon(color) // V12: явный цвет (день недели в логистике)
   if (kind === 'pickup') return SINGLE_ICON_PICKUP
   if (kind === 'delivery') return SINGLE_ICON_DELIVERY
   return SINGLE_ICON_NEUTRAL
@@ -189,7 +193,7 @@ export default function MapMarkers({
           const isCluster = g.points.length > 1
           const icon = isCluster
             ? createClusterIcon(g.points.length, g.kinds)
-            : singleIconFor(g.points[0].kind)
+            : singleIconFor(g.points[0].kind, g.points[0].color)
           // Клик по маркеру намеренно не обрабатывается — поведение одинаковое
           // для одиночек и кластеров. Информация показывается в подсказке.
           return (

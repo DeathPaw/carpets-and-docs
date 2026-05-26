@@ -31,6 +31,8 @@ public class OrderItemServiceInstanceService {
     private final OrderItemService orderItemService;
     private final SkuService skuService;
     private final OrderService orderService;
+    private final ru.carpet.repository.AppUserRepository userRepository;
+    private final NotificationService notificationService;
 
     public OrderItemServiceInstanceService(
             OrderItemServiceInstanceRepository repository,
@@ -39,7 +41,9 @@ public class OrderItemServiceInstanceService {
             OrderItemRepository orderItemRepository,
             OrderItemService orderItemService,
             SkuService skuService,
-            @Lazy OrderService orderService
+            @Lazy OrderService orderService,
+            ru.carpet.repository.AppUserRepository userRepository,
+            NotificationService notificationService
     ) {
         this.repository = repository;
         this.assigneeRepository = assigneeRepository;
@@ -48,6 +52,8 @@ public class OrderItemServiceInstanceService {
         this.orderItemService = orderItemService;
         this.skuService = skuService;
         this.orderService = orderService;
+        this.userRepository = userRepository;
+        this.notificationService = notificationService;
     }
 
     public List<OrderItemServiceInstance> findByOrderItemId(Long orderItemId) {
@@ -89,6 +95,12 @@ public class OrderItemServiceInstanceService {
 
     public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status) {
         return repository.findByEmployeeId(employeeId, status);
+    }
+
+    /** V7: с диапазоном дат — для карточки на аналитике. */
+    public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status,
+                                                            String dateFrom, String dateTo) {
+        return repository.findByEmployeeId(employeeId, status, dateFrom, dateTo);
     }
 
     public java.math.BigDecimal sumPriceByEmployeeId(Long employeeId, String status, String dateFrom, String dateTo) {
@@ -219,13 +231,36 @@ public class OrderItemServiceInstanceService {
 
     @Transactional
     public void assignEmployees(Long serviceId, List<Long> employeeIds) {
-        repository.findById(serviceId)
+        OrderItemServiceInstance instance = repository.findById(serviceId)
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
+        // Кого уже назначили — чтобы уведомить только новых сотрудников.
+        java.util.Set<Long> previouslyAssigned = new java.util.HashSet<>(
+                assigneeRepository.findEmployeeIdsByServiceId(serviceId));
         for (Long empId : employeeIds) {
             employeeRepository.findById(empId)
                     .orElseThrow(() -> new EntityNotFoundException("Employee not found: " + empId));
         }
         assigneeRepository.assignEmployees(serviceId, employeeIds);
+
+        // Уведомление: каждому НОВОМУ исполнителю, у которого есть user-учётка, прилетит колокольчик.
+        OrderItem item = orderItemRepository.findById(instance.orderItemId()).orElse(null);
+        Long orderId = item != null ? item.orderId() : null;
+        String serviceLabel = instance.skuName() != null ? instance.skuName() : ("услуга #" + serviceId);
+        for (Long empId : employeeIds) {
+            if (previouslyAssigned.contains(empId)) continue;
+            userRepository.findByEmployeeId(empId).ifPresent(user -> {
+                try {
+                    notificationService.createNotification(
+                        user.id(),
+                        "SERVICE_ASSIGNED",
+                        "Вам назначена услуга «" + serviceLabel + "»"
+                                + (orderId != null ? " по заказу #" + String.format("%05d", orderId) : ""),
+                        "SERVICE",
+                        serviceId
+                    );
+                } catch (Exception ignored) {}
+            });
+        }
     }
 
     public OrderItemServiceWithAssignees assignEmployeesWithAssignees(Long serviceId, List<Long> employeeIds) {

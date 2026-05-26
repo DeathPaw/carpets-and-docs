@@ -83,6 +83,9 @@ export default function ProductionPage() {
   const [pickerEmployees, setPickerEmployees] = useState<Employee[]>([])
   // Фильтр «только без исполнителя».
   const [onlyUnassigned, setOnlyUnassigned] = useState(false)
+  // V10/V11/V13: универсальный поиск — работает во всех 3 режимах (по заказам/позициям/услугам).
+  // Ищет по имени клиента (подстрока), телефону (последние цифры), legacy ID.
+  const [searchText, setSearchText] = useState('')
 
   useEffect(() => { localStorage.setItem('production_mode', mode) }, [mode])
 
@@ -125,6 +128,27 @@ export default function ProductionPage() {
     return Array.from(set).sort()
   }, [services])
 
+  /**
+   * V13: универсальный текстовый поиск по клиенту/legacy ID. Используется во всех 3 режимах.
+   * - Имя клиента: case-insensitive substring.
+   * - Телефон: последние 10 цифр (формат не важен).
+   * - Legacy ID: точное совпадение чисел.
+   */
+  const matchesSearch = (clientName: string | null | undefined,
+                         clientPhone: string | null | undefined,
+                         legacyId: number | null | undefined): boolean => {
+    if (!searchText.trim()) return true
+    const q = searchText.trim().toLowerCase()
+    if (clientName && clientName.toLowerCase().includes(q)) return true
+    if (clientPhone) {
+      const phoneDigits = clientPhone.replace(/\D/g, '')
+      const qDigits = q.replace(/\D/g, '')
+      if (qDigits && phoneDigits.includes(qDigits)) return true
+    }
+    if (legacyId != null && String(legacyId).includes(q)) return true
+    return false
+  }
+
   /** Применение фильтров услуг. */
   const filteredServices = useMemo(() => {
     return services.filter(s => {
@@ -142,9 +166,18 @@ export default function ProductionPage() {
         const target = orderIdFilter.replace(/^0+/, '')
         if (String(s.order_id) !== target) return false
       }
+      if (!matchesSearch(s.client_name, s.client_phone, s.legacy_id)) return false
       return true
     })
-  }, [services, employeeFilters, itemTypeFilters, serviceNameFilter, districtFilter, orderIdFilter, onlyUnassigned])
+  }, [services, employeeFilters, itemTypeFilters, serviceNameFilter, districtFilter, orderIdFilter, onlyUnassigned, searchText])
+
+  const filteredOrders = useMemo(() =>
+    orders.filter(o => matchesSearch(o.client_name, (o as any).client_phone, (o as any).legacy_id)),
+  [orders, searchText])
+
+  const filteredItems = useMemo(() =>
+    items.filter(it => matchesSearch(it.client_name, (it as any).client_phone, (it as any).legacy_id)),
+  [items, searchText])
 
   /** Drag-n-drop статуса услуги. Бэк сам валидирует переход; мы показываем причину если он отклонил.
    *  Особый случай: drop в IN_PROGRESS на услуге без assignee — открываем модалку
@@ -217,22 +250,33 @@ export default function ProductionPage() {
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <h1>Производство</h1>
-        <div data-tour="production-modes" style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
-          {([
-            { v: 'orders' as Mode,   label: 'По заказам' },
-            { v: 'items' as Mode,    label: 'По позициям' },
-            { v: 'services' as Mode, label: 'По услугам' },
-          ]).map(m => (
-            <button
-              key={m.v}
-              onClick={() => setMode(m.v)}
-              style={{
-                padding: '6px 14px', cursor: 'pointer', border: 'none',
-                background: mode === m.v ? '#3498db' : '#fff',
-                color: mode === m.v ? '#fff' : '#333',
-              }}
-            >{m.label}</button>
-          ))}
+        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          {/* V13: поиск работает во всех 3 режимах. По имени клиента (подстрока),
+              по последним цифрам телефона, по legacy ID (числу). */}
+          <input
+            value={searchText}
+            onChange={e => setSearchText(e.target.value)}
+            placeholder="Имя клиента / телефон / legacy ID"
+            style={{ width: 280 }}
+            title="Поиск по имени клиента, телефону или legacy ID — работает во всех режимах"
+          />
+          <div data-tour="production-modes" style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
+            {([
+              { v: 'orders' as Mode,   label: 'По заказам' },
+              { v: 'items' as Mode,    label: 'По позициям' },
+              { v: 'services' as Mode, label: 'По услугам' },
+            ]).map(m => (
+              <button
+                key={m.v}
+                onClick={() => setMode(m.v)}
+                style={{
+                  padding: '6px 14px', cursor: 'pointer', border: 'none',
+                  background: mode === m.v ? '#3498db' : '#fff',
+                  color: mode === m.v ? '#fff' : '#333',
+                }}
+              >{m.label}</button>
+            ))}
+          </div>
         </div>
       </div>
 
@@ -369,9 +413,9 @@ export default function ProductionPage() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, alignItems: 'flex-start' }}>
           {columns.map(status => {
             const colData = mode === 'orders'
-              ? orders.filter(o => o.status === status).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+              ? filteredOrders.filter(o => o.status === status).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
               : mode === 'items'
-                ? items.filter(i => i.status === status).sort((a, b) => new Date(a.order_created_at).getTime() - new Date(b.order_created_at).getTime())
+                ? filteredItems.filter(i => i.status === status).sort((a, b) => new Date(a.order_created_at).getTime() - new Date(b.order_created_at).getTime())
                 : filteredServices.filter(s => s.status === status).sort((a, b) => new Date(a.order_created_at).getTime() - new Date(b.order_created_at).getTime())
 
             const isDropTarget = mode === 'services' && dragServiceId != null

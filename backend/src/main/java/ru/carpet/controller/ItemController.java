@@ -27,10 +27,14 @@ public class ItemController {
             @RequestParam(required = false) Long orderId,
             @RequestParam(required = false) Integer positionInOrder,
             @RequestParam(required = false) Long employeeId,
+            @RequestParam(required = false) String clientName,
+            @RequestParam(required = false) String clientPhone,
+            @RequestParam(required = false) Long legacyId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
-        return service.findItems(statuses, itemTypeIds, orderId, positionInOrder, employeeId, page, size);
+        return service.findItems(statuses, itemTypeIds, orderId, positionInOrder, employeeId,
+                clientName, clientPhone, legacyId, page, size);
     }
 
     /**

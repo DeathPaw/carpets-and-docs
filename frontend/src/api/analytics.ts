@@ -1,22 +1,31 @@
 import client from './client'
 
-export const getOrdersByDistrict = () =>
-  client.get<{district: string, count: number, total: number}[]>('/api/analytics/orders-by-district').then(r => r.data)
+// V8 аналитика: переключатель периода. Все endpoint'ы умеют dateFrom/dateTo (YYYY-MM-DD).
+export interface AnalyticsPeriod { dateFrom?: string; dateTo?: string }
+const periodParams = (p?: AnalyticsPeriod) => {
+  const params: Record<string, string> = {}
+  if (p?.dateFrom) params.dateFrom = p.dateFrom
+  if (p?.dateTo) params.dateTo = p.dateTo
+  return { params }
+}
 
-export const getOrdersByStatus = () =>
-  client.get<{status: string, count: number}[]>('/api/analytics/orders-by-status').then(r => r.data)
+export const getOrdersByDistrict = (p?: AnalyticsPeriod) =>
+  client.get<{district: string, count: number, total: number}[]>('/api/analytics/orders-by-district', periodParams(p)).then(r => r.data)
 
-export const getItemsByType = () =>
-  client.get<{type_name: string, count: number}[]>('/api/analytics/items-by-type').then(r => r.data)
+export const getOrdersByStatus = (p?: AnalyticsPeriod) =>
+  client.get<{status: string, count: number}[]>('/api/analytics/orders-by-status', periodParams(p)).then(r => r.data)
 
-export const getEmployeeStats = () =>
-  client.get<{name: string, services_done: number, total_earned: number}[]>('/api/analytics/employee-stats').then(r => r.data)
+export const getItemsByType = (p?: AnalyticsPeriod) =>
+  client.get<{type_name: string, count: number}[]>('/api/analytics/items-by-type', periodParams(p)).then(r => r.data)
 
-export const getRevenueByMonth = () =>
-  client.get<{month: string, orders_count: number, revenue: number}[]>('/api/analytics/revenue-by-month').then(r => r.data)
+export const getEmployeeStats = (p?: AnalyticsPeriod) =>
+  client.get<{employee_id: number, name: string, services_done: number, total_earned: number}[]>('/api/analytics/employee-stats', periodParams(p)).then(r => r.data)
 
-export const getTopClients = () =>
-  client.get<{client_id: number, name: string, client_type: string, orders_count: number, total_spent: number}[]>('/api/analytics/top-clients').then(r => r.data)
+export const getRevenueByMonth = (p?: AnalyticsPeriod) =>
+  client.get<{month: string, orders_count: number, revenue: number}[]>('/api/analytics/revenue-by-month', periodParams(p)).then(r => r.data)
+
+export const getTopClients = (p?: AnalyticsPeriod) =>
+  client.get<{client_id: number, name: string, client_type: string, orders_count: number, total_spent: number}[]>('/api/analytics/top-clients', periodParams(p)).then(r => r.data)
 
 export const getDashboard = () =>
   client.get<Record<string, number>>('/api/analytics/dashboard').then(r => r.data)
@@ -45,7 +54,7 @@ export const getProblemOrders = () =>
   client.get<ProblemOrdersResponse>('/api/analytics/dashboard/problems').then(r => r.data)
 
 export const getProductionQueue = () =>
-  client.get<{order_id: number, client_name: string, status: string, created_at: string, total_amount: number, pickup_district: string, items_count: number, services_count: number, services_done: number}[]>('/api/analytics/production-queue').then(r => r.data)
+  client.get<{order_id: number, client_name: string, status: string, created_at: string, total_amount: number, pickup_district: string, items_count: number, services_count: number, services_done: number, client_phone?: string | null, legacy_id?: number | null}[]>('/api/analytics/production-queue').then(r => r.data)
 
 export interface ProductionQueueItem {
   item_id: number
@@ -62,6 +71,8 @@ export interface ProductionQueueItem {
   pickup_district: string | null
   services_count: number
   services_done: number
+  client_phone?: string | null
+  legacy_id?: number | null
 }
 
 export const getProductionQueueItems = () =>
@@ -85,16 +96,18 @@ export interface ProductionQueueService {
   position_in_order: number
   employee_names: string         // "Иванов, Петров" или ''
   employee_ids: number[]
+  client_phone?: string | null
+  legacy_id?: number | null
 }
 
 export const getProductionQueueServices = () =>
   client.get<ProductionQueueService[]>('/api/analytics/production-queue-services').then(r => r.data)
 
-export const getWarrantyStats = () =>
-  client.get<{client_id: number, client_name: string, total_orders: number, warranty_orders: number, warranty_percent: number}[]>('/api/analytics/warranty-stats').then(r => r.data)
+export const getWarrantyStats = (p?: AnalyticsPeriod) =>
+  client.get<{client_id: number, client_name: string, total_orders: number, warranty_orders: number, warranty_percent: number}[]>('/api/analytics/warranty-stats', periodParams(p)).then(r => r.data)
 
-export const getMarginAnalysis = () =>
-  client.get<{service_name: string, count: number, revenue: number, cost: number}[]>('/api/analytics/margin').then(r => r.data)
+export const getMarginAnalysis = (p?: AnalyticsPeriod) =>
+  client.get<{service_name: string, count: number, revenue: number, cost: number}[]>('/api/analytics/margin', periodParams(p)).then(r => r.data)
 
 // ─────────── Доходность ───────────
 export interface ProfitRow { revenue: number; cost: number; profit: number }

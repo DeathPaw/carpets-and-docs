@@ -44,7 +44,9 @@ public record OrderQuery(
          * true = пора забирать (FOR_PICKUP) или доставлять (DONE), но соответствующий адрес пуст.
          * Используется виджетом «Без адреса» на главной.
          */
-        Boolean badAddress
+        Boolean badAddress,
+        /** V19: фильтр только по гарантийным заказам (из аналитики, клик по «Гарантийных»). */
+        Boolean onlyWarranty
 ) {
     public static Builder builder() { return new Builder(); }
 
@@ -66,6 +68,7 @@ public record OrderQuery(
         private Boolean noCoords;
         private Boolean overdueActual;
         private Boolean badAddress;
+        private Boolean onlyWarranty;
 
         public Builder statuses(List<OrderStatus> v) { this.statuses = v; return this; }
         public Builder status(OrderStatus v) { this.statuses = v == null ? null : List.of(v); return this; }
@@ -83,11 +86,12 @@ public record OrderQuery(
         public Builder noCoords(Boolean v) { this.noCoords = v; return this; }
         public Builder overdueActual(Boolean v) { this.overdueActual = v; return this; }
         public Builder badAddress(Boolean v) { this.badAddress = v; return this; }
+        public Builder onlyWarranty(Boolean v) { this.onlyWarranty = v; return this; }
 
         public OrderQuery build() {
             return new OrderQuery(statuses, dateFrom, dateTo, dateField, legacyId, orderId,
                     paymentType, clientPhone, clientName, clientId, sortBy, sortDir,
-                    noCoords, overdueActual, badAddress);
+                    noCoords, overdueActual, badAddress, onlyWarranty);
         }
     }
 }

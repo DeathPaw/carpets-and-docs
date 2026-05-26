@@ -50,6 +50,22 @@ public class AppUserRepository {
         return jdbc.query("SELECT * FROM users ORDER BY id", ROW_MAPPER);
     }
 
+    /** Активные пользователи, отвечающие за заказы — кому слать уведомления о смене статусов, новых заказах и т.п. */
+    public List<AppUser> findActiveOperatorsAndAdmins() {
+        return jdbc.query(
+                "SELECT * FROM users WHERE is_active = TRUE AND role IN ('OPERATOR','ADMIN','SUPERVISOR') ORDER BY id",
+                ROW_MAPPER);
+    }
+
+    /** Пользователь, привязанный к конкретному сотруднику — для адресных уведомлений «вам назначена услуга». */
+    public Optional<AppUser> findByEmployeeId(Long employeeId) {
+        if (employeeId == null) return Optional.empty();
+        List<AppUser> result = jdbc.query(
+                "SELECT * FROM users WHERE employee_id = :e AND is_active = TRUE LIMIT 1",
+                Map.of("e", employeeId), ROW_MAPPER);
+        return result.stream().findFirst();
+    }
+
     public AppUser create(String username, String passwordHash, String displayName,
                           String role, Long employeeId) {
         var params = new MapSqlParameterSource()

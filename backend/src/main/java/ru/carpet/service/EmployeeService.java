@@ -31,15 +31,15 @@ public class EmployeeService {
     }
 
     @Transactional
-    public Employee create(String name, String contact, Long roleId) {
-        return repository.save(name, contact, roleId);
+    public Employee create(String name, String phone, String email, Long roleId) {
+        return repository.save(name, phone, email, roleId);
     }
 
     @Transactional
-    public Employee update(Long id, String name, String contact, Long roleId) {
+    public Employee update(Long id, String name, String phone, String email, Long roleId) {
         repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Employee not found: " + id));
-        return repository.update(id, name, contact, roleId);
+        return repository.update(id, name, phone, email, roleId);
     }
 
     /** Сотрудники, способные работать с указанным типом позиции (по их роли). */

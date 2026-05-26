@@ -22,6 +22,10 @@ export default function ItemsPage() {
   const [employeeFilters, setEmployeeFilters] = useState<number[]>([])
   const [orderFilter, setOrderFilter] = useState('')
   const [positionFilter, setPositionFilter] = useState('')
+  // V13: поиск по клиенту/legacy ID
+  const [clientNameFilter, setClientNameFilter] = useState('')
+  const [clientPhoneFilter, setClientPhoneFilter] = useState('')
+  const [legacyIdFilter, setLegacyIdFilter] = useState('')
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
   const PAGE_SIZE = 20
@@ -50,6 +54,9 @@ export default function ItemsPage() {
         employeeId: employeeFilters.length === 1 ? employeeFilters[0] : undefined,
         orderId: orderFilter ? Number(orderFilter) : undefined,
         positionInOrder: positionFilter ? Number(positionFilter) : undefined,
+        clientName: clientNameFilter || undefined,
+        clientPhone: clientPhoneFilter || undefined,
+        legacyId: legacyIdFilter ? Number(legacyIdFilter) : undefined,
         page,
         size: PAGE_SIZE,
       })
@@ -73,11 +80,15 @@ export default function ItemsPage() {
 
   useEffect(() => {
     void load()
-  }, [statusFilters, itemTypeFilters, employeeFilters, orderFilter, positionFilter, page])
+  }, [statusFilters, itemTypeFilters, employeeFilters, orderFilter, positionFilter,
+      clientNameFilter, clientPhoneFilter, legacyIdFilter, page])
 
   const resetFilters = () => {
     setStatusFilters([])
     setItemTypeFilters([])
+    setClientNameFilter('')
+    setClientPhoneFilter('')
+    setLegacyIdFilter('')
     setEmployeeFilters([])
     setOrderFilter('')
     setPositionFilter('')
@@ -87,6 +98,7 @@ export default function ItemsPage() {
   const hasActiveFilters =
     statusFilters.length > 0 || itemTypeFilters.length > 0 || employeeFilters.length > 0
     || orderFilter !== '' || positionFilter !== ''
+    || clientNameFilter !== '' || clientPhoneFilter !== '' || legacyIdFilter !== ''
 
   return (
     <div>
@@ -177,6 +189,35 @@ export default function ItemsPage() {
             placeholder="Позиция"
             style={{ width: 100 }}
             min={1}
+          />
+        </div>
+        {/* V13: поиск по клиенту/legacy ID — те же поля что и на странице заказов. */}
+        <div className="form-group">
+          <label>Имя клиента</label>
+          <input
+            value={clientNameFilter}
+            onChange={e => { setClientNameFilter(e.target.value); setPage(0) }}
+            placeholder="Фрагмент имени"
+            style={{ width: 180 }}
+          />
+        </div>
+        <div className="form-group">
+          <label>Телефон клиента</label>
+          <input
+            value={clientPhoneFilter}
+            onChange={e => { setClientPhoneFilter(e.target.value); setPage(0) }}
+            placeholder="Последние цифры"
+            style={{ width: 160 }}
+          />
+        </div>
+        <div className="form-group">
+          <label>Legacy ID</label>
+          <input
+            type="number"
+            value={legacyIdFilter}
+            onChange={e => { setLegacyIdFilter(e.target.value); setPage(0) }}
+            placeholder="ID из старой системы"
+            style={{ width: 150 }}
           />
         </div>
         <div className="form-group">

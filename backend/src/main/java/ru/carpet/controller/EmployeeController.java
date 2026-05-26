@@ -37,14 +37,14 @@ public class EmployeeController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Employee create(@Valid @RequestBody EmployeeRequest request) {
-        Employee emp = service.create(request.name(), request.contact(), request.roleId());
+        Employee emp = service.create(request.name(), request.phone(), request.email(), request.roleId());
         auditLogService.log("EMPLOYEE", emp.id(), "CREATE", "Создан сотрудник: " + emp.name());
         return emp;
     }
 
     @PutMapping("/{id}")
     public Employee update(@PathVariable Long id, @Valid @RequestBody EmployeeRequest request) {
-        Employee emp = service.update(id, request.name(), request.contact(), request.roleId());
+        Employee emp = service.update(id, request.name(), request.phone(), request.email(), request.roleId());
         auditLogService.log("EMPLOYEE", id, "UPDATE", "Обновлён сотрудник: " + emp.name());
         return emp;
     }
@@ -89,9 +89,12 @@ public class EmployeeController {
     @GetMapping("/{id}/services")
     public List<OrderItemServiceInstance> getEmployeeServices(
             @PathVariable Long id,
-            @RequestParam(required = false) String status
+            @RequestParam(required = false) String status,
+            // V7: фильтр по диапазону дат для карточки сотрудника на странице Аналитика.
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo
     ) {
-        return serviceInstanceService.findByEmployeeId(id, status);
+        return serviceInstanceService.findByEmployeeId(id, status, dateFrom, dateTo);
     }
 
     @GetMapping("/{id}/earnings")

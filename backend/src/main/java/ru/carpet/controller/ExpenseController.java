@@ -56,6 +56,23 @@ public class ExpenseController {
         jdbc.update("DELETE FROM expense_categories WHERE id = :id", Map.of("id", id));
     }
 
+    /** Переименование/правка категории (name, is_fixed, default_amount). */
+    @PutMapping("/categories/{id}")
+    public Map<String, Object> updateCategory(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        jdbc.update("""
+            UPDATE expense_categories
+               SET name = :n,
+                   is_fixed = :f,
+                   default_amount = :d
+             WHERE id = :id
+        """, new MapSqlParameterSource()
+                .addValue("n", body.get("name"))
+                .addValue("f", body.getOrDefault("is_fixed", false))
+                .addValue("d", body.get("default_amount"))
+                .addValue("id", id));
+        return jdbc.queryForMap("SELECT * FROM expense_categories WHERE id = :id", Map.of("id", id));
+    }
+
     // ---- Месячные суммы ----
 
     @GetMapping

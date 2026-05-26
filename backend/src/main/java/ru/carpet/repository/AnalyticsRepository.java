@@ -1,11 +1,14 @@
 package ru.carpet.repository;
 
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
 import ru.carpet.dto.AnalyticsDto;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import static ru.carpet.repository.AnalyticsHelpers.longOrZero;
 import static ru.carpet.repository.AnalyticsHelpers.nz;
@@ -13,16 +16,8 @@ import static ru.carpet.repository.AnalyticsHelpers.nz;
 /**
  * Общая аналитика (карточки разделов, графики страницы Аналитика).
  *
- * <p>Раньше был один большой репозиторий на 500+ строк. После разбивки тут остались
- * методы, которые не относятся ни к дашборду главной, ни к производственной очереди,
- * ни к доходности — это сводки для графиков (по статусам, типам, районам, выручка
- * по месяцам, гарантия, маржа). См. также:
- * <ul>
- *   <li>{@link DashboardRepository} — виджеты главной страницы;</li>
- *   <li>{@link ProductionRepository} — производственная очередь (заказ/позиция/услуга);</li>
- *   <li>{@link ProfitabilityRepository} — доходность по разрезам;</li>
- *   <li>{@link AnalyticsHelpers} — общие SQL-фрагменты (COST_EXPR, dateFilter и т.п.).</li>
- * </ul>
+ * <p>V8 (Аналитика): все методы принимают dateFrom/dateTo (опционально, YYYY-MM-DD).
+ *    Если оба null — за всё время; иначе фильтр по нужному дата-полю (created_at/updated_at).
  */
 @Repository
 public class AnalyticsRepository {
@@ -33,78 +28,105 @@ public class AnalyticsRepository {
         this.jdbc = jdbc;
     }
 
-    public List<AnalyticsDto.DistrictCount> ordersByDistrict() {
+    /** Хелпер — добавляет диапазон дат к params; возвращает SQL-фрагмент (или ""). */
+    private static String dateFilter(String column, String dateFrom, String dateTo,
+                                     Map<String, Object> params) {
+        StringBuilder sb = new StringBuilder();
+        if (dateFrom != null && !dateFrom.isBlank()) {
+            sb.append(" AND ").append(column).append(" >= :df ");
+            params.put("df", dateFrom);
+        }
+        if (dateTo != null && !dateTo.isBlank()) {
+            // +1 день, чтобы диапазон был inclusive по дате окончания
+            sb.append(" AND ").append(column).append(" < (:dt::date + INTERVAL '1 day') ");
+            params.put("dt", dateTo);
+        }
+        return sb.toString();
+    }
+
+    public List<AnalyticsDto.DistrictCount> ordersByDistrict(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT COALESCE(delivery_district, pickup_district, 'Не указан') as district, " +
             "COUNT(*) as count, COALESCE(SUM(total_amount), 0) as total " +
-            "FROM orders WHERE status NOT IN ('CANCELLED') " +
-            "GROUP BY district ORDER BY count DESC",
+            "FROM orders WHERE status NOT IN ('CANCELLED') " + filter +
+            "GROUP BY district ORDER BY count DESC", p,
             (RowMapper<AnalyticsDto.DistrictCount>) (rs, n) -> new AnalyticsDto.DistrictCount(
                 rs.getString("district"), longOrZero(rs, "count"), nz(rs.getBigDecimal("total"))
             )
         );
     }
 
-    public List<AnalyticsDto.StatusCount> ordersByStatus() {
-        // «Активные» = всё, что НЕ в финальных состояниях. COMPLETED — финальное
-        // (заказ выдан и закрыт), его не считаем активным; раньше попадал в график.
+    public List<AnalyticsDto.StatusCount> ordersByStatus(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT status, COUNT(*) as count " +
-            "FROM orders WHERE status NOT IN ('DELIVERED', 'COMPLETED', 'CANCELLED') " +
-            "GROUP BY status ORDER BY count DESC",
+            "FROM orders WHERE status NOT IN ('DELIVERED', 'COMPLETED', 'CANCELLED') " + filter +
+            "GROUP BY status ORDER BY count DESC", p,
             (RowMapper<AnalyticsDto.StatusCount>) (rs, n) -> new AnalyticsDto.StatusCount(
                 rs.getString("status"), longOrZero(rs, "count")
             )
         );
     }
 
-    public List<AnalyticsDto.TypeCount> itemsByType() {
-        // V10: is_default у item_types удалён. Считаем все типы; «авто-добавленные»
-        // позиции (доставка/приём) теперь отделяются по SKU.is_auto_add, но для
-        // аналитики имеет смысл их тоже видеть.
+    public List<AnalyticsDto.TypeCount> itemsByType(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        // Фильтр по дате создания родительского заказа.
+        String filter = dateFilter("o.created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT it.name as type_name, COUNT(*) as count " +
             "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
-            "GROUP BY it.name ORDER BY count DESC",
+            "JOIN orders o ON o.id = oi.order_id " +
+            "WHERE 1=1 " + filter +
+            "GROUP BY it.name ORDER BY count DESC", p,
             (RowMapper<AnalyticsDto.TypeCount>) (rs, n) -> new AnalyticsDto.TypeCount(
                 rs.getString("type_name"), longOrZero(rs, "count")
             )
         );
     }
 
-    public List<AnalyticsDto.EmployeeStat> employeeStats() {
+    public List<AnalyticsDto.EmployeeStat> employeeStats(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("ois.updated_at", dateFrom, dateTo, p);
         return jdbc.query(
-            "SELECT e.name, COUNT(*) as services_done, COALESCE(SUM(ois.price), 0) as total_earned " +
+            "SELECT e.id as employee_id, e.name, COUNT(*) as services_done, COALESCE(SUM(ois.price), 0) as total_earned " +
             "FROM service_assignees sa " +
             "JOIN employees e ON e.id = sa.employee_id " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id " +
-            "WHERE ois.status = 'DONE' " +
-            "GROUP BY e.name ORDER BY services_done DESC",
+            "WHERE ois.status = 'DONE' " + filter +
+            "GROUP BY e.id, e.name ORDER BY services_done DESC", p,
             (RowMapper<AnalyticsDto.EmployeeStat>) (rs, n) -> new AnalyticsDto.EmployeeStat(
-                rs.getString("name"), longOrZero(rs, "services_done"), nz(rs.getBigDecimal("total_earned"))
+                rs.getLong("employee_id"), rs.getString("name"),
+                longOrZero(rs, "services_done"), nz(rs.getBigDecimal("total_earned"))
             )
         );
     }
 
-    public List<AnalyticsDto.MonthRevenue> revenueByMonth() {
+    public List<AnalyticsDto.MonthRevenue> revenueByMonth(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT TO_CHAR(created_at, 'YYYY-MM') as month, " +
             "COUNT(*) as orders_count, COALESCE(SUM(total_amount), 0) as revenue " +
-            "FROM orders WHERE paid = true " +
-            "GROUP BY month ORDER BY month DESC LIMIT 12",
+            "FROM orders WHERE paid = true " + filter +
+            "GROUP BY month ORDER BY month DESC LIMIT 12", p,
             (RowMapper<AnalyticsDto.MonthRevenue>) (rs, n) -> new AnalyticsDto.MonthRevenue(
                 rs.getString("month"), longOrZero(rs, "orders_count"), nz(rs.getBigDecimal("revenue"))
             )
         );
     }
 
-    public List<AnalyticsDto.TopClient> topClients() {
+    public List<AnalyticsDto.TopClient> topClients(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("o.created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT c.id as client_id, c.name, c.client_type, COUNT(o.id) as orders_count, " +
             "COALESCE(SUM(o.total_amount), 0) as total_spent " +
             "FROM clients c JOIN orders o ON o.client_id = c.id " +
-            "WHERE o.status NOT IN ('CANCELLED') " +
-            "GROUP BY c.id, c.name, c.client_type ORDER BY total_spent DESC LIMIT 10",
+            "WHERE o.status NOT IN ('CANCELLED') " + filter +
+            "GROUP BY c.id, c.name, c.client_type ORDER BY total_spent DESC LIMIT 10", p,
             (RowMapper<AnalyticsDto.TopClient>) (rs, n) -> new AnalyticsDto.TopClient(
                 rs.getLong("client_id"), rs.getString("name"), rs.getString("client_type"),
                 longOrZero(rs, "orders_count"), nz(rs.getBigDecimal("total_spent"))
@@ -112,9 +134,10 @@ public class AnalyticsRepository {
         );
     }
 
-    public List<AnalyticsDto.MarginRow> marginAnalysis() {
+    public List<AnalyticsDto.MarginRow> marginAnalysis(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("ois.updated_at", dateFrom, dateTo, p);
         return jdbc.query(
-            // V10: имя/тип/себестоимость берутся напрямую с SKU через ois.sku_id.
             "SELECT s.name as service_name, " +
             "COUNT(ois.id) as count, " +
             "COALESCE(SUM(ois.price), 0) as revenue, " +
@@ -130,8 +153,8 @@ public class AnalyticsRepository {
             "FROM order_item_services ois " +
             "JOIN skus s          ON s.id = ois.sku_id " +
             "JOIN order_items oi  ON oi.id = ois.order_item_id " +
-            "WHERE ois.status = 'DONE' " +
-            "GROUP BY s.name ORDER BY revenue DESC",
+            "WHERE ois.status = 'DONE' " + filter +
+            "GROUP BY s.name ORDER BY revenue DESC", p,
             (RowMapper<AnalyticsDto.MarginRow>) (rs, n) -> new AnalyticsDto.MarginRow(
                 rs.getString("service_name"), longOrZero(rs, "count"),
                 nz(rs.getBigDecimal("revenue")), nz(rs.getBigDecimal("cost"))
@@ -139,7 +162,9 @@ public class AnalyticsRepository {
         );
     }
 
-    public List<AnalyticsDto.WarrantyStat> warrantyStats() {
+    public List<AnalyticsDto.WarrantyStat> warrantyStats(String dateFrom, String dateTo) {
+        Map<String, Object> p = new HashMap<>();
+        String filter = dateFilter("o.created_at", dateFrom, dateTo, p);
         return jdbc.query(
             "SELECT c.id as client_id, c.name as client_name, " +
             "COUNT(DISTINCT o.id) as total_orders, " +
@@ -148,8 +173,9 @@ public class AnalyticsRepository {
             "FROM clients c " +
             "JOIN orders o ON o.client_id = c.id " +
             "LEFT JOIN orders wo ON wo.client_id = c.id AND wo.is_warranty = true " +
+            "WHERE 1=1 " + filter +
             "GROUP BY c.id, c.name HAVING COUNT(DISTINCT o.id) > 0 " +
-            "ORDER BY warranty_percent DESC NULLS LAST LIMIT 20",
+            "ORDER BY warranty_percent DESC NULLS LAST LIMIT 20", p,
             (RowMapper<AnalyticsDto.WarrantyStat>) (rs, n) -> new AnalyticsDto.WarrantyStat(
                 rs.getLong("client_id"), rs.getString("client_name"),
                 longOrZero(rs, "total_orders"), longOrZero(rs, "warranty_orders"),
@@ -157,4 +183,14 @@ public class AnalyticsRepository {
             )
         );
     }
+
+    // Старые перегрузки для обратной совместимости (вызовы без дат — за всё время).
+    public List<AnalyticsDto.DistrictCount>  ordersByDistrict() { return ordersByDistrict(null, null); }
+    public List<AnalyticsDto.StatusCount>    ordersByStatus()   { return ordersByStatus(null, null); }
+    public List<AnalyticsDto.TypeCount>      itemsByType()      { return itemsByType(null, null); }
+    public List<AnalyticsDto.EmployeeStat>   employeeStats()    { return employeeStats(null, null); }
+    public List<AnalyticsDto.MonthRevenue>   revenueByMonth()   { return revenueByMonth(null, null); }
+    public List<AnalyticsDto.TopClient>      topClients()       { return topClients(null, null); }
+    public List<AnalyticsDto.MarginRow>      marginAnalysis()   { return marginAnalysis(null, null); }
+    public List<AnalyticsDto.WarrantyStat>   warrantyStats()    { return warrantyStats(null, null); }
 }

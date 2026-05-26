@@ -65,6 +65,12 @@ export interface Order {
   /** Назначенный водитель/логист (Спринт D). NULL — не назначен. */
   assigned_driver_id: number | null
   assigned_driver_name: string | null
+  /** V17: оператор-оформитель заказа. */
+  assigned_operator_id: number | null
+  assigned_operator_name: string | null
+  /** V17: проблемный заказ — поднятый флаг шлёт уведомление админам. */
+  is_problem: boolean
+  problem_reason: string | null
   created_at: string
   updated_at: string
 }
@@ -157,7 +163,9 @@ export interface SkuMatchResult {
 export interface Employee {
   id: number
   name: string
-  contact: string | null
+  /** V15: contact разделено на phone + email. */
+  phone: string | null
+  email: string | null
   active: boolean
   /** Привязка к роли (см. EmployeeRole). null = без роли (универсал, может всё). */
   role_id: number | null
@@ -353,13 +361,16 @@ export interface UpdateOrderItemDimensionsRequest {
 
 export interface CreateEmployeeRequest {
   name: string
-  contact?: string
+  /** V15: contact разделено на phone + email. */
+  phone?: string
+  email?: string
   role_id?: number | null
 }
 
 export interface UpdateEmployeeRequest {
   name: string
-  contact?: string
+  phone?: string
+  email?: string
   role_id?: number | null
 }
 

@@ -205,6 +205,12 @@ public class OrderItemServiceInstanceRepository {
     }
 
     public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status) {
+        return findByEmployeeId(employeeId, status, null, null);
+    }
+
+    /** V7: фильтр по диапазону дат — для карточки сотрудника на странице Аналитика. */
+    public List<OrderItemServiceInstance> findByEmployeeId(Long employeeId, String status,
+                                                            String dateFrom, String dateTo) {
         StringBuilder sql = new StringBuilder("SELECT " + SELECT_COLS + FROM_JOINS +
                 "JOIN service_assignees sa ON ois.id = sa.order_item_service_id " +
                 "WHERE sa.employee_id = :employeeId");
@@ -213,6 +219,14 @@ public class OrderItemServiceInstanceRepository {
         if (status != null && !status.isEmpty()) {
             sql.append(" AND ois.status = :status");
             params.put("status", status);
+        }
+        if (dateFrom != null && !dateFrom.isBlank()) {
+            sql.append(" AND ois.updated_at >= :df");
+            params.put("df", dateFrom);
+        }
+        if (dateTo != null && !dateTo.isBlank()) {
+            sql.append(" AND ois.updated_at < (:dt::date + INTERVAL '1 day')");
+            params.put("dt", dateTo);
         }
         sql.append(" ORDER BY ois.id DESC");
         return jdbc.query(sql.toString(), params, ROW_MAPPER);

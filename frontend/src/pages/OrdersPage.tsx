@@ -66,6 +66,10 @@ export default function OrdersPage() {
   const [badAddressFilter, setBadAddressFilter] = useState<boolean>(
     searchParams.get('badAddress') === 'true'
   )
+  // V19: фильтр «только гарантийные» — переход из аналитики (клик по числу гарантийных).
+  const [onlyWarrantyFilter, setOnlyWarrantyFilter] = useState<boolean>(
+    searchParams.get('onlyWarranty') === 'true'
+  )
   const [paymentFilters, setPaymentFilters] = useState<string[]>([])
   const [orderIdSearch, setOrderIdSearch] = useState('')
   const [legacyIdSearch, setLegacyIdSearch] = useState('')
@@ -102,6 +106,12 @@ export default function OrdersPage() {
     setNoCoordsFilter(searchParams.get('noCoords') === 'true')
     setOverdueActualFilter(searchParams.get('overdueActual') === 'true')
     setBadAddressFilter(searchParams.get('badAddress') === 'true')
+    setOnlyWarrantyFilter(searchParams.get('onlyWarranty') === 'true')
+    // V6: переход из аналитики «клик по месяцу» — заполнение диапазона дат.
+    const df = searchParams.get('dateFrom')
+    const dt = searchParams.get('dateTo')
+    if (df) setDateFrom(df)
+    if (dt) setDateTo(dt)
   }, [searchParams])
 
   /**
@@ -210,6 +220,7 @@ export default function OrdersPage() {
         noCoords: noCoordsFilter || undefined,
         overdueActual: overdueActualFilter || undefined,
         badAddress: badAddressFilter || undefined,
+        onlyWarranty: onlyWarrantyFilter || undefined,
       })
       setOrders(data.content)
       setTotalElements(data.total_elements)
@@ -222,7 +233,7 @@ export default function OrdersPage() {
     }
   }
 
-  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter])
+  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter, onlyWarrantyFilter])
 
   const handleCreated = (order: Order) => {
     setShowCreate(false)

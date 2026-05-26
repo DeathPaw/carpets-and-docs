@@ -218,11 +218,14 @@ export default function EmployeesPage() {
   const [itemTypes, setItemTypes] = useState<ItemType[]>([])
   const [loading, setLoading] = useState(false)
   const [newName, setNewName] = useState('')
-  const [newContact, setNewContact] = useState('')
+  // V15: телефон и email — два отдельных поля.
+  const [newPhone, setNewPhone] = useState('')
+  const [newEmail, setNewEmail] = useState('')
   const [newRoleId, setNewRoleId] = useState<number | null>(null)
   const [editId, setEditId] = useState<number | null>(null)
   const [editName, setEditName] = useState('')
-  const [editContact, setEditContact] = useState('')
+  const [editPhone, setEditPhone] = useState('')
+  const [editEmail, setEditEmail] = useState('')
   const [editRoleId, setEditRoleId] = useState<number | null>(null)
   const [error, setError] = useState('')
   const [showServices, setShowServices] = useState<Employee | null>(null)
@@ -257,33 +260,37 @@ export default function EmployeesPage() {
 
   const create = async () => {
     if (!newName.trim()) { setError('Введите имя сотрудника'); return }
-    // Контакт необязателен; если введён — валидируем как телефон.
-    if (newContact.trim() && !isValidPhone(newContact)) {
-      setError('Контакт должен быть в формате +7 (XXX) XXX-XX-XX')
-      return
+    if (newPhone.trim() && !isValidPhone(newPhone)) {
+      setError('Телефон должен быть в формате +7 (XXX) XXX-XX-XX'); return
+    }
+    if (newEmail.trim() && !newEmail.includes('@')) {
+      setError('Некорректный email'); return
     }
     try {
       await createEmployee({
         name: newName.trim(),
-        // На бэк уходит уже отформатированный номер для единообразия.
-        contact: newContact.trim() ? formatPhone(newContact) : undefined,
+        phone: newPhone.trim() ? formatPhone(newPhone) : undefined,
+        email: newEmail.trim() || undefined,
         role_id: newRoleId,
       })
-      setNewName(''); setNewContact(''); setNewRoleId(null); setError('')
+      setNewName(''); setNewPhone(''); setNewEmail(''); setNewRoleId(null); setError('')
       await load()
     } catch { setError('Ошибка создания') }
   }
 
   const save = async (id: number) => {
     if (!editName.trim()) return
-    if (editContact.trim() && !isValidPhone(editContact)) {
-      showToast('Контакт должен быть в формате +7 (XXX) XXX-XX-XX', 'error')
-      return
+    if (editPhone.trim() && !isValidPhone(editPhone)) {
+      showToast('Телефон должен быть в формате +7 (XXX) XXX-XX-XX', 'error'); return
+    }
+    if (editEmail.trim() && !editEmail.includes('@')) {
+      showToast('Некорректный email', 'error'); return
     }
     try {
       await updateEmployee(id, {
         name: editName.trim(),
-        contact: editContact.trim() ? formatPhone(editContact) : undefined,
+        phone: editPhone.trim() ? formatPhone(editPhone) : undefined,
+        email: editEmail.trim() || undefined,
         role_id: editRoleId,
       })
       setEditId(null)
@@ -364,9 +371,13 @@ export default function EmployeesPage() {
                 <label>Имя *</label>
                 <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Имя сотрудника" />
               </div>
-              <div className="form-group" style={{ flex: 1, minWidth: 200, marginBottom: 0 }}>
+              <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
                 <label>Телефон</label>
-                <PhoneInput value={newContact} onChange={setNewContact} showValidation />
+                <PhoneInput value={newPhone} onChange={setNewPhone} showValidation />
+              </div>
+              <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
+                <label>Email</label>
+                <input value={newEmail} onChange={e => setNewEmail(e.target.value)} placeholder="email@example.com" />
               </div>
               <div className="form-group" style={{ flex: 1, minWidth: 180, marginBottom: 0 }}>
                 <label>Роль</label>
@@ -421,12 +432,12 @@ export default function EmployeesPage() {
             <table>
               <thead>
                 <tr>
-                  <th>#</th><th>Имя</th><th>Контакт</th><th>Роль</th><th>Статус</th><th>Действия</th>
+                  <th>#</th><th>Имя</th><th>Телефон</th><th>Email</th><th>Роль</th><th>Статус</th><th>Действия</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredEmployees.length === 0 ? (
-                  <tr><td colSpan={6} className="empty">Нет сотрудников</td></tr>
+                  <tr><td colSpan={7} className="empty">Нет сотрудников</td></tr>
                 ) : filteredEmployees.map(emp => {
                   const role = roles.find(r => r.id === emp.role_id)
                   return (
@@ -435,8 +446,13 @@ export default function EmployeesPage() {
                       <td>{editId === emp.id ? <input value={editName} onChange={e => setEditName(e.target.value)} /> : emp.name}</td>
                       <td>
                         {editId === emp.id
-                          ? <PhoneInput value={editContact} onChange={setEditContact} showValidation />
-                          : (emp.contact || '—')}
+                          ? <PhoneInput value={editPhone} onChange={setEditPhone} showValidation />
+                          : (emp.phone || <span style={{ color: '#aaa' }}>—</span>)}
+                      </td>
+                      <td>
+                        {editId === emp.id
+                          ? <input value={editEmail} onChange={e => setEditEmail(e.target.value)} placeholder="email@example.com" />
+                          : (emp.email || <span style={{ color: '#aaa' }}>—</span>)}
                       </td>
                       <td>
                         {editId === emp.id ? (
@@ -464,7 +480,9 @@ export default function EmployeesPage() {
                             <>
                               <button className="btn-secondary btn-sm" onClick={() => setShowServices(emp)} style={{ marginRight: 8 }}>Услуги</button>
                               <button className="btn-secondary btn-sm" onClick={() => {
-                                setEditId(emp.id); setEditName(emp.name); setEditContact(emp.contact ?? ''); setEditRoleId(emp.role_id)
+                                setEditId(emp.id); setEditName(emp.name);
+                                setEditPhone(emp.phone ?? ''); setEditEmail(emp.email ?? '');
+                                setEditRoleId(emp.role_id)
                               }}>&#9998;</button>
                               {emp.active
                                 ? <button className="btn-danger btn-sm" onClick={() => deactivate(emp.id)}>Деактивировать</button>

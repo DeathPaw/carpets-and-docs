@@ -41,6 +41,14 @@ public record Order(
         Long assignedDriverId,
         /** Имя назначенного водителя для удобства фронта — JOIN'ится в репозитории. */
         String assignedDriverName,
+        /** V17: оператор-оформитель. Заполняется автоматически при создании
+         *  заказа, если у текущего пользователя есть employee_id. По нему шлём
+         *  персональные уведомления о смене статуса. */
+        Long assignedOperatorId,
+        String assignedOperatorName,
+        /** V17: проблемный заказ. Оператор поднимает флаг — админам приходит уведомление. */
+        boolean isProblem,
+        String problemReason,
         Long version,
         LocalDateTime createdAt,
         LocalDateTime updatedAt

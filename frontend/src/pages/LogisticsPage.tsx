@@ -67,6 +67,14 @@ function formatDayHeader(dateStr: string): string {
   return `${DAY_NAMES[d.getDay()]} ${String(d.getDate()).padStart(2,'0')}.${String(d.getMonth()+1).padStart(2,'0')}`
 }
 
+// V12: цвета по дням недели — для подсветки маркеров на карте и полоски над колонкой дня.
+// Индексы: 0=Вс, 1=Пн, 2=Вт, 3=Ср, 4=Чт, 5=Пт, 6=Сб.
+const DAY_COLORS = ['#34495e', '#e74c3c', '#e67e22', '#f1c40f', '#27ae60', '#3498db', '#9b59b6']
+function dayColor(dateStr: string): string {
+  const d = new Date(dateStr)
+  return DAY_COLORS[d.getDay()]
+}
+
 function formatShortDate(dateStr: string): string {
   const d = new Date(dateStr)
   return `${d.getDate()} ${MONTH_NAMES_SHORT[d.getMonth()]}`
@@ -653,6 +661,7 @@ export default function LogisticsPage() {
       )
     }
 
+    const dColor = dayColor(dateStr)
     return (
       <div
         key={dateStr}
@@ -667,10 +676,17 @@ export default function LogisticsPage() {
           minHeight: 50,
           // на горизонтальной сетке день уже не имеет marginBottom
           minWidth: 0,
+          // V12: верхний бордер цвета дня недели — оператор сразу видит, какому дню
+          // соответствуют точки этого цвета на карте.
+          borderTop: `4px solid ${dColor}`,
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <strong style={{ fontSize: '0.9em' }}>
+          <strong style={{ fontSize: '0.9em', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+            <span style={{
+              display: 'inline-block', width: 10, height: 10, borderRadius: 2,
+              background: dColor, flexShrink: 0,
+            }} title="Цвет дня на карте" />
             {label}
             {isToday && <span style={{ marginLeft: 4, fontSize: '0.75em', color: '#f9a825' }}>·</span>}
           </strong>
@@ -699,6 +715,8 @@ export default function LogisticsPage() {
       lat: c.lat as number,
       lon: c.lon as number,
       kind: c.type,
+      // V12: цвет маркера = цвет дня недели. На карте сразу видно, где «вторничные» точки.
+      color: c.date ? dayColor(c.date) : undefined,
       title: `${c.type === 'pickup' ? 'Забор' : 'Доставка'} #${String(c.order.id).padStart(5, '0')}`,
       description: `${c.order.client_name}${c.address ? ' · ' + c.address : ''}${c.timeSlot ? ' · ' + c.timeSlot : ''}`,
     }))

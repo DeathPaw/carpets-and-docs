@@ -43,6 +43,28 @@ export default function ExpensesPage() {
     } catch { showToast('Ошибка сохранения', 'error') }
   }
 
+  // V14: переименовать категорию (предлагаем prompt — минимум UI). default_amount и is_fixed
+  // сохраняем как было — переименование не должно их сбрасывать.
+  const renameCategory = async (cat: ExpenseCategory) => {
+    const newName = prompt('Новое название категории:', cat.name)?.trim()
+    if (!newName || newName === cat.name) return
+    try {
+      await client.put(`/api/expenses/categories/${cat.id}`, {
+        name: newName, is_fixed: cat.is_fixed, default_amount: cat.default_amount,
+      })
+      showToast('Категория переименована', 'success'); await load()
+    } catch { showToast('Ошибка переименования', 'error') }
+  }
+
+  // V14: удалить категорию (вместе со всеми её месячными суммами).
+  const deleteCategory = async (cat: ExpenseCategory) => {
+    if (!confirm(`Удалить категорию «${cat.name}»?\nВсе суммы по месяцам тоже удалятся.`)) return
+    try {
+      await client.delete(`/api/expenses/categories/${cat.id}`)
+      showToast('Категория удалена', 'success'); await load()
+    } catch { showToast('Ошибка удаления', 'error') }
+  }
+
   const expenseMap = new Map(expenses.map(e => [e.category_id, e]))
 
   return (
@@ -56,7 +78,7 @@ export default function ExpensesPage() {
         <h3>Категории × месяц</h3>
         <table>
           <thead>
-            <tr><th>Категория</th><th>Тип</th><th>Дефолт</th><th>Сумма за {yearMonth}</th></tr>
+            <tr><th>Категория</th><th>Тип</th><th>Дефолт</th><th>Сумма за {yearMonth}</th><th style={{ width: 130 }}>Действия</th></tr>
           </thead>
           <tbody>
             {categories.map(cat => {
@@ -72,10 +94,14 @@ export default function ExpensesPage() {
                       onSave={v => upsert(cat.id, v)}
                     />
                   </td>
+                  <td>
+                    <button className="btn-secondary btn-sm" title="Переименовать" onClick={() => renameCategory(cat)} style={{ marginRight: 4 }}>&#9998;</button>
+                    <button className="btn-danger btn-sm" title="Удалить категорию" onClick={() => deleteCategory(cat)}>&times;</button>
+                  </td>
                 </tr>
               )
             })}
-            {categories.length === 0 && <tr><td colSpan={4} className="empty">Нет категорий</td></tr>}
+            {categories.length === 0 && <tr><td colSpan={5} className="empty">Нет категорий</td></tr>}
           </tbody>
         </table>
       </div>

@@ -17,14 +17,16 @@ public class EmployeeRepository {
 
     private final NamedParameterJdbcTemplate jdbc;
 
-    private static final String COLS = "id, name, contact, active, role_id, created_at, updated_at";
+    // V15: contact удалён, разделён на phone + email.
+    private static final String COLS = "id, name, phone, email, active, role_id, created_at, updated_at";
 
     private static final RowMapper<Employee> ROW_MAPPER = (rs, rowNum) -> {
         Long roleId = rs.getObject("role_id", Long.class);
         return new Employee(
                 rs.getLong("id"),
                 rs.getString("name"),
-                rs.getString("contact"),
+                rs.getString("phone"),
+                rs.getString("email"),
                 rs.getBoolean("active"),
                 roleId,
                 rs.getTimestamp("created_at").toLocalDateTime(),
@@ -64,25 +66,27 @@ public class EmployeeRepository {
         return result.stream().findFirst();
     }
 
-    public Employee save(String name, String contact, Long roleId) {
+    public Employee save(String name, String phone, String email, Long roleId) {
         var params = new MapSqlParameterSource()
                 .addValue("name", name)
-                .addValue("contact", contact)
+                .addValue("phone", phone)
+                .addValue("email", email)
                 .addValue("roleId", roleId);
         var keyHolder = new GeneratedKeyHolder();
         jdbc.update(
-                "INSERT INTO employees (name, contact, active, role_id) VALUES (:name, :contact, true, :roleId)",
+                "INSERT INTO employees (name, phone, email, active, role_id) VALUES (:name, :phone, :email, true, :roleId)",
                 params, keyHolder, new String[]{"id"});
         Long id = keyHolder.getKey().longValue();
         return findById(id).orElseThrow();
     }
 
-    public Employee update(Long id, String name, String contact, Long roleId) {
+    public Employee update(Long id, String name, String phone, String email, Long roleId) {
         jdbc.update(
-                "UPDATE employees SET name = :name, contact = :contact, role_id = :roleId, updated_at = NOW() WHERE id = :id",
+                "UPDATE employees SET name = :name, phone = :phone, email = :email, role_id = :roleId, updated_at = NOW() WHERE id = :id",
                 new MapSqlParameterSource()
                         .addValue("id", id).addValue("name", name)
-                        .addValue("contact", contact).addValue("roleId", roleId));
+                        .addValue("phone", phone).addValue("email", email)
+                        .addValue("roleId", roleId));
         return findById(id).orElseThrow();
     }
 

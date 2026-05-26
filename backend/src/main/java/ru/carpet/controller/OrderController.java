@@ -60,6 +60,8 @@ public class OrderController {
             @RequestParam(required = false) Boolean overdueActual,
             // true = пора забирать/доставлять, но адрес пуст (виджет «Без адреса»)
             @RequestParam(required = false) Boolean badAddress,
+            // V19: только гарантийные (клик из аналитики).
+            @RequestParam(required = false) Boolean onlyWarranty,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
@@ -72,7 +74,8 @@ public class OrderController {
                 .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
                 .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
                 .sortBy(sortBy).sortDir(sortDir)
-                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress).build();
+                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress)
+                .onlyWarranty(onlyWarranty).build();
 
         List<Order> content = service.findAll(query, page, size);
         long totalElements = service.countAll(query);
@@ -99,6 +102,14 @@ public class OrderController {
     @PatchMapping("/{id}/comment")
     public Order updateComment(@PathVariable Long id, @RequestBody Map<String, String> body) {
         return service.updateComment(id, body.get("comment"));
+    }
+
+    /** V17: пометить заказ проблемным. body: {"is_problem": true/false, "reason": "..."} */
+    @PatchMapping("/{id}/problem")
+    public Order setProblem(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Boolean flag = (Boolean) body.getOrDefault("is_problem", Boolean.FALSE);
+        String reason = (String) body.get("reason");
+        return service.setProblem(id, Boolean.TRUE.equals(flag), reason);
     }
 
     @PatchMapping("/{id}/details")

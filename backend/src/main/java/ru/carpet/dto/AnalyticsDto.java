@@ -22,7 +22,7 @@ public final class AnalyticsDto {
 
     public record TypeCount(String typeName, long count) {}
 
-    public record EmployeeStat(String name, long servicesDone, BigDecimal totalEarned) {}
+    public record EmployeeStat(long employeeId, String name, long servicesDone, BigDecimal totalEarned) {}
 
     public record MonthRevenue(String month, long ordersCount, BigDecimal revenue) {}
 
@@ -44,12 +44,15 @@ public final class AnalyticsDto {
     public record ProductionQueueOrder(long orderId, String clientName, String status,
                                        LocalDateTime createdAt, BigDecimal totalAmount,
                                        String pickupDistrict, String deliveryDistrict,
-                                       long itemsCount, long servicesCount, long servicesDone) {}
+                                       long itemsCount, long servicesCount, long servicesDone,
+                                       /** V11/13: для поиска на странице производства. */
+                                       String clientPhone, Long legacyId) {}
 
     public record ProductionQueueItem(long itemId, long orderId, String status, String description,
                                       BigDecimal length, BigDecimal width, BigDecimal weight, BigDecimal area,
                                       String itemTypeName, String clientName, LocalDateTime orderCreatedAt,
-                                      String pickupDistrict, long servicesCount, long servicesDone) {}
+                                      String pickupDistrict, long servicesCount, long servicesDone,
+                                      String clientPhone, Long legacyId) {}
 
     public record ProductionQueueService(long serviceId, String status, BigDecimal price,
                                          String serviceName, String pricingType,
@@ -57,7 +60,8 @@ public final class AnalyticsDto {
                                          long itemTypeId, String itemTypeName,
                                          long orderId, String clientName, LocalDateTime orderCreatedAt,
                                          String pickupDistrict, long positionInOrder,
-                                         String employeeNames, List<Integer> employeeIds) {}
+                                         String employeeNames, List<Integer> employeeIds,
+                                         String clientPhone, Long legacyId) {}
 
     // ───── profitability ─────
 

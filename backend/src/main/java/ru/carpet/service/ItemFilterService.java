@@ -51,7 +51,28 @@ public class ItemFilterService {
             Long orderId, Integer positionInOrder,
             Long employeeId, int page, int size
     ) {
+        return findItems(statuses, itemTypeIds, orderId, positionInOrder, employeeId,
+                null, null, null, page, size);
+    }
+
+    /**
+     * V13: расширенные фильтры — поиск по имени/телефону клиента и legacy ID заказа.
+     * Старая перегрузка делегирует сюда с null'ами.
+     */
+    public List<OrderItemWithPosition> findItems(
+            List<OrderItemStatus> statuses, List<Long> itemTypeIds,
+            Long orderId, Integer positionInOrder,
+            Long employeeId,
+            String clientName, String clientPhone, Long legacyId,
+            int page, int size
+    ) {
         var params = new MapSqlParameterSource();
+        boolean needOrders = (clientName != null && !clientName.isBlank())
+                || (clientPhone != null && !clientPhone.isBlank())
+                || legacyId != null;
+        boolean needClients = (clientName != null && !clientName.isBlank())
+                || (clientPhone != null && !clientPhone.isBlank());
+
         // Подзапрос с window-функцией позиции в заказе.
         var sql = new StringBuilder(
                 "SELECT * FROM (" +
@@ -65,11 +86,32 @@ public class ItemFilterService {
             sql.append("  JOIN order_item_services ois ON ois.order_item_id = oi.id ");
             sql.append("  JOIN service_assignees sa ON sa.order_item_service_id = ois.id ");
         }
+        if (needOrders) {
+            sql.append("  JOIN orders o ON o.id = oi.order_id ");
+        }
+        if (needClients) {
+            sql.append("  LEFT JOIN clients c ON c.id = o.client_id ");
+        }
         sql.append("  WHERE 1=1 ");
-        // employeeId — только если задан (другие фильтры проверяются на внешнем уровне после window).
         if (employeeId != null) {
             sql.append("  AND sa.employee_id = :employeeId ");
             params.addValue("employeeId", employeeId);
+        }
+        if (legacyId != null) {
+            sql.append("  AND o.legacy_id = :legacyId ");
+            params.addValue("legacyId", legacyId);
+        }
+        if (clientName != null && !clientName.isBlank()) {
+            sql.append("  AND (LOWER(c.name) LIKE :clientName OR LOWER(o.client_name) LIKE :clientName) ");
+            params.addValue("clientName", "%" + clientName.toLowerCase() + "%");
+        }
+        if (clientPhone != null && !clientPhone.isBlank()) {
+            // Фильтруем по последним 10 цифрам — независимо от форматирования (+7 (...), 8-..., и т.д.).
+            String digits = clientPhone.replaceAll("\\D", "");
+            String suffix = digits.length() > 10 ? digits.substring(digits.length() - 10) : digits;
+            sql.append("  AND (REGEXP_REPLACE(COALESCE(c.phone,''),'\\D','','g') LIKE :clientPhone " +
+                    "OR REGEXP_REPLACE(COALESCE(c.extra_phone,''),'\\D','','g') LIKE :clientPhone) ");
+            params.addValue("clientPhone", "%" + suffix);
         }
         sql.append(") sub WHERE 1=1 ");
 

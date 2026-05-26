@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import { ToastProvider } from './components/Toast'
-import { AuthProvider } from './auth/AuthContext'
+import { AuthProvider, useAuth } from './auth/AuthContext'
 import ErrorBoundary from './components/ErrorBoundary'
 import LoginPage from './pages/LoginPage'
 import OrdersPage from './pages/OrdersPage'
@@ -38,6 +38,24 @@ function RequireWorker({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/** Доступ только админам и супервизорам (SUPERVISOR/ADMIN). Оператор/Readonly → редирект. */
+function RequireAdmin({ children }: { children: React.ReactNode }) {
+  const { user, loading, isAdmin } = useAuth()
+  if (loading) return <div className="loading">Загрузка...</div>
+  if (!user) return <Navigate to="/login" replace />
+  if (!isAdmin) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
+/** Доступ только супервизорам (для логов, P&L, расходов, пользователей). */
+function RequireSupervisor({ children }: { children: React.ReactNode }) {
+  const { user, loading, isSupervisor } = useAuth()
+  if (loading) return <div className="loading">Загрузка...</div>
+  if (!user) return <Navigate to="/login" replace />
+  if (!isSupervisor) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -58,18 +76,21 @@ export default function App() {
               <Route path="logistics" element={<LogisticsPage />} />
               <Route path="production" element={<ProductionPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
-              <Route path="profitability" element={<ProfitabilityPage />} />
               <Route path="orders/:id" element={<OrderDetailPage />} />
               <Route path="items" element={<ItemsPage />} />
               <Route path="items/:id" element={<ItemDetailPage />} />
-              <Route path="references" element={<ReferencesPage />} />
-              <Route path="employees" element={<EmployeesPage />} />
-              <Route path="clients" element={<ClientsPage />} />
-              <Route path="error-log" element={<ErrorLogPage />} />
-              <Route path="audit-log" element={<AuditLogPage />} />
-              <Route path="feedback" element={<FeedbackPage />} />
-              <Route path="users" element={<UsersPage />} />
-              <Route path="expenses" element={<ExpensesPage />} />
+              {/* Админ + Супервайзер */}
+              <Route path="references" element={<RequireAdmin><ReferencesPage /></RequireAdmin>} />
+              <Route path="employees"  element={<RequireAdmin><EmployeesPage /></RequireAdmin>} />
+              <Route path="feedback"   element={<RequireAdmin><FeedbackPage /></RequireAdmin>} />
+              {/* Только Супервайзер */}
+              <Route path="profitability" element={<RequireSupervisor><ProfitabilityPage /></RequireSupervisor>} />
+              <Route path="error-log"  element={<RequireSupervisor><ErrorLogPage /></RequireSupervisor>} />
+              <Route path="audit-log"  element={<RequireSupervisor><AuditLogPage /></RequireSupervisor>} />
+              <Route path="users"      element={<RequireSupervisor><UsersPage /></RequireSupervisor>} />
+              <Route path="expenses"   element={<RequireSupervisor><ExpensesPage /></RequireSupervisor>} />
+              {/* Все операторы и выше */}
+              <Route path="clients"    element={<ClientsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

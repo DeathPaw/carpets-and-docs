@@ -37,43 +37,59 @@ public class AnalyticsController {
     }
 
     @GetMapping("/orders-by-district")
-    public List<AnalyticsDto.DistrictCount> ordersByDistrict() {
-        return repository.ordersByDistrict();
+    public List<AnalyticsDto.DistrictCount> ordersByDistrict(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.ordersByDistrict(dateFrom, dateTo);
     }
 
     @GetMapping("/orders-by-status")
-    public List<AnalyticsDto.StatusCount> ordersByStatus() {
-        return repository.ordersByStatus();
+    public List<AnalyticsDto.StatusCount> ordersByStatus(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.ordersByStatus(dateFrom, dateTo);
     }
 
     @GetMapping("/items-by-type")
-    public List<AnalyticsDto.TypeCount> itemsByType() {
-        return repository.itemsByType();
+    public List<AnalyticsDto.TypeCount> itemsByType(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.itemsByType(dateFrom, dateTo);
     }
 
     @GetMapping("/employee-stats")
-    public List<AnalyticsDto.EmployeeStat> employeeStats() {
-        return repository.employeeStats();
+    public List<AnalyticsDto.EmployeeStat> employeeStats(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.employeeStats(dateFrom, dateTo);
     }
 
     @GetMapping("/revenue-by-month")
-    public List<AnalyticsDto.MonthRevenue> revenueByMonth() {
-        return repository.revenueByMonth();
+    public List<AnalyticsDto.MonthRevenue> revenueByMonth(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.revenueByMonth(dateFrom, dateTo);
     }
 
     @GetMapping("/top-clients")
-    public List<AnalyticsDto.TopClient> topClients() {
-        return repository.topClients();
+    public List<AnalyticsDto.TopClient> topClients(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.topClients(dateFrom, dateTo);
     }
 
     @GetMapping("/margin")
-    public List<AnalyticsDto.MarginRow> margin() {
-        return repository.marginAnalysis();
+    public List<AnalyticsDto.MarginRow> margin(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.marginAnalysis(dateFrom, dateTo);
     }
 
     @GetMapping("/warranty-stats")
-    public List<AnalyticsDto.WarrantyStat> warrantyStats() {
-        return repository.warrantyStats();
+    public List<AnalyticsDto.WarrantyStat> warrantyStats(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        return repository.warrantyStats(dateFrom, dateTo);
     }
 
     @GetMapping("/dashboard")

@@ -10,5 +10,8 @@ import jakarta.validation.constraints.NotBlank;
  */
 public record EmployeeRequest(
         @NotBlank String name,
-        String contact,
+        /** V15: разделено на phone + email. Если фронт прислал старое поле contact —
+         *  в контроллере обработаем как fallback. */
+        String phone,
+        String email,
         Long roleId) {}

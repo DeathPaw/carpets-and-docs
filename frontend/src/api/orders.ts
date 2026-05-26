@@ -31,6 +31,8 @@ export interface OrdersQuery {
   overdueActual?: boolean
   /** true = пора забирать/доставлять, но адрес не заполнен. */
   badAddress?: boolean
+  /** V19: только гарантийные заказы (для аналитики). */
+  onlyWarranty?: boolean
 }
 
 export const getOrdersQuery = (q: OrdersQuery = {}) => {
@@ -54,6 +56,7 @@ export const getOrdersQuery = (q: OrdersQuery = {}) => {
   if (q.noCoords) params.append('noCoords', 'true')
   if (q.overdueActual) params.append('overdueActual', 'true')
   if (q.badAddress) params.append('badAddress', 'true')
+  if (q.onlyWarranty) params.append('onlyWarranty', 'true')
   params.append('page', String(q.page ?? 0))
   params.append('size', String(q.size ?? 20))
 
@@ -76,6 +79,10 @@ export const createOrder = (data: CreateOrderRequest) =>
 
 export const updateOrderStatus = (id: number, data: UpdateStatusRequest) =>
   client.patch<Order>(`/api/orders/${id}/status`, data).then(r => r.data)
+
+/** V17: пометить заказ проблемным (или снять флаг). При TRUE reason обязателен (≥10 симв). */
+export const setOrderProblem = (id: number, isProblem: boolean, reason?: string) =>
+  client.patch<Order>(`/api/orders/${id}/problem`, { is_problem: isProblem, reason: reason ?? null }).then(r => r.data)
 
 export const payOrder = (id: number, data: PayOrderRequest) =>
   client.post<Order>(`/api/orders/${id}/pay`, data).then(r => r.data)

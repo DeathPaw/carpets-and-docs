@@ -32,6 +32,8 @@ public class OrderService {
     private final ClientModifierRepository clientModifierRepository;
     private final ClientEventRepository clientEventRepository;
     private final AppUserRepository userRepository;
+    private final NotificationService notificationService;
+    private final PresenceService presenceService;
 
     public OrderService(
             OrderRepository repository,
@@ -46,7 +48,9 @@ public class OrderService {
             PriceModifierRepository priceModifierRepository,
             ClientModifierRepository clientModifierRepository,
             ClientEventRepository clientEventRepository,
-            AppUserRepository userRepository
+            AppUserRepository userRepository,
+            NotificationService notificationService,
+            PresenceService presenceService
     ) {
         this.repository = repository;
         this.itemRepository = itemRepository;
@@ -61,6 +65,60 @@ public class OrderService {
         this.clientModifierRepository = clientModifierRepository;
         this.clientEventRepository = clientEventRepository;
         this.userRepository = userRepository;
+        this.notificationService = notificationService;
+        this.presenceService = presenceService;
+    }
+
+    /**
+     * Уведомление операторам/админам о событии заказа. Логика:
+     *  • не дублируем автору действия (selfUsername),
+     *  • не шлём тем, кто сейчас смотрит страницу этого заказа (PresenceService),
+     *  • в первую очередь шлём «закреплённому» оператору-оформителю (assignedOperatorId),
+     *  • всем остальным OPERATOR/ADMIN/SUPERVISOR — общий broadcast.
+     */
+    private void notifyOperators(String type, String message, String entityType, Long entityId,
+                                 Long assignedOperatorEmployeeId) {
+        String selfUsername = null;
+        try { selfUsername = ru.carpet.audit.AuditUser.current(); } catch (Exception ignored) {}
+
+        // ID пользователя-оформителя (если у заказа есть assigned_operator_id) — таргетная цель.
+        Long primaryTargetUserId = null;
+        if (assignedOperatorEmployeeId != null) {
+            primaryTargetUserId = userRepository.findByEmployeeId(assignedOperatorEmployeeId)
+                    .map(u -> u.id()).orElse(null);
+        }
+
+        for (var u : userRepository.findActiveOperatorsAndAdmins()) {
+            if (selfUsername != null && selfUsername.equals(u.username())) continue;
+            // «ORDER»-уведомления подавляем, если пользователь сейчас на странице этого заказа.
+            if ("ORDER".equals(entityType) && entityId != null && presenceService.isViewing(u.id(), entityId)) continue;
+            // Если есть закреплённый оператор — шлём ТОЛЬКО ему (плюс админам/супервайзерам,
+            // чтобы они тоже видели — но НЕ другим операторам, иначе спам).
+            if (primaryTargetUserId != null && "OPERATOR".equals(u.role())
+                    && !u.id().equals(primaryTargetUserId)) continue;
+            try {
+                notificationService.createNotification(u.id(), type, message, entityType, entityId);
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** Перегрузка без явного оператора — broadcast всем (используется для новых заказов). */
+    private void notifyOperators(String type, String message, String entityType, Long entityId) {
+        notifyOperators(type, message, entityType, entityId, null);
+    }
+
+    /** Уведомление только админам — для проблемных заказов. */
+    private void notifyAdmins(String type, String message, String entityType, Long entityId) {
+        String selfUsername = null;
+        try { selfUsername = ru.carpet.audit.AuditUser.current(); } catch (Exception ignored) {}
+        for (var u : userRepository.findActiveOperatorsAndAdmins()) {
+            if (!"ADMIN".equals(u.role()) && !"SUPERVISOR".equals(u.role())) continue;
+            if (selfUsername != null && selfUsername.equals(u.username())) continue;
+            if ("ORDER".equals(entityType) && entityId != null && presenceService.isViewing(u.id(), entityId)) continue;
+            try {
+                notificationService.createNotification(u.id(), type, message, entityType, entityId);
+            } catch (Exception ignored) {}
+        }
     }
 
     public List<Order> findAll(OrderStatus status, int page, int size) {
@@ -122,6 +180,35 @@ public class OrderService {
         if (clientId != null) {
             clientEventRepository.save(clientId, "ORDER_CREATED", "Создан заказ #" + order.id());
         }
+        // V17: если текущий пользователь — оператор/админ/супервайзер с привязанным
+        // employee — закрепляем его как «оформителя» заказа. По нему дальше пойдут
+        // персональные уведомления о смене статуса.
+        Long currentEmployeeId = resolveCurrentEmployeeId();
+        if (currentEmployeeId != null) {
+            repository.setAssignedOperator(order.id(), currentEmployeeId);
+        }
+        // V17: проблемный клиент → уведомление админам. Не используем notifyOperators —
+        // эти алерты только для контрольной роли.
+        if (clientId != null) {
+            try {
+                String isProblem = itemRepository.getJdbc().queryForObject(
+                        "SELECT is_problem::text FROM clients WHERE id = :id",
+                        java.util.Map.of("id", clientId), String.class);
+                if ("true".equals(isProblem)) {
+                    notifyAdmins("ORDER_PROBLEM_CLIENT",
+                            "Заказ #" + String.format("%05d", order.id()) + " от проблемного клиента: " + clientName,
+                            "ORDER", order.id());
+                }
+            } catch (Exception ignored) {}
+        }
+        // Уведомление о новом заказе: оператору-оформителю (если есть) + админам.
+        notifyOperators(
+            "ORDER_CREATED",
+            "Новый заказ #" + String.format("%05d", order.id()) + " от " + clientName,
+            "ORDER",
+            order.id(),
+            currentEmployeeId
+        );
         return repository.findById(order.id()).orElseThrow();
     }
 
@@ -149,7 +236,11 @@ public class OrderService {
             // V11: если у SKU есть auto_complete_on_status (lifecycle SKU) и мы знаем employee_id
             // текущего оператора — назначаем его исполнителем сразу. Иначе услуге не сменить статус
             // (валидация требует хотя бы одного исполнителя).
-            if (currentEmployeeId != null && sku.autoCompleteOnStatus() != null) {
+            //
+            // V17: автоназначаем только «оформление» (auto_complete_on_status=CREATED) — это
+            // действие оператора. «Приём» (auto_complete_on_status=IN_PROGRESS) — действие
+            // стирщика, его назначим позже вручную.
+            if (currentEmployeeId != null && "CREATED".equals(sku.autoCompleteOnStatus())) {
                 serviceInstanceRepository.assignEmployee(serviceId, currentEmployeeId);
             }
         }
@@ -193,8 +284,9 @@ public class OrderService {
         for (var svc : allServices) {
             itemToSkuId.putIfAbsent(svc.orderItemId(), svc.skuId());
         }
-        // Сумма не-auto-add позиций — база для проверки free_threshold.
+        // Сумма не-auto-add позиций (без отменённых) — база для проверки free_threshold.
         BigDecimal nonAutoSum = items.stream()
+                .filter(i -> i.status() != OrderItemStatus.CANCELLED)
                 .filter(i -> !autoSkuIds.contains(itemToSkuId.get(i.id())))
                 .map(OrderItem::price)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
@@ -257,6 +349,15 @@ public class OrderService {
         // Например, LEAD → CREATED → услуга «Оформление» (auto_complete_on_status=CREATED) → DONE.
         autoCompleteServicesOnOrderStatus(orderId, newStatus);
 
+        // Уведомление: целимся в оператора-оформителя (если есть). Админы тоже получат.
+        notifyOperators(
+            "ORDER_STATUS_CHANGED",
+            "Заказ #" + String.format("%05d", orderId) + " → " + newStatus.name(),
+            "ORDER",
+            orderId,
+            order.assignedOperatorId()
+        );
+
         return repository.findById(orderId).orElseThrow();
     }
 
@@ -293,9 +394,10 @@ public class OrderService {
     @Transactional
     public void recalculateOrderStatus(Long orderId) {
         Order order = findById(orderId);
-        // Не трогаем LEAD, DELIVERED и COMPLETED — они управляются только вручную/через оплату.
-        if (order.status() == OrderStatus.LEAD
-                || order.status() == OrderStatus.DELIVERED
+        // DELIVERED и COMPLETED — финальные, их не трогаем (управляются только вручную/через оплату).
+        // LEAD — раньше исключался, но user явно попросил: если оператор перевёл услуги в IN_PROGRESS/DONE,
+        // LEAD-заказ должен автоматически сдвинуться. Поэтому LEAD теперь тоже подлежит auto-recalc.
+        if (order.status() == OrderStatus.DELIVERED
                 || order.status() == OrderStatus.COMPLETED) {
             return;
         }
@@ -311,6 +413,15 @@ public class OrderService {
             historyRepository.save(orderId, order.status(), newStatus);
             auditLogService.log("ORDER", orderId, "STATUS_CHANGE",
                     "Автоматическая смена статуса заказа #" + orderId + ": " + order.status() + " → " + newStatus);
+            // Уведомление: автоматическая смена статуса (рабочий завершил услугу и т.п.)
+            // Целимся в оператора-оформителя, чтобы он узнал что его заказ продвинулся.
+            notifyOperators(
+                "ORDER_STATUS_CHANGED",
+                "Заказ #" + String.format("%05d", orderId) + " → " + newStatus.name(),
+                "ORDER",
+                orderId,
+                order.assignedOperatorId()
+            );
         }
     }
 
@@ -624,6 +735,38 @@ public class OrderService {
         }
         BigDecimal total = baseAmount.add(modifierSum);
         repository.updateTotalAmount(orderId, total);
+    }
+
+    /**
+     * V17: пометить заказ как проблемный (или снять флаг).
+     *  • TRUE — обязательно reason ≥ 10 символов; шлём уведомление админам.
+     *  • FALSE — снимаем флаг, помечаем все «ORDER_PROBLEM*» уведомления по этому
+     *    заказу прочитанными (чтобы значок у админов перестал мигать).
+     */
+    @Transactional
+    public Order setProblem(Long orderId, boolean isProblem, String reason) {
+        Order order = findById(orderId);
+        if (isProblem) {
+            String trimmed = reason == null ? "" : reason.trim();
+            if (trimmed.length() < 10) {
+                throw new BusinessRuleException("Для пометки заказа проблемным укажите причину (минимум 10 символов).");
+            }
+            repository.setProblem(orderId, true, trimmed);
+            auditLogService.log("ORDER", orderId, "PROBLEM_FLAG",
+                    "Заказ #" + orderId + " помечен как проблемный: " + trimmed);
+            notifyAdmins("ORDER_PROBLEM",
+                    "ПРОБЛЕМА на заказе #" + String.format("%05d", orderId) + ": " + trimmed,
+                    "ORDER", orderId);
+        } else {
+            repository.setProblem(orderId, false, null);
+            auditLogService.log("ORDER", orderId, "PROBLEM_FLAG", "Снят флаг проблемы с заказа #" + orderId);
+            // Помечаем все ORDER_PROBLEM* уведомления по этому заказу прочитанными.
+            itemRepository.getJdbc().update(
+                    "UPDATE notifications SET is_read = TRUE " +
+                    "WHERE entity_type = 'ORDER' AND entity_id = :id AND type LIKE 'ORDER_PROBLEM%'",
+                    java.util.Map.of("id", orderId));
+        }
+        return repository.findById(orderId).orElseThrow();
     }
 
     /** Получить модификаторы заказа */

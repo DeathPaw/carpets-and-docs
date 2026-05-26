@@ -30,20 +30,22 @@ public class ProductionRepository {
     public List<AnalyticsDto.ProductionQueueOrder> productionQueue() {
         return jdbc.query(
             "SELECT o.id as order_id, o.client_name, o.status, o.created_at, o.total_amount, " +
-            "o.pickup_district, o.delivery_district, " +
+            "o.pickup_district, o.delivery_district, o.legacy_id, c.phone as client_phone, " +
             "COUNT(DISTINCT oi.id) as items_count, " +
             "COUNT(DISTINCT ois.id) as services_count, " +
             "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done " +
             "FROM orders o " +
+            "LEFT JOIN clients c ON c.id = o.client_id " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id " +
             "WHERE o.status IN ('FOR_PICKUP','IN_PROGRESS','PARTIALLY_DONE') " +
-            "GROUP BY o.id ORDER BY o.created_at ASC",
+            "GROUP BY o.id, c.phone ORDER BY o.created_at ASC",
             (RowMapper<AnalyticsDto.ProductionQueueOrder>) (rs, n) -> new AnalyticsDto.ProductionQueueOrder(
                 rs.getLong("order_id"), rs.getString("client_name"), rs.getString("status"),
                 rs.getTimestamp("created_at").toLocalDateTime(), nz(rs.getBigDecimal("total_amount")),
                 rs.getString("pickup_district"), rs.getString("delivery_district"),
-                longOrZero(rs, "items_count"), longOrZero(rs, "services_count"), longOrZero(rs, "services_done")
+                longOrZero(rs, "items_count"), longOrZero(rs, "services_count"), longOrZero(rs, "services_done"),
+                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
             )
         );
     }
@@ -55,17 +57,18 @@ public class ProductionRepository {
             "oi.length, oi.width, oi.weight, oi.area, " +
             "it.name as item_type_name, " +
             "o.client_name, o.created_at as order_created_at, " +
-            "o.pickup_district, " +
+            "o.pickup_district, o.legacy_id, c.phone as client_phone, " +
             "COUNT(DISTINCT ois.id) as services_count, " +
             "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done " +
             "FROM order_items oi " +
             "JOIN orders o ON o.id = oi.order_id " +
+            "LEFT JOIN clients c ON c.id = o.client_id " +
             "LEFT JOIN item_types it ON it.id = oi.item_type_id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id " +
             "WHERE oi.status IN ('CREATED','IN_PROGRESS','PARTIALLY_DONE') " +
             "AND o.status NOT IN ('CANCELLED','DELIVERED') " +
             "GROUP BY oi.id, oi.order_id, oi.status, oi.description, oi.length, oi.width, oi.weight, oi.area, " +
-            "it.name, o.client_name, o.created_at, o.pickup_district " +
+            "it.name, o.client_name, o.created_at, o.pickup_district, o.legacy_id, c.phone " +
             "ORDER BY o.created_at ASC, oi.id ASC",
             (RowMapper<AnalyticsDto.ProductionQueueItem>) (rs, n) -> new AnalyticsDto.ProductionQueueItem(
                 rs.getLong("item_id"), rs.getLong("order_id"), rs.getString("status"),
@@ -75,7 +78,8 @@ public class ProductionRepository {
                 rs.getString("item_type_name"), rs.getString("client_name"),
                 rs.getTimestamp("order_created_at").toLocalDateTime(),
                 rs.getString("pickup_district"),
-                longOrZero(rs, "services_count"), longOrZero(rs, "services_done")
+                longOrZero(rs, "services_count"), longOrZero(rs, "services_done"),
+                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
             )
         );
     }
@@ -93,13 +97,14 @@ public class ProductionRepository {
             "oi.id as item_id, oi.description as item_description, oi.status as item_status, " +
             "it.id as item_type_id, it.name as item_type_name, " +
             "o.id as order_id, o.client_name, o.created_at as order_created_at, " +
-            "o.pickup_district, " +
+            "o.pickup_district, o.legacy_id, c.phone as client_phone, " +
             "ROW_NUMBER() OVER (PARTITION BY oi.order_id ORDER BY oi.id) as position_in_order, " +
             "COALESCE(STRING_AGG(DISTINCT e.name, ', ' ORDER BY e.name), '') as employee_names, " +
             "COALESCE(ARRAY_AGG(DISTINCT e.id) FILTER (WHERE e.id IS NOT NULL), '{}') as employee_ids " +
             "FROM order_item_services ois " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
             "JOIN orders o ON o.id = oi.order_id " +
+            "LEFT JOIN clients c ON c.id = o.client_id " +
             "JOIN skus s ON s.id = ois.sku_id " +
             "JOIN item_types it ON it.id = oi.item_type_id " +
             "LEFT JOIN service_assignees sa ON sa.order_item_service_id = ois.id " +
@@ -107,7 +112,7 @@ public class ProductionRepository {
             "WHERE ois.status IN ('CREATED','IN_PROGRESS','DONE') " +
             "AND o.status NOT IN ('CANCELLED','DELIVERED','COMPLETED') " +
             "GROUP BY ois.id, s.name, s.pricing_type, oi.id, oi.description, oi.status, " +
-            "it.id, it.name, o.id, o.client_name, o.created_at, o.pickup_district " +
+            "it.id, it.name, o.id, o.client_name, o.created_at, o.pickup_district, o.legacy_id, c.phone " +
             "ORDER BY o.created_at ASC, oi.id ASC, ois.id ASC",
             (RowMapper<AnalyticsDto.ProductionQueueService>) (rs, n) -> {
                 java.sql.Array empIdsArr = rs.getArray("employee_ids");
@@ -124,7 +129,8 @@ public class ProductionRepository {
                     rs.getLong("order_id"), rs.getString("client_name"),
                     rs.getTimestamp("order_created_at").toLocalDateTime(),
                     rs.getString("pickup_district"), longOrZero(rs, "position_in_order"),
-                    rs.getString("employee_names"), employeeIds
+                    rs.getString("employee_names"), employeeIds,
+                    rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
                 );
             }
         );

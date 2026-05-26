@@ -6,13 +6,13 @@ import {
   updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
-  getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient,
+  getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem,
   getItemPhotos, uploadItemPhoto, deleteItemPhoto, getAllOrderPhotos,
   type ItemPhoto,
 } from '../api/orders'
 import { getItemServices, getAllOrderServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
 import { getItemTypes, getEmployees, getPriceModifiers, getEmployeeRoles } from '../api/references'
-import { getClient, getClientModifiers, getClientEvents, addClientEvent } from '../api/clients'
+import { getClient, getClientModifiers, getClientEvents, addClientEvent, addClientModifier } from '../api/clients'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
 import CancelReasonModal from '../components/CancelReasonModal'
@@ -314,8 +314,10 @@ function ServicesPanel({
               <th>Услуга</th>
               <th style={{ width: 110 }}>Статус</th>
               {/* Колонка «Стоимость» — только для НЕ дефолтных типов. У доставки/оформления
-                  стоимость задаётся самой позицией (default_price), услуги её не определяют. */}
-              {!isDefaultType && <th style={{ width: 110, textAlign: 'right' }}>Стоимость</th>}
+                  стоимость задаётся самой позицией (default_price), услуги её не определяют.
+                  Шире (190), потому что внутри ещё бывает «(ручная) А» + разбивка формулы,
+                  а с nowrap они выпирали в соседнюю колонку «Статус». */}
+              {!isDefaultType && <th style={{ width: 190, textAlign: 'right' }}>Стоимость</th>}
               <th style={{ width: 170 }}>Исполнители</th>
               {/* 280 вместо 220 — раньше кнопка «Исполнители» обрезалась справа,
                   потому что select(115) + gap + button(~120px) ≈ 250px не помещались. */}
@@ -372,30 +374,31 @@ function ServicesPanel({
                     ) : (() => {
                       const breakdown = formatPriceBreakdown(s, item)
                       return (
-                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 1 }}>
-                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, justifyContent: 'flex-end' }}>
-                            <span
-                              style={{ cursor: isEditable ? 'pointer' : 'default' }}
-                              onClick={() => isEditable && openPriceEdit(s.id)}
-                            >
-                              {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
-                            </span>
-                            {s.is_manual_price && (
-                              <span style={{ fontSize: '0.8em', color: '#666' }} title="Цена установлена вручную">
-                                (ручная)
-                              </span>
-                            )}
-                            {isEditable && s.is_manual_price && (
-                              <button
-                                className="btn-secondary btn-sm"
-                                onClick={() => void resetServicePriceToAuto(s.id)}
-                                title="Авто-расчёт цены (SKU × параметр позиции)"
-                                style={{ padding: '2px 8px', fontSize: '0.85em' }}
-                              >А</button>
-                            )}
+                        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                          {/* Цена + ✏️ — в одну строку. */}
+                          <span
+                            style={{ cursor: isEditable ? 'pointer' : 'default' }}
+                            onClick={() => isEditable && openPriceEdit(s.id)}
+                          >
+                            {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
                           </span>
+                          {/* (ручная) + кнопка «А» — отдельной строкой ниже, чтобы не вылезали
+                              в соседнюю колонку «Статус» (была проблема наложения текста). */}
+                          {s.is_manual_price && (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.78em', color: '#666' }}>
+                              (ручная)
+                              {isEditable && (
+                                <button
+                                  className="btn-secondary btn-sm"
+                                  onClick={() => void resetServicePriceToAuto(s.id)}
+                                  title="Авто-расчёт цены (SKU × параметр позиции)"
+                                  style={{ padding: '1px 6px', fontSize: '0.9em', lineHeight: 1 }}
+                                >А</button>
+                              )}
+                            </span>
+                          )}
                           {breakdown && (
-                            <span style={{ fontSize: '0.75em', color: '#888' }}>{breakdown}</span>
+                            <span style={{ fontSize: '0.72em', color: '#888' }}>{breakdown}</span>
                           )}
                         </div>
                       )
@@ -1005,6 +1008,8 @@ export default function OrderDetailPage() {
   const [error, setError] = useState('')
   const [orderModifiers, setOrderModifiers] = useState<OrderModifier[]>([])
   const [allModifiers, setAllModifiers] = useState<PriceModifier[]>([])
+  // V19: модификаторы которые уже на клиенте — чтобы скрывать кнопку «→ клиенту» для них.
+  const [clientModifierIds, setClientModifierIds] = useState<Set<number>>(new Set())
   const [showClientCard, setShowClientCard] = useState<Client | null>(null)
   const [clientCardMods, setClientCardMods] = useState<PriceModifier[]>([])
   const [clientEvents, setClientEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
@@ -1050,6 +1055,14 @@ export default function OrderDetailPage() {
       })
       setPhotosByItemId(grouped)
       getOrderModifiers(orderId).then(setOrderModifiers).catch(() => {})
+      // V19: подгружаем модификаторы клиента, чтобы знать какие уже у него есть.
+      if (o.client_id) {
+        getClientModifiers(o.client_id).then(mods => {
+          setClientModifierIds(new Set(mods.map(m => m.id)))
+        }).catch(() => setClientModifierIds(new Set()))
+      } else {
+        setClientModifierIds(new Set())
+      }
       setCommentValue(o.comment ?? '')
       setDetails({
         pickup_address: o.pickup_address ?? '',
@@ -1080,6 +1093,26 @@ export default function OrderDetailPage() {
       getEmployeeRoles().then(setRoles).catch(() => {}),
       getPriceModifiers().then(setAllModifiers).catch(() => {}),
     ]).finally(() => setLoading(false))
+  }, [orderId])
+
+  // V17 presence: пока страница открыта — пингуем бэк раз в 15 сек. Бэк не шлёт нам
+  // уведомления по этому заказу, пока мы тут (мы и так всё видим). Heartbeat TTL=30с,
+  // так что если вкладка свернётся/упадёт — за 30с автоматически «уйдём».
+  useEffect(() => {
+    if (!orderId) return
+    const ping = () => {
+      fetch(`/api/presence/order/${orderId}`, {
+        method: 'POST', credentials: 'include',
+      }).catch(() => {})
+    }
+    ping()
+    const id = setInterval(ping, 15000)
+    return () => {
+      clearInterval(id)
+      fetch(`/api/presence/order/${orderId}`, {
+        method: 'DELETE', credentials: 'include',
+      }).catch(() => {})
+    }
   }, [orderId])
 
   const [showCancelOrderModal, setShowCancelOrderModal] = useState(false)
@@ -1732,7 +1765,51 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             })
           }}>Дублировать заказ</button>
           <button className="btn-secondary" onClick={handlePrintPdf}>Печать PDF</button>
+          {/* V17: проблемный заказ. Поднятый флаг шлёт уведомление админам и виден в UI. */}
+          {!isReadonly && (
+            order.is_problem ? (
+              <button
+                className="btn-success"
+                title={`Снять флаг проблемы. Причина: ${order.problem_reason || '—'}`}
+                onClick={async () => {
+                  try {
+                    const updated = await setOrderProblem(orderId, false)
+                    setOrder(updated)
+                    showToast('Флаг проблемы снят', 'success')
+                  } catch (e: unknown) {
+                    showToast((e as any)?.response?.data?.message || 'Ошибка', 'error')
+                  }
+                }}
+              >✓ Проблема решена</button>
+            ) : (
+              <button
+                className="btn-warning"
+                title="Пометить заказ проблемным — придёт уведомление администраторам"
+                onClick={() => {
+                  const reason = prompt('Опишите проблему (минимум 10 символов):')?.trim()
+                  if (!reason) return
+                  if (reason.length < 10) { showToast('Минимум 10 символов', 'error'); return }
+                  setOrderProblem(orderId, true, reason).then(updated => {
+                    setOrder(updated)
+                    showToast('Заказ помечен проблемным, админы оповещены', 'success')
+                  }).catch((e: unknown) => {
+                    showToast((e as any)?.response?.data?.message || 'Ошибка', 'error')
+                  })
+                }}
+              >⚠ Проблема</button>
+            )
+          )}
         </div>
+        {/* Баннер о проблеме — на видном месте если флаг поднят. */}
+        {order.is_problem && (
+          <div style={{
+            marginTop: 12, padding: '10px 14px',
+            background: '#fdecea', border: '1px solid #f5b7b1',
+            borderRadius: 6, color: '#922b21',
+          }}>
+            <strong>⚠ Проблемный заказ:</strong> {order.problem_reason || 'причина не указана'}
+          </div>
+        )}
       </div>
 
       {/* Items */}
@@ -1810,6 +1887,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               {orderModifiers.map(m => {
                 const amount = Number(order.base_amount) * m.percent / 100
                 const isPositive = m.percent > 0
+                const alreadyOnClient = clientModifierIds.has(m.modifier_id)
                 return (
                   <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
                     <span>{m.modifier_name} ({isPositive ? '+' : ''}{m.percent}%)</span>
@@ -1817,6 +1895,28 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                       <span style={{ color: isPositive ? '#e74c3c' : '#27ae60', fontWeight: 600 }}>
                         {isPositive ? '+' : ''}{amount.toFixed(2)} &#8381;
                       </span>
+                      {/* V19: точечный перенос модификатора на клиента — кнопка прячется,
+                          если он уже привязан или у заказа нет клиента. */}
+                      {isEditable && order.client_id && !alreadyOnClient && (
+                        <button
+                          className="btn-secondary btn-sm"
+                          title="Сохранить именно этот модификатор в клиента"
+                          style={{ padding: '2px 8px', fontSize: '0.8em' }}
+                          onClick={async () => {
+                            try {
+                              await addClientModifier(order.client_id!, m.modifier_id)
+                              setClientModifierIds(prev => new Set([...prev, m.modifier_id]))
+                              showToast('Модификатор сохранён в клиента', 'success')
+                            } catch (e: unknown) {
+                              showToast((e as any)?.response?.data?.message || 'Ошибка', 'error')
+                            }
+                          }}
+                        >→ клиенту</button>
+                      )}
+                      {alreadyOnClient && (
+                        <span title="Этот модификатор уже привязан к клиенту"
+                          style={{ fontSize: '0.75em', color: '#27ae60' }}>✓ у клиента</span>
+                      )}
                       {isEditable && (
                         <button className="btn-danger btn-sm" onClick={() => handleRemoveModifier(m.modifier_id)} style={{ padding: '2px 6px' }}>&times;</button>
                       )}
@@ -1850,9 +1950,19 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             <strong>{Number(order.total_amount).toFixed(2)} &#8381;</strong>
           </div>
 
-          {isEditable && order.client_id && orderModifiers.length > 0 && (
-            <button className="btn-secondary btn-sm" onClick={handlePushToClient} style={{ alignSelf: 'flex-start' }}>
-              Сохранить модификаторы в клиента
+          {/* V19: кнопка bulk-переноса — теперь явно «все оставшиеся», чтобы не путать
+              с точечными кнопками «→ клиенту» рядом с каждым модификатором. */}
+          {isEditable && order.client_id && orderModifiers.some(m => !clientModifierIds.has(m.modifier_id)) && (
+            <button className="btn-secondary btn-sm" onClick={async () => {
+              await handlePushToClient()
+              // После bulk-push считаем что ВСЕ модификаторы заказа теперь у клиента.
+              setClientModifierIds(prev => {
+                const next = new Set(prev)
+                orderModifiers.forEach(m => next.add(m.modifier_id))
+                return next
+              })
+            }} style={{ alignSelf: 'flex-start' }}>
+              Сохранить все оставшиеся модификаторы клиенту
             </button>
           )}
         </div>

@@ -322,21 +322,23 @@ public class TrainingDataSeeder implements CommandLineRunner {
         // подбираются легко и совпадают с порядковым номером — оператор-инструктор
         // показывает «вот сотрудник Иванова, её PIN 1111».
         Map<String, Long> ids = new HashMap<>();
-        ids.put("Анна Иванова",     insertEmployee("Анна Иванова",     "+7 (911) 100-20-30", roles.get("Мастер чистки"), "1111"));
-        ids.put("Сергей Петров",    insertEmployee("Сергей Петров",    "+7 (911) 200-30-40", roles.get("Мастер чистки"), "2222"));
-        ids.put("Марина Соколова",  insertEmployee("Марина Соколова",  "+7 (911) 300-40-50", roles.get("Прачка"),         "3333"));
-        ids.put("Олег Кузнецов",    insertEmployee("Олег Кузнецов",    "+7 (911) 400-50-60", roles.get("Логист"),         "4444"));
+        // V15: contact разделено на phone + email. У тренажёра все четверо — физлица, email пустой.
+        ids.put("Анна Иванова",     insertEmployee("Анна Иванова",     "+7 (911) 100-20-30", null, roles.get("Мастер чистки"), "1111"));
+        ids.put("Сергей Петров",    insertEmployee("Сергей Петров",    "+7 (911) 200-30-40", null, roles.get("Мастер чистки"), "2222"));
+        ids.put("Марина Соколова",  insertEmployee("Марина Соколова",  "+7 (911) 300-40-50", null, roles.get("Прачка"),         "3333"));
+        ids.put("Олег Кузнецов",    insertEmployee("Олег Кузнецов",    "+7 (911) 400-50-60", null, roles.get("Логист"),         "4444"));
         return ids;
     }
 
-    private long insertEmployee(String name, String contact, Long roleId, String pin) {
+    private long insertEmployee(String name, String phone, String email, Long roleId, String pin) {
         var p = new MapSqlParameterSource()
             .addValue("n", name)
-            .addValue("c", contact)
+            .addValue("ph", phone)
+            .addValue("em", email)
             .addValue("r", roleId)
             .addValue("p", pin);
         return jdbc.queryForObject(
-            "INSERT INTO employees(name, contact, role_id, pin) VALUES (:n, :c, :r, :p) RETURNING id",
+            "INSERT INTO employees(name, phone, email, role_id, pin) VALUES (:n, :ph, :em, :r, :p) RETURNING id",
             p, Long.class
         );
     }

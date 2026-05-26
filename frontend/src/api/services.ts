@@ -74,6 +74,10 @@ export interface ItemFilterParams {
   orderId?: number
   positionInOrder?: number
   employeeId?: number
+  /** V13: поиск по клиенту/legacy ID. Все строковые — case-insensitive подстрока. */
+  clientName?: string
+  clientPhone?: string
+  legacyId?: number
   page?: number
   size?: number
 }
@@ -92,6 +96,9 @@ export const getFilteredItems = (params: ItemFilterParams) => {
   if (params.orderId) sp.append('orderId', String(params.orderId))
   if (params.positionInOrder) sp.append('positionInOrder', String(params.positionInOrder))
   if (params.employeeId) sp.append('employeeId', String(params.employeeId))
+  if (params.clientName) sp.append('clientName', params.clientName)
+  if (params.clientPhone) sp.append('clientPhone', params.clientPhone)
+  if (params.legacyId) sp.append('legacyId', String(params.legacyId))
   if (params.page != null) sp.append('page', String(params.page))
   if (params.size != null) sp.append('size', String(params.size))
   return client.get<OrderItemPositioned[]>(`/api/items?${sp.toString()}`).then(r => r.data)

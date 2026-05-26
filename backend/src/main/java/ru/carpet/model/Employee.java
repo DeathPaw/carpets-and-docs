@@ -12,7 +12,10 @@ import java.time.LocalDateTime;
 public record Employee(
         Long id,
         String name,
-        String contact,
+        /** V15: телефон и email в отдельных колонках. Раньше было одно поле `contact` —
+         *  юр.лица записывали туда e-mail, физлица — телефон, и в UI выходил винегрет. */
+        String phone,
+        String email,
         boolean active,
         Long roleId,
         LocalDateTime createdAt,
