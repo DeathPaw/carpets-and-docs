@@ -59,7 +59,7 @@ public class ClientController {
     public Client create(@Valid @RequestBody CreateClientRequest req) {
         Client client = clientRepository.save(
                 req.clientType(), req.name(), req.firstName(), req.lastName(),
-                req.phone(), req.extraPhone(), req.address(), req.district(),
+                req.phone(), req.extraPhone(), req.address(), req.apartment(), req.district(),
                 req.inn(), req.contactPerson(), req.contactPersonPhone(), req.comment(),
                 req.isPensioner() != null && req.isPensioner(),
                 req.isProblem() != null && req.isProblem(),
@@ -76,7 +76,7 @@ public class ClientController {
                 .orElseThrow(() -> new EntityNotFoundException("Client not found: " + id));
         Client client = clientRepository.update(
                 id, req.clientType(), req.name(), req.firstName(), req.lastName(),
-                req.phone(), req.extraPhone(), req.address(), req.district(),
+                req.phone(), req.extraPhone(), req.address(), req.apartment(), req.district(),
                 req.inn(), req.contactPerson(), req.contactPersonPhone(), req.comment(),
                 req.isPensioner() != null && req.isPensioner(),
                 req.isProblem() != null && req.isProblem(),

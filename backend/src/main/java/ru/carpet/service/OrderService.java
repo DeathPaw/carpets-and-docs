@@ -165,7 +165,21 @@ public class OrderService {
     @Transactional
     public Order create(Long clientId, String clientName, String comment,
                         String pickupAddress, String deliveryAddress, Long legacyId) {
+        return create(clientId, clientName, comment, pickupAddress, deliveryAddress, legacyId, null);
+    }
+
+    @Transactional
+    public Order create(Long clientId, String clientName, String comment,
+                        String pickupAddress, String deliveryAddress, Long legacyId,
+                        java.time.LocalDateTime createdAt) {
         Order order = repository.save(clientId, clientName, comment, pickupAddress, deliveryAddress, legacyId);
+        // V5: при импорте из старой системы оператор может указать дату создания в прошлом.
+        // Разрешено только если задан legacy_id (=это импорт), иначе игнорируем.
+        if (legacyId != null && createdAt != null) {
+            itemRepository.getJdbc().update(
+                "UPDATE orders SET created_at = :ts WHERE id = :id",
+                java.util.Map.of("ts", java.sql.Timestamp.valueOf(createdAt), "id", order.id()));
+        }
         // V10: автоматически добавляем SKU с is_auto_add=true (бывшие «default»-типы).
         // Каждый такой SKU имеет один или несколько атрибутов item_type — для каждого
         // прикрепляемого типа создаём позицию и навешиваем SKU как услугу.
@@ -217,33 +231,92 @@ public class OrderService {
      * (бывшая логика default-типов). Для каждого SKU берём первый связанный
      * item_type из его атрибутов и создаём позицию + услугу.
      */
+    /**
+     * V18: вместо «одна позиция на каждый auto-add SKU» строим 2 позиции:
+     *  • «Забор»: paid Доставка(забор) + lifecycle Оформление + Приём
+     *  • «Отвоз»: paid Доставка(отвоз)
+     * Если оператор хочет — может «свапнуть» платную доставку на Самовывоз (отдельный endpoint).
+     * Это убирает мешанину «4 позиции Доставка» которая путала оператора.
+     */
     private void attachAutoAddSkus(Long orderId) {
         var autoSkus = skuService.findAutoAdd();
-        // V11: текущий оператор из SecurityContext — для авто-назначения на «Оформление».
         Long currentEmployeeId = resolveCurrentEmployeeId();
 
+        // Группируем по lifecycle-смыслу: всё что auto_complete_on_status=IN_PROGRESS
+        // (Доставка-забор, Приём) — в «Забор»; всё что =DELIVERED (Доставка-отвоз) — в «Отвоз»;
+        // всё что =CREATED (Оформление) — тоже в «Забор», т.к. это вход в воронку.
+        java.util.List<ru.carpet.model.Sku> zaborSkus = new java.util.ArrayList<>();
+        java.util.List<ru.carpet.model.Sku> otvozSkus = new java.util.ArrayList<>();
+        for (var sku : autoSkus) {
+            String trg = sku.autoCompleteOnStatus();          // куда двигает SKU при DONE
+            String trigOrder = sku.triggersOrderStatus();     // куда двигает заказ при DONE
+            // «Отвоз» — если SKU триггерит заказ в DELIVERED (Доставка-отвоз).
+            if ("DELIVERED".equals(trigOrder)) {
+                otvozSkus.add(sku);
+            } else {
+                // Всё остальное (Доставка-забор, Оформление, Приём, и любое другое) — в Забор.
+                zaborSkus.add(sku);
+            }
+        }
+
+        Long deliveryItemTypeId = resolveDeliveryItemTypeId(autoSkus);
+        if (deliveryItemTypeId != null) {
+            if (!zaborSkus.isEmpty()) {
+                OrderItem zaborItem = itemRepository.save(orderId, deliveryItemTypeId, "Забор");
+                attachLifecycleSkus(zaborItem.id(), zaborSkus, currentEmployeeId);
+            }
+            if (!otvozSkus.isEmpty()) {
+                OrderItem otvozItem = itemRepository.save(orderId, deliveryItemTypeId, "Отвоз");
+                attachLifecycleSkus(otvozItem.id(), otvozSkus, currentEmployeeId);
+            }
+        }
+    }
+
+    /** Определяет item_type «Доставка» по атрибутам auto-add SKU (обычно id=12). */
+    private Long resolveDeliveryItemTypeId(java.util.List<ru.carpet.model.Sku> autoSkus) {
         for (var sku : autoSkus) {
             var typeIds = sku.attributes().get("item_type");
-            if (typeIds == null || typeIds.isEmpty()) continue;
-            Long itemTypeId;
-            try { itemTypeId = Long.parseLong(typeIds.get(0)); }
-            catch (NumberFormatException e) { continue; }
-            OrderItem item = itemRepository.save(orderId, itemTypeId, null);
-            BigDecimal price = sku.price() == null ? BigDecimal.ZERO : sku.price();
-            Long serviceId = serviceInstanceRepository.saveOne(item.id(), sku.id(), price);
-            itemRepository.updatePrice(item.id(), price);
+            if (typeIds != null && !typeIds.isEmpty()) {
+                try { return Long.parseLong(typeIds.get(0)); } catch (NumberFormatException e) {}
+            }
+        }
+        return null;
+    }
 
-            // V11: если у SKU есть auto_complete_on_status (lifecycle SKU) и мы знаем employee_id
-            // текущего оператора — назначаем его исполнителем сразу. Иначе услуге не сменить статус
-            // (валидация требует хотя бы одного исполнителя).
-            //
-            // V17: автоназначаем только «оформление» (auto_complete_on_status=CREATED) — это
-            // действие оператора. «Приём» (auto_complete_on_status=IN_PROGRESS) — действие
-            // стирщика, его назначим позже вручную.
+    /** Подвесить набор SKU как услуги на позицию + проставить начальную цену позиции. */
+    private void attachLifecycleSkus(Long itemId, java.util.List<ru.carpet.model.Sku> skus,
+                                     Long currentEmployeeId) {
+        BigDecimal totalPrice = BigDecimal.ZERO;
+        for (var sku : skus) {
+            BigDecimal price = sku.price() == null ? BigDecimal.ZERO : sku.price();
+            Long serviceId = serviceInstanceRepository.saveOne(itemId, sku.id(), price);
+            totalPrice = totalPrice.add(price);
+            // V17: «оформление» (CREATED) — автоназначаем оператора-создателя.
             if (currentEmployeeId != null && "CREATED".equals(sku.autoCompleteOnStatus())) {
                 serviceInstanceRepository.assignEmployee(serviceId, currentEmployeeId);
             }
         }
+        itemRepository.updatePrice(itemId, totalPrice);
+    }
+
+    /**
+     * V18: свап платной услуги Доставка ↔ Самовывоз на позиции. Используется кнопкой
+     * «Заменить на самовывоз» / «Вернуть платную». Старая услуга отменяется (CANCELLED),
+     * новая добавляется. Цена позиции пересчитывается через recalculateItemPrice.
+     */
+    @Transactional
+    public ru.carpet.model.OrderItemServiceInstance swapDeliveryService(
+            Long orderItemId, Long oldServiceId, Long newSkuId) {
+        var oldSvc = serviceInstanceRepository.findById(oldServiceId)
+                .orElseThrow(() -> new EntityNotFoundException("Service not found: " + oldServiceId));
+        // Отменяем старую (минимально — с reason, иначе бизнес-валидация на CANCELLED ругается).
+        serviceInstanceRepository.updateStatusWithReason(oldServiceId, ServiceStatus.CANCELLED,
+                "Заменено на альтернативный способ доставки");
+        var newSku = skuService.findById(newSkuId);
+        BigDecimal price = newSku.price() == null ? BigDecimal.ZERO : newSku.price();
+        Long newServiceId = serviceInstanceRepository.saveOne(orderItemId, newSkuId, price);
+        orderItemService.recalculateItemPrice(orderItemId);
+        return serviceInstanceRepository.findById(newServiceId).orElseThrow();
     }
 
     /**
@@ -554,7 +627,8 @@ public class OrderService {
         // Создаём гарантийный заказ с total_amount = 0
         Order warranty = repository.saveWarranty(original.clientId(), original.clientName(), warrantyComment, orderId);
 
-        // Копируем только выбранные позиции (с их ценами, услугами и размерами)
+        // Копируем только выбранные позиции (с их размерами). По #2 — гарантийный
+        // заказ полностью бесплатный (включая доставку): цены услуг и позиций обнуляем.
         List<OrderItem> allItems = itemRepository.findByOrderId(orderId);
         for (OrderItem item : allItems) {
             if (!itemIds.contains(item.id())) continue;
@@ -562,14 +636,21 @@ public class OrderService {
                     warranty.id(), item.itemTypeId(), item.description(),
                     item.length(), item.width(), item.weight(), item.area(), item.runningMeters()
             );
-            // V10: копируем услуги через sku_id
             List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(item.id());
             List<Long> skuIds = services.stream()
                     .map(OrderItemServiceInstance::skuId)
                     .filter(java.util.Objects::nonNull)
                     .toList();
             serviceInstanceRepository.saveAll(newItem.id(), skuIds);
+            // V19: гарантия = 0₽. Обнуляем все услуги нового item'а через ручную цену
+            // (manual=TRUE, чтобы recalc не вернул назад).
+            for (var svc : serviceInstanceRepository.findByOrderItemId(newItem.id())) {
+                serviceInstanceRepository.updatePrice(svc.id(), java.math.BigDecimal.ZERO);
+            }
+            itemRepository.updatePrice(newItem.id(), java.math.BigDecimal.ZERO);
         }
+        // На всякий случай: суммарная сумма заказа в 0.
+        repository.updateBaseAmount(warranty.id(), java.math.BigDecimal.ZERO);
 
         // Автоматически создаём событие клиента о гарантийном возврате
         if (original.clientId() != null) {
@@ -616,8 +697,9 @@ public class OrderService {
         return repository.findById(orderId).orElseThrow();
     }
 
-    /** Обновление деталей заказа (адреса, даты, legacy_id, координаты) */
-    public Order updateDetails(Long orderId, String pickupAddress, String deliveryAddress, Long legacyId,
+    /** Обновление деталей заказа (адреса, квартиры, даты, legacy_id, координаты) */
+    public Order updateDetails(Long orderId, String pickupAddress, String deliveryAddress,
+                               String pickupApartment, String deliveryApartment, Long legacyId,
                                java.time.LocalDate pickupDate, String pickupTimeSlot,
                                java.time.LocalDate deliveryDate, String deliveryTimeSlot,
                                String pickupDistrict, String deliveryDistrict,
@@ -625,7 +707,8 @@ public class OrderService {
                                BigDecimal deliveryLat, BigDecimal deliveryLon) {
         Order order = findById(orderId);
         assertEditable(order);
-        repository.updateDetails(orderId, pickupAddress, deliveryAddress, legacyId,
+        repository.updateDetails(orderId, pickupAddress, deliveryAddress,
+                pickupApartment, deliveryApartment, legacyId,
                 pickupDate, pickupTimeSlot, deliveryDate, deliveryTimeSlot,
                 pickupDistrict, deliveryDistrict,
                 pickupLat, pickupLon, deliveryLat, deliveryLon);

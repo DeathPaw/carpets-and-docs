@@ -19,6 +19,9 @@ public record Order(
         LocalDateTime paymentDate,
         String pickupAddress,
         String deliveryAddress,
+        /** V18: номер квартиры (отдельно от адреса, не геокодится). */
+        String pickupApartment,
+        String deliveryApartment,
         Long legacyId,
         LocalDate pickupDate,
         String pickupTimeSlot,

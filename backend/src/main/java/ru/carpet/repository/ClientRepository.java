@@ -26,6 +26,7 @@ public class ClientRepository {
             rs.getString("phone"),
             rs.getString("extra_phone"),
             rs.getString("address"),
+            rs.getString("apartment"),
             rs.getString("district"),
             rs.getString("inn"),
             rs.getString("contact_person"),
@@ -57,7 +58,7 @@ public class ClientRepository {
     }
 
     public Client save(String clientType, String name, String firstName, String lastName,
-                       String phone, String extraPhone, String address, String district,
+                       String phone, String extraPhone, String address, String apartment, String district,
                        String inn, String contactPerson, String contactPersonPhone,
                        String comment, boolean isPensioner, boolean isProblem, boolean isRegular,
                        BigDecimal lat, BigDecimal lon) {
@@ -69,6 +70,7 @@ public class ClientRepository {
                 .addValue("phone", phone)
                 .addValue("extraPhone", extraPhone)
                 .addValue("address", address)
+                .addValue("apartment", apartment)
                 .addValue("district", district)
                 .addValue("inn", inn)
                 .addValue("contactPerson", contactPerson)
@@ -81,9 +83,9 @@ public class ClientRepository {
                 .addValue("lon", lon);
         var keyHolder = new GeneratedKeyHolder();
         jdbc.update(
-                "INSERT INTO clients (client_type, name, first_name, last_name, phone, extra_phone, address, district, " +
+                "INSERT INTO clients (client_type, name, first_name, last_name, phone, extra_phone, address, apartment, district, " +
                 "inn, contact_person, contact_person_phone, comment, is_pensioner, is_problem, is_regular, lat, lon) " +
-                "VALUES (:clientType, :name, :firstName, :lastName, :phone, :extraPhone, :address, :district, " +
+                "VALUES (:clientType, :name, :firstName, :lastName, :phone, :extraPhone, :address, :apartment, :district, " +
                 ":inn, :contactPerson, :contactPersonPhone, :comment, :isPensioner, :isProblem, :isRegular, :lat, :lon)",
                 params, keyHolder, new String[]{"id"}
         );
@@ -91,7 +93,7 @@ public class ClientRepository {
     }
 
     public Client update(Long id, String clientType, String name, String firstName, String lastName,
-                         String phone, String extraPhone, String address, String district,
+                         String phone, String extraPhone, String address, String apartment, String district,
                          String inn, String contactPerson, String contactPersonPhone,
                          String comment, boolean isPensioner, boolean isProblem, boolean isRegular,
                          BigDecimal lat, BigDecimal lon) {
@@ -104,6 +106,7 @@ public class ClientRepository {
                 .addValue("phone", phone)
                 .addValue("extraPhone", extraPhone)
                 .addValue("address", address)
+                .addValue("apartment", apartment)
                 .addValue("district", district)
                 .addValue("inn", inn)
                 .addValue("contactPerson", contactPerson)
@@ -116,7 +119,7 @@ public class ClientRepository {
                 .addValue("lon", lon);
         jdbc.update(
                 "UPDATE clients SET client_type=:clientType, name=:name, first_name=:firstName, last_name=:lastName, " +
-                "phone=:phone, extra_phone=:extraPhone, address=:address, district=:district, " +
+                "phone=:phone, extra_phone=:extraPhone, address=:address, apartment=:apartment, district=:district, " +
                 "inn=:inn, contact_person=:contactPerson, contact_person_phone=:contactPersonPhone, " +
                 "comment=:comment, is_pensioner=:isPensioner, is_problem=:isProblem, is_regular=:isRegular, " +
                 "lat=:lat, lon=:lon, " +

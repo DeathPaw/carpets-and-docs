@@ -35,6 +35,8 @@ export default function CreateOrderModal({ onClose, onCreated }: {
   const [pickupCoords, setPickupCoords] = useState<{ lat: number | null; lon: number | null }>({ lat: null, lon: null })
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number | null; lon: number | null }>({ lat: null, lon: null })
   const [legacyId, setLegacyId] = useState('')
+  // V5: при импорте из старой системы (legacyId задан) можно указать дату прошлой.
+  const [legacyCreatedAt, setLegacyCreatedAt] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [searchTimer, setSearchTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
@@ -197,6 +199,8 @@ export default function CreateOrderModal({ onClose, onCreated }: {
         pickup_address: finalPickupAddress || null,
         delivery_address: finalDeliveryAddress || null,
         legacy_id: legacyId ? Number(legacyId) : null,
+        // V5: дата создания «задним числом» — только при импорте (legacy_id задан).
+        created_at: (legacyId && legacyCreatedAt) ? `${legacyCreatedAt}T12:00:00` : null,
       }
 
       const order = await createOrder(orderData)
@@ -447,6 +451,24 @@ export default function CreateOrderModal({ onClose, onCreated }: {
             onChange={e => setLegacyId(e.target.value)}
             placeholder="ID из старой системы (необязательно)"
           />
+          {/* V5: только при импорте показываем поле «дата создания» — оператор
+              переносит исторический заказ с реальной датой. */}
+          {legacyId && (
+            <div style={{ marginTop: 6, padding: '6px 10px', background: '#fff8e1', borderRadius: 4 }}>
+              <label style={{ fontSize: '0.9em', color: '#7c5e00', marginBottom: 4, display: 'block' }}>
+                Дата создания (из старой системы):
+              </label>
+              <input
+                type="date"
+                value={legacyCreatedAt}
+                onChange={e => setLegacyCreatedAt(e.target.value)}
+                max={new Date().toISOString().slice(0, 10)}
+              />
+              <div style={{ fontSize: '0.75em', color: '#888', marginTop: 4 }}>
+                Если пусто — заказ создастся текущей датой.
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="form-group">

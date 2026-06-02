@@ -126,6 +126,9 @@ export const updateOrderComment = (id: number, comment: string) =>
 export const updateOrderDetails = (id: number, data: {
   pickup_address?: string | null
   delivery_address?: string | null
+  /** V18: квартира — отдельно от адреса. */
+  pickup_apartment?: string | null
+  delivery_apartment?: string | null
   legacy_id?: number | null
   pickup_date?: string | null
   pickup_time_slot?: string | null
@@ -139,6 +142,10 @@ export const updateOrderDetails = (id: number, data: {
   delivery_lon?: number | null
 }) =>
   client.patch<Order>(`/api/orders/${id}/details`, data).then(r => r.data)
+
+/** V18: свап услуги на позиции — платная Доставка ↔ Самовывоз. */
+export const swapItemService = (orderId: number, itemId: number, serviceId: number, newSkuId: number) =>
+  client.post(`/api/orders/${orderId}/items/${itemId}/services/${serviceId}/swap`, { new_sku_id: newSkuId }).then(r => r.data)
 
 export const updateActualDates = (id: number, data: {
   actual_pickup_date?: string | null

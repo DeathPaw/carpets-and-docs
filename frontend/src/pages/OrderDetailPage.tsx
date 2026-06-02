@@ -19,6 +19,7 @@ import CancelReasonModal from '../components/CancelReasonModal'
 import StatusLegend from '../components/StatusLegend'
 import DistrictSelect from '../components/DistrictSelect'
 import AddressInput from '../components/AddressInput'
+import TimeSlotSelect from '../components/TimeSlotSelect'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal } from '../components/orders/order-detail-modals'
 import SkuPicker from '../components/SkuPicker'
@@ -331,6 +332,16 @@ function ServicesPanel({
               // Подсказку «Назначьте исполнителя» помещаем в колонку «Исполнители» —
               // чтобы колонка «Действия» во всех строках имела одинаковый layout (select + кнопка).
               const showAssignHint = noAssignees && s.status === 'CREATED' && !blocked
+              // V18: для услуг доставки/самовывоза показываем кнопку «свап» — оператор быстро
+              // меняет платную Доставку на Самовывоз и обратно. По имени SKU определяем тип.
+              const name = (s.sku_name || '').toLowerCase()
+              const isDelivery = name.includes('доставка')
+              const isSelfPickup = name.includes('самовывоз')
+              const swapTargetName = isDelivery
+                ? (name.includes('забор') ? 'Самовывоз (привоз клиентом)' : 'Самовывоз (отвоз клиентом)')
+                : (isSelfPickup
+                  ? (name.includes('привоз') ? 'Доставка (забор)' : 'Доставка (отвоз)')
+                  : null)
               return (
                 <tr key={s.id} style={blocked ? { background: '#fff3cd' } : undefined}>
                   <td>
@@ -339,6 +350,27 @@ function ServicesPanel({
                       <div style={{ fontSize: '0.8em', color: '#e67e22', fontWeight: 600 }}>
                         Не заполнены размеры
                       </div>
+                    )}
+                    {/* V18: свап Доставка ↔ Самовывоз. Видна только для active-услуг. */}
+                    {isEditable && swapTargetName && s.status !== 'CANCELLED' && (
+                      <button
+                        className="btn-secondary btn-sm"
+                        style={{ marginTop: 4, padding: '2px 8px', fontSize: '0.78em' }}
+                        title={`Заменить на «${swapTargetName}»`}
+                        onClick={async () => {
+                          try {
+                            // Найдём SKU по имени — берём из глобального справочника
+                            const all = await import('../api/sku').then(m => m.getSkus())
+                            const target = all.find(sku => sku.name === swapTargetName)
+                            if (!target) { showToast(`SKU «${swapTargetName}» не найден`, 'error'); return }
+                            await (await import('../api/orders')).swapItemService(orderId, itemId, s.id, target.id)
+                            await load(); onRefresh()
+                            showToast(`Услуга заменена на «${swapTargetName}»`, 'success')
+                          } catch (e: unknown) {
+                            showToast((e as any)?.response?.data?.message || 'Ошибка свапа', 'error')
+                          }
+                        }}
+                      >↔ {isDelivery ? 'Самовывоз' : 'Платная доставка'}</button>
                     )}
                   </td>
                   <td>
@@ -678,21 +710,25 @@ function ItemRow({
       }
     }
     try {
-      // Авто-подсчёт площади: если оператор задал длину и ширину, но не заполнил
-      // площадь — рассчитываем как L × W. Если ковёр круглый/овальный — оператор
-      // потом перезапишет area вручную (и при следующем сохранении мы её сохраним).
-      const lenN  = dimensions.length ? Number(dimensions.length) : null
-      const widN  = dimensions.width ? Number(dimensions.width) : null
-      let   areaN = dimensions.area ? Number(dimensions.area) : null
+      // V3: пользователь часто вводит "0,4" (русская запятая) → Number() даёт NaN.
+      // Нормализуем запятую в точку перед парсингом.
+      const parseNum = (s: string): number | null => {
+        if (!s.trim()) return null
+        const n = Number(s.replace(',', '.'))
+        return Number.isFinite(n) ? n : null
+      }
+      const lenN  = parseNum(dimensions.length)
+      const widN  = parseNum(dimensions.width)
+      let   areaN = parseNum(dimensions.area)
       if (areaN == null && lenN != null && widN != null) {
-        areaN = Math.round(lenN * widN * 100) / 100  // 2 знака после запятой
+        areaN = Math.round(lenN * widN * 100) / 100
       }
       await updateOrderItemDimensions(orderId, item.id, {
         length: lenN ?? undefined,
         width:  widN ?? undefined,
-        weight: dimensions.weight ? Number(dimensions.weight) : undefined,
+        weight: parseNum(dimensions.weight) ?? undefined,
         area:   areaN ?? undefined,
-        running_meters: dimensions.running_meters ? Number(dimensions.running_meters) : undefined,
+        running_meters: parseNum(dimensions.running_meters) ?? undefined,
       })
       setEditDimensions(false)
       onRefresh()
@@ -774,7 +810,7 @@ function ItemRow({
             <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
-                  type="number" min={0} step="0.01"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*"
                   placeholder="Длина"
                   value={dimensions.length}
                   onChange={e => setDimensions(d => {
@@ -790,7 +826,7 @@ function ItemRow({
                   style={{ width: 60 }}
                 />
                 <input
-                  type="number" min={0} step="0.01"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*"
                   placeholder="Ширина"
                   value={dimensions.width}
                   onChange={e => setDimensions(d => {
@@ -805,7 +841,7 @@ function ItemRow({
                   style={{ width: 60 }}
                 />
                 <input
-                  type="number" min={0} step="0.01"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*"
                   placeholder="Вес"
                   value={dimensions.weight}
                   onChange={e => setDimensions(d => ({...d, weight: e.target.value}))}
@@ -814,14 +850,14 @@ function ItemRow({
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
-                  type="number" min={0} step="0.01"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*"
                   placeholder="Площадь"
                   value={dimensions.area}
                   onChange={e => setDimensions(d => ({...d, area: e.target.value}))}
                   style={{ width: 60 }}
                 />
                 <input
-                  type="number" min={0} step="0.01"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*"
                   placeholder="Пог.м"
                   value={dimensions.running_meters}
                   onChange={e => setDimensions(d => ({...d, running_meters: e.target.value}))}
@@ -1022,6 +1058,9 @@ export default function OrderDetailPage() {
   const [details, setDetails] = useState({
     pickup_address: '',
     delivery_address: '',
+    // V18: квартира — отдельно от адреса.
+    pickup_apartment: '',
+    delivery_apartment: '',
     legacy_id: '' as string,
     pickup_date: '',
     pickup_time_slot: '',
@@ -1067,6 +1106,8 @@ export default function OrderDetailPage() {
       setDetails({
         pickup_address: o.pickup_address ?? '',
         delivery_address: o.delivery_address ?? '',
+        pickup_apartment: o.pickup_apartment ?? '',
+        delivery_apartment: o.delivery_apartment ?? '',
         legacy_id: o.legacy_id?.toString() ?? '',
         pickup_date: o.pickup_date ?? '',
         pickup_time_slot: o.pickup_time_slot ?? '',
@@ -1201,6 +1242,8 @@ export default function OrderDetailPage() {
       const updated = await updateOrderDetails(orderId, {
         pickup_address: details.pickup_address || null,
         delivery_address: details.delivery_address || null,
+        pickup_apartment: details.pickup_apartment || null,
+        delivery_apartment: details.delivery_apartment || null,
         legacy_id: details.legacy_id ? Number(details.legacy_id) : null,
         pickup_date: details.pickup_date || null,
         pickup_time_slot: details.pickup_time_slot || null,
@@ -1517,8 +1560,6 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                   <label>Адрес забора</label>
                   <AddressInput
                     value={details.pickup_address}
-                    // Ручное изменение — координаты обнуляем, иначе на карте останется
-                    // точка от предыдущего адреса.
                     onChange={v => setDetails(d => ({...d, pickup_address: v, pickup_lat: null, pickup_lon: null}))}
                     onResolved={(r) => setDetails(d => ({
                       ...d,
@@ -1527,9 +1568,16 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                       pickup_lat: r.lat,
                       pickup_lon: r.lon,
                     }))}
-                    // Загруженный из БД заказ уже имеет координаты — не пугаем оператора
-                    // бейджем «не подтверждён» при открытии существующего заказа.
                     externallyConfirmed={details.pickup_lat != null && details.pickup_lon != null}
+                  />
+                </div>
+                {/* V18: квартира отдельно — не идёт в геокодирование, но видна водителю. */}
+                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
+                  <label>Кв./офис</label>
+                  <input
+                    value={details.pickup_apartment}
+                    onChange={e => setDetails(d => ({...d, pickup_apartment: e.target.value}))}
+                    placeholder="25"
                   />
                 </div>
                 <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
@@ -1557,6 +1605,14 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                     externallyConfirmed={details.delivery_lat != null && details.delivery_lon != null}
                   />
                 </div>
+                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
+                  <label>Кв./офис</label>
+                  <input
+                    value={details.delivery_apartment}
+                    onChange={e => setDetails(d => ({...d, delivery_apartment: e.target.value}))}
+                    placeholder="25"
+                  />
+                </div>
                 <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
                   <label>Район доставки</label>
                   <DistrictSelect
@@ -1571,27 +1627,25 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                   <label>Дата забора</label>
                   <input type="date" value={details.pickup_date} onChange={e => setDetails(d => ({...d, pickup_date: e.target.value}))} />
                 </div>
-                <div className="form-group" style={{ flex: '0 0 140px', marginBottom: 4 }}>
+                <div className="form-group" style={{ flex: '0 0 200px', marginBottom: 4 }}>
                   <label>Время забора</label>
-                  <select value={details.pickup_time_slot} onChange={e => setDetails(d => ({...d, pickup_time_slot: e.target.value}))}>
-                    <option value="">—</option>
-                    <option value="08:00-12:00">8:00–12:00</option>
-                    <option value="12:00-18:00">12:00–18:00</option>
-                    <option value="18:00-22:00">18:00–22:00</option>
-                  </select>
+                  <TimeSlotSelect
+                    value={details.pickup_time_slot}
+                    onChange={v => setDetails(d => ({...d, pickup_time_slot: v}))}
+                    date={details.pickup_date}
+                  />
                 </div>
                 <div className="form-group" style={{ flex: '0 0 160px', marginBottom: 4 }}>
                   <label>Дата доставки</label>
                   <input type="date" value={details.delivery_date} onChange={e => setDetails(d => ({...d, delivery_date: e.target.value}))} />
                 </div>
-                <div className="form-group" style={{ flex: '0 0 140px', marginBottom: 4 }}>
+                <div className="form-group" style={{ flex: '0 0 200px', marginBottom: 4 }}>
                   <label>Время доставки</label>
-                  <select value={details.delivery_time_slot} onChange={e => setDetails(d => ({...d, delivery_time_slot: e.target.value}))}>
-                    <option value="">—</option>
-                    <option value="08:00-12:00">8:00–12:00</option>
-                    <option value="12:00-18:00">12:00–18:00</option>
-                    <option value="18:00-22:00">18:00–22:00</option>
-                  </select>
+                  <TimeSlotSelect
+                    value={details.delivery_time_slot}
+                    onChange={v => setDetails(d => ({...d, delivery_time_slot: v}))}
+                    date={details.delivery_date}
+                  />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
@@ -1608,7 +1662,10 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           ) : (
             <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
               <div>
-                <div style={{ marginBottom: 4 }}><strong>Адрес забора:</strong> {order.pickup_address || '(не указан)'}</div>
+                <div style={{ marginBottom: 4 }}>
+                  <strong>Адрес забора:</strong> {order.pickup_address || '(не указан)'}
+                  {order.pickup_apartment && <span style={{ marginLeft: 6, padding: '1px 6px', background: '#ecf0f1', borderRadius: 4, fontSize: '0.9em' }}>кв. {order.pickup_apartment}</span>}
+                </div>
                 {order.pickup_district && <div style={{ marginBottom: 4, fontSize: '0.9em', color: '#666' }}>Район: {order.pickup_district}</div>}
                 <div style={{ marginBottom: 4 }}><strong>Дата забора (план):</strong> {order.pickup_date ? `${order.pickup_date}` : '(не назначена)'} {order.pickup_time_slot ? `(${order.pickup_time_slot})` : ''}</div>
                 {order.actual_pickup_date && order.actual_pickup_date !== order.pickup_date && (
@@ -1616,7 +1673,10 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                 )}
               </div>
               <div>
-                <div style={{ marginBottom: 4 }}><strong>Адрес доставки:</strong> {order.delivery_address || '(не указан)'}</div>
+                <div style={{ marginBottom: 4 }}>
+                  <strong>Адрес доставки:</strong> {order.delivery_address || '(не указан)'}
+                  {order.delivery_apartment && <span style={{ marginLeft: 6, padding: '1px 6px', background: '#ecf0f1', borderRadius: 4, fontSize: '0.9em' }}>кв. {order.delivery_apartment}</span>}
+                </div>
                 {order.delivery_district && <div style={{ marginBottom: 4, fontSize: '0.9em', color: '#666' }}>Район: {order.delivery_district}</div>}
                 <div style={{ marginBottom: 4 }}><strong>Дата доставки (план):</strong> {order.delivery_date ? `${order.delivery_date}` : '(не назначена)'} {order.delivery_time_slot ? `(${order.delivery_time_slot})` : ''}</div>
                 {order.actual_delivery_date && order.actual_delivery_date !== order.delivery_date && (

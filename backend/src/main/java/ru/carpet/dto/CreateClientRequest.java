@@ -12,6 +12,8 @@ public record CreateClientRequest(
         String phone,
         String extraPhone,
         String address,
+        /** V18: номер квартиры (отдельно от адреса). */
+        String apartment,
         String district,
         String inn,
         String contactPerson,

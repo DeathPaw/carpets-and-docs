@@ -15,6 +15,8 @@ export interface Client {
   phone: string | null
   extra_phone: string | null
   address: string | null
+  /** V18: номер квартиры (отдельно). */
+  apartment: string | null
   district: string | null
   inn: string | null
   contact_person: string | null
@@ -71,6 +73,9 @@ export interface Order {
   /** V17: проблемный заказ — поднятый флаг шлёт уведомление админам. */
   is_problem: boolean
   problem_reason: string | null
+  /** V18: номер квартиры (отдельно от address). */
+  pickup_apartment: string | null
+  delivery_apartment: string | null
   created_at: string
   updated_at: string
 }
@@ -284,6 +289,8 @@ export interface CreateOrderRequest {
   pickup_address?: string | null
   delivery_address?: string | null
   legacy_id?: number | null
+  /** V5: ISO YYYY-MM-DDTHH:MM:SS. Игнорируется backend'ом если legacy_id == null. */
+  created_at?: string | null
 }
 
 export interface CreateClientRequest {
@@ -294,6 +301,8 @@ export interface CreateClientRequest {
   phone?: string
   extra_phone?: string
   address?: string
+  /** V18: номер квартиры. */
+  apartment?: string
   district?: string
   inn?: string
   contact_person?: string

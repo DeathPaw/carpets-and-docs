@@ -86,7 +86,8 @@ public class OrderController {
     @ResponseStatus(HttpStatus.CREATED)
     public Order create(@Valid @RequestBody CreateOrderRequest request) {
         return service.create(request.clientId(), request.clientName(), request.comment(),
-                request.pickupAddress(), request.deliveryAddress(), request.legacyId());
+                request.pickupAddress(), request.deliveryAddress(), request.legacyId(),
+                request.createdAt());
     }
 
     @GetMapping("/{id}")
@@ -112,9 +113,22 @@ public class OrderController {
         return service.setProblem(id, Boolean.TRUE.equals(flag), reason);
     }
 
+    /**
+     * V18: свап услуги на позиции (платная Доставка ↔ Самовывоз).
+     * body: {"new_sku_id": N}
+     */
+    @PostMapping("/{orderId}/items/{itemId}/services/{serviceId}/swap")
+    public ru.carpet.model.OrderItemServiceInstance swapService(
+            @PathVariable Long orderId, @PathVariable Long itemId,
+            @PathVariable Long serviceId, @RequestBody Map<String, Object> body) {
+        Long newSkuId = ((Number) body.get("new_sku_id")).longValue();
+        return service.swapDeliveryService(itemId, serviceId, newSkuId);
+    }
+
     @PatchMapping("/{id}/details")
     public Order updateDetails(@PathVariable Long id, @RequestBody UpdateOrderDetailsRequest request) {
-        return service.updateDetails(id, request.pickupAddress(), request.deliveryAddress(), request.legacyId(),
+        return service.updateDetails(id, request.pickupAddress(), request.deliveryAddress(),
+                request.pickupApartment(), request.deliveryApartment(), request.legacyId(),
                 request.pickupDate(), request.pickupTimeSlot(), request.deliveryDate(), request.deliveryTimeSlot(),
                 request.pickupDistrict(), request.deliveryDistrict(),
                 request.pickupLat(), request.pickupLon(),

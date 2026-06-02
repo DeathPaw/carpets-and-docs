@@ -87,6 +87,8 @@ public class OrderRepository {
                 paymentDate,
                 rs.getString("pickup_address"),
                 rs.getString("delivery_address"),
+                rs.getString("pickup_apartment"),
+                rs.getString("delivery_apartment"),
                 legacyId,
                 pickupDate,
                 rs.getString("pickup_time_slot"),
@@ -350,7 +352,8 @@ public class OrderRepository {
         );
     }
 
-    public void updateDetails(Long id, String pickupAddress, String deliveryAddress, Long legacyId,
+    public void updateDetails(Long id, String pickupAddress, String deliveryAddress,
+                              String pickupApartment, String deliveryApartment, Long legacyId,
                               java.time.LocalDate pickupDate, String pickupTimeSlot,
                               java.time.LocalDate deliveryDate, String deliveryTimeSlot,
                               String pickupDistrict, String deliveryDistrict,
@@ -360,6 +363,8 @@ public class OrderRepository {
                 .addValue("id", id)
                 .addValue("pickupAddress", pickupAddress)
                 .addValue("deliveryAddress", deliveryAddress)
+                .addValue("pickupApartment", pickupApartment)
+                .addValue("deliveryApartment", deliveryApartment)
                 .addValue("legacyId", legacyId)
                 .addValue("pickupDate", pickupDate)
                 .addValue("pickupTimeSlot", pickupTimeSlot)
@@ -373,6 +378,7 @@ public class OrderRepository {
                 .addValue("deliveryLon", deliveryLon);
         jdbc.update(
                 "UPDATE orders SET pickup_address = :pickupAddress, delivery_address = :deliveryAddress, " +
+                "pickup_apartment = :pickupApartment, delivery_apartment = :deliveryApartment, " +
                 "legacy_id = :legacyId, pickup_date = :pickupDate, pickup_time_slot = :pickupTimeSlot, " +
                 "delivery_date = :deliveryDate, delivery_time_slot = :deliveryTimeSlot, " +
                 "pickup_district = :pickupDistrict, delivery_district = :deliveryDistrict, " +

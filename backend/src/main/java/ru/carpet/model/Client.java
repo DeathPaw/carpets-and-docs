@@ -12,6 +12,8 @@ public record Client(
         String phone,
         String extraPhone,
         String address,
+        /** V18: номер квартиры (отдельно от address, не участвует в геокодировании). */
+        String apartment,
         String district,
         String inn,
         String contactPerson,
