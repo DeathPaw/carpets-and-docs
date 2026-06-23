@@ -333,9 +333,14 @@ public class OrderService {
                 items.stream().map(OrderItem::id).toList());
         java.util.Set<Long> autoSkuIds = new java.util.HashSet<>();
         for (var s : autoSkus) autoSkuIds.add(s.id());
-        // Определяем для каждой позиции — auto или нет (по её первой услуге).
+        // Определяем для каждой позиции — auto или нет — по её АКТИВНОЙ услуге.
+        // CANCELLED игнорируем: после свапа Доставка→Самовывоз исходная Доставка
+        // (auto-add) остаётся в позиции отменённой, а активная — Самовывоз (не auto-add).
+        // Без фильтра по статусу putIfAbsent цеплял первую CANCELLED Доставку и
+        // ошибочно считал позицию auto-add, перезатирая её цену через free_threshold.
         java.util.Map<Long, Long> itemToSkuId = new java.util.HashMap<>();
         for (var svc : allServices) {
+            if (svc.status() == ServiceStatus.CANCELLED) continue;
             itemToSkuId.putIfAbsent(svc.orderItemId(), svc.skuId());
         }
         // Сумма не-auto-add позиций (без отменённых) — база для проверки free_threshold.
