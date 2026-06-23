@@ -34,33 +34,38 @@ const createSingleIcon = (color: string): L.DivIcon => L.divIcon({
  * Иконка кластера: одна капля, в круге внутри — число.
  * Цвет: если в группе только один тип — соответствующий, если оба — половина синего, половина зелёного.
  */
-const createClusterIcon = (count: number, kinds: Set<MarkerKind>): L.DivIcon => {
-  const hasPickup = kinds.has('pickup')
-  const hasDelivery = kinds.has('delivery')
+const createClusterIcon = (count: number, kinds: Set<MarkerKind>, dayColors: string[] = []): L.DivIcon => {
+  // V19 (#7): если в кластере точки с РАЗНЫМИ цветами по дням недели — рисуем
+  // полосатую заливку (каждому цвету — равная вертикальная полоса). По одной точке
+  // на цвет видно, какие дни смешались. Без дней — fallback на старую логику kind.
+  const uniqueColors = Array.from(new Set(dayColors.filter(Boolean)))
   let pathFill: string
-  if (hasPickup && hasDelivery) {
-    // Двухцветный градиент: левая половина — синяя (забор), правая — зелёная (доставка)
-    pathFill = 'url(#splitGrad)'
-  } else if (hasPickup) {
-    pathFill = COLOR_PICKUP
-  } else if (hasDelivery) {
-    pathFill = COLOR_DELIVERY
+  let gradientDef = ''
+  if (uniqueColors.length >= 2) {
+    const stops = uniqueColors.map((c, i) => {
+      const start = (i / uniqueColors.length) * 100
+      const end = ((i + 1) / uniqueColors.length) * 100
+      return `<stop offset="${start}%" stop-color="${c}"/><stop offset="${end}%" stop-color="${c}"/>`
+    }).join('')
+    gradientDef = `<linearGradient id="dayGrad" x1="0" x2="1" y1="0" y2="0">${stops}</linearGradient>`
+    pathFill = 'url(#dayGrad)'
+  } else if (uniqueColors.length === 1) {
+    pathFill = uniqueColors[0]
   } else {
-    pathFill = COLOR_NEUTRAL
+    const hasPickup = kinds.has('pickup')
+    const hasDelivery = kinds.has('delivery')
+    if (hasPickup && hasDelivery) {
+      gradientDef = `<linearGradient id="splitGrad" x1="0" x2="1" y1="0" y2="0"><stop offset="50%" stop-color="${COLOR_PICKUP}"/><stop offset="50%" stop-color="${COLOR_DELIVERY}"/></linearGradient>`
+      pathFill = 'url(#splitGrad)'
+    } else if (hasPickup) pathFill = COLOR_PICKUP
+    else if (hasDelivery) pathFill = COLOR_DELIVERY
+    else pathFill = COLOR_NEUTRAL
   }
 
-  // Размер слегка больше у кластеров, чтобы цифра помещалась.
   const size = count >= 10 ? 36 : 32
   const fontSize = count >= 10 ? 13 : 14
-
-  // SVG с inline gradient для двухцветного варианта.
   const svg = `<svg width="${size}" height="${Math.round(size * 1.4)}" viewBox="0 0 28 40" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="splitGrad" x1="0" x2="1" y1="0" y2="0">
-        <stop offset="50%" stop-color="${COLOR_PICKUP}"/>
-        <stop offset="50%" stop-color="${COLOR_DELIVERY}"/>
-      </linearGradient>
-    </defs>
+    <defs>${gradientDef}</defs>
     <path d="M14 0 C6 0 0 6 0 14 C0 24 14 40 14 40 S28 24 28 14 C28 6 22 0 14 0 Z"
           fill="${pathFill}" stroke="#fff" stroke-width="2"/>
     <circle cx="14" cy="14" r="9" fill="#fff"/>
@@ -91,6 +96,13 @@ export interface MapPoint {
   /** V12: явный цвет маркера (для раскраски по дню недели в логистике).
    *  Если задан — используется вместо цвета по kind. */
   color?: string
+  /** V19 (#7): структурированные поля для красивого тултипа. Если заданы — рисуем
+   *  блок «дата / время / № / адрес / имя» в этом порядке, иначе fallback на title+description. */
+  date?: string         // YYYY-MM-DD
+  time?: string         // HH:MM-HH:MM
+  orderNumber?: string  // «#00012»
+  address?: string
+  clientName?: string
 }
 
 interface Props {
@@ -101,6 +113,42 @@ interface Props {
 }
 
 const SPB_CENTER: [number, number] = [59.9342802, 30.3350986]
+
+/**
+ * V19 (#7): красивая раскладка точки в тултипе — дата, время, № заказа, адрес, имя.
+ * Falls back to title/description если структурные поля не заданы.
+ */
+function renderStructuredPoint(p: MapPoint) {
+  const hasStructured = p.date || p.time || p.orderNumber || p.address || p.clientName
+  if (!hasStructured) {
+    return (
+      <>
+        {p.title && <div style={{ fontWeight: 600 }}>{p.title}</div>}
+        {p.description && <div style={{ fontSize: '0.85em', color: '#555' }}>{p.description}</div>}
+      </>
+    )
+  }
+  const kindLabel = p.kind === 'pickup' ? 'Забор' : p.kind === 'delivery' ? 'Доставка' : null
+  return (
+    <div style={{ fontSize: '0.85em', lineHeight: 1.45 }}>
+      {(p.date || p.time) && (
+        <div style={{ fontWeight: 600, color: '#2c3e50' }}>
+          {p.date ? new Date(p.date).toLocaleDateString('ru', { weekday: 'short', day: 'numeric', month: 'short' }) : ''}
+          {p.date && p.time ? ' · ' : ''}
+          {p.time || ''}
+        </div>
+      )}
+      {p.orderNumber && (
+        <div>
+          {kindLabel && <span style={{ color: '#7f8c8d' }}>{kindLabel} · </span>}
+          {p.orderNumber}
+        </div>
+      )}
+      {p.address && <div style={{ color: '#34495e' }}>{p.address}</div>}
+      {p.clientName && <div style={{ color: '#555' }}>{p.clientName}</div>}
+    </div>
+  )
+}
 
 const singleIconFor = (kind: MarkerKind, color?: string): L.DivIcon => {
   if (color) return createSingleIcon(color) // V12: явный цвет (день недели в логистике)
@@ -192,7 +240,7 @@ export default function MapMarkers({
         {groups.map((g, i) => {
           const isCluster = g.points.length > 1
           const icon = isCluster
-            ? createClusterIcon(g.points.length, g.kinds)
+            ? createClusterIcon(g.points.length, g.kinds, g.points.map(p => p.color || ''))
             : singleIconFor(g.points[0].kind, g.points[0].color)
           // Клик по маркеру намеренно не обрабатывается — поведение одинаковое
           // для одиночек и кластеров. Информация показывается в подсказке.
@@ -205,29 +253,23 @@ export default function MapMarkers({
               <Tooltip direction="top" offset={[0, isCluster ? -44 : -36]} opacity={1} className="map-tooltip">
                 {isCluster ? (
                   <>
-                    <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>
                       {g.points.length} {g.points.length === 1 ? 'заказ' : 'заказов'} в этой точке
                     </div>
                     {g.points.map((p, idx) => (
-                      <div key={idx} style={{ fontSize: '0.85em', marginTop: idx > 0 ? 2 : 0 }}>
-                        <span style={{
-                          display: 'inline-block', width: 8, height: 8, borderRadius: 4,
-                          marginRight: 6,
-                          background: p.kind === 'pickup' ? COLOR_PICKUP
-                                     : p.kind === 'delivery' ? COLOR_DELIVERY
-                                     : COLOR_NEUTRAL,
-                        }} />
-                        {p.title}{p.description ? ` · ${p.description}` : ''}
+                      <div key={idx} style={{ fontSize: '0.85em', marginTop: idx > 0 ? 6 : 0, paddingTop: idx > 0 ? 6 : 0, borderTop: idx > 0 ? '1px solid #ecf0f1' : undefined }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                          <span style={{
+                            display: 'inline-block', width: 10, height: 10, borderRadius: 2,
+                            background: p.color || (p.kind === 'pickup' ? COLOR_PICKUP : p.kind === 'delivery' ? COLOR_DELIVERY : COLOR_NEUTRAL),
+                          }} />
+                          {renderStructuredPoint(p)}
+                        </div>
                       </div>
                     ))}
                   </>
                 ) : (
-                  (g.points[0].title || g.points[0].description) && (
-                    <>
-                      {g.points[0].title && <div style={{ fontWeight: 600, marginBottom: g.points[0].description ? 2 : 0 }}>{g.points[0].title}</div>}
-                      {g.points[0].description && <div style={{ fontSize: '0.85em', color: '#555' }}>{g.points[0].description}</div>}
-                    </>
-                  )
+                  renderStructuredPoint(g.points[0])
                 )}
               </Tooltip>
             </Marker>

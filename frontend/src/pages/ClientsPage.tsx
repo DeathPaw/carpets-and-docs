@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier, getClientEvents, addClientEvent } from '../api/clients'
 import { getPriceModifiers } from '../api/references'
 import { useToast } from '../components/Toast'
@@ -30,6 +30,7 @@ function CreateClientModal({
           contact_person_phone: editClient.contact_person_phone || '',
           inn: editClient.inn || '',
           address: editClient.address || '',
+          apartment: editClient.apartment || '',
           district: editClient.district || '',
           comment: editClient.comment || '',
           lat: editClient.lat,
@@ -77,6 +78,7 @@ function CreateClientModal({
         contact_person_phone: form.contact_person_phone ? formatPhone(form.contact_person_phone) : '',
         inn: form.inn || undefined,
         address: form.address || undefined,
+        apartment: form.apartment || undefined,
         district: form.district || undefined,
         comment: form.comment || undefined,
         lat: form.lat,
@@ -375,6 +377,11 @@ export default function ClientsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
   const [tab, setTab] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>('INDIVIDUAL')
+  // V19 (#5): раздельные фильтры — имя, телефон, № заказа.
+  const [nameFilter, setNameFilter] = useState('')
+  const [phoneFilter, setPhoneFilter] = useState('')
+  const [orderIdFilter, setOrderIdFilter] = useState('')
+  const [legacyIdFilter, setLegacyIdFilter] = useState('')
 
   const load = async () => {
     setLoading(true)
@@ -390,6 +397,17 @@ export default function ClientsPage() {
   }
 
   useEffect(() => { void load() }, [])
+
+  // V19 (#8): открыть карточку клиента в режиме редактирования по URL-параметру editId
+  // (используется при переходе из карточки заказа: «✎ Редактировать клиента»).
+  const [searchParams] = useSearchParams()
+  useEffect(() => {
+    const id = searchParams.get('editId')
+    if (id && clients.length > 0) {
+      const c = clients.find(c => c.id === Number(id))
+      if (c) setEditClient(c)
+    }
+  }, [searchParams, clients])
 
   const handleSearch = (q: string) => {
     setSearchQuery(q)
@@ -419,7 +437,39 @@ export default function ClientsPage() {
     void load()
   }
 
-  const filtered = clients.filter(c => (c.client_type || 'INDIVIDUAL') === tab)
+  // V19 (#5, #8): № заказа и legacy ID — отдельный lookup через бэк. Каждый из них,
+  // если задан, ищет заказ → client_id. Результат: либо id клиента, либо -1 «не найден».
+  const [orderLookupClientId, setOrderLookupClientId] = useState<number | null>(null)
+  useEffect(() => {
+    const oid = orderIdFilter.trim() ? Number(orderIdFilter) : null
+    const lid = legacyIdFilter.trim() ? Number(legacyIdFilter) : null
+    if (oid == null && lid == null) { setOrderLookupClientId(null); return }
+    if (oid != null && (!Number.isFinite(oid) || oid <= 0)) { setOrderLookupClientId(-1); return }
+    if (lid != null && (!Number.isFinite(lid) || lid <= 0)) { setOrderLookupClientId(-1); return }
+    import('../api/orders').then(m => m.getOrdersQuery({
+      orderId: oid ?? undefined,
+      legacyId: lid ?? undefined,
+      size: 1,
+    })).then(res => {
+      const cid = res.content[0]?.client_id
+      setOrderLookupClientId(cid ?? -1)
+    }).catch(() => setOrderLookupClientId(-1))
+  }, [orderIdFilter, legacyIdFilter])
+
+  const filtered = clients.filter(c => {
+    if ((c.client_type || 'INDIVIDUAL') !== tab) return false
+    if (nameFilter && !(c.name || '').toLowerCase().includes(nameFilter.toLowerCase())) return false
+    if (phoneFilter) {
+      const digits = (c.phone || '').replace(/\D/g, '') + ' ' + (c.extra_phone || '').replace(/\D/g, '')
+      const q = phoneFilter.replace(/\D/g, '')
+      if (q && !digits.includes(q)) return false
+    }
+    if (orderLookupClientId !== null) {
+      if (orderLookupClientId === -1) return false
+      if (c.id !== orderLookupClientId) return false
+    }
+    return true
+  })
 
   const renderIndividualsTable = (list: Client[]) => (
     <table>
@@ -496,12 +546,48 @@ export default function ClientsPage() {
       </div>
 
       <div className="filters" data-tour="clients-search">
-        <div className="form-group" style={{ flex: 1, minWidth: 240 }}>
-          <label>Поиск</label>
+        <div className="form-group" style={{ flex: 1, minWidth: 200 }}>
+          <label>Поиск общий</label>
           <input
             value={searchQuery}
             onChange={e => handleSearch(e.target.value)}
-            placeholder="Поиск по имени, телефону, адресу, ИНН, организации..."
+            placeholder="Имя, телефон, адрес, ИНН, организация..."
+          />
+        </div>
+        {/* V19 (#5): отдельные раздельные поля — как на странице Заказов. */}
+        <div className="form-group" style={{ flex: '0 0 180px' }}>
+          <label>Имя</label>
+          <input
+            value={nameFilter}
+            onChange={e => setNameFilter(e.target.value)}
+            placeholder="Фрагмент имени"
+          />
+        </div>
+        <div className="form-group" style={{ flex: '0 0 180px' }}>
+          <label>Телефон</label>
+          <input
+            value={phoneFilter}
+            onChange={e => setPhoneFilter(e.target.value)}
+            placeholder="Последние цифры"
+          />
+        </div>
+        <div className="form-group" style={{ flex: '0 0 150px' }}>
+          <label>№ заказа</label>
+          <input
+            type="number"
+            value={orderIdFilter}
+            onChange={e => setOrderIdFilter(e.target.value)}
+            placeholder="ID заказа"
+          />
+        </div>
+        {/* V19 (#8): поиск по legacy ID — клиент находится через заказ. */}
+        <div className="form-group" style={{ flex: '0 0 150px' }}>
+          <label>Legacy ID</label>
+          <input
+            type="number"
+            value={legacyIdFilter}
+            onChange={e => setLegacyIdFilter(e.target.value)}
+            placeholder="ID из старой системы"
           />
         </div>
       </div>

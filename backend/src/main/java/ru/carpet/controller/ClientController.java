@@ -72,7 +72,7 @@ public class ClientController {
 
     @PutMapping("/{id}")
     public Client update(@PathVariable Long id, @Valid @RequestBody CreateClientRequest req) {
-        clientRepository.findById(id)
+        Client before = clientRepository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Client not found: " + id));
         Client client = clientRepository.update(
                 id, req.clientType(), req.name(), req.firstName(), req.lastName(),
@@ -83,6 +83,16 @@ public class ClientController {
                 req.isRegular() != null && req.isRegular(),
                 req.lat(), req.lon()
         );
+        // V19 (#7): денормализованное orders.client_name автоматически не обновляется,
+        // если оператор изменил имя клиента. Пробрасываем новое имя во все его заказы.
+        if (!java.util.Objects.equals(before.name(), client.name())) {
+            int updated = orderRepository.updateClientNameInOrders(id, client.name());
+            if (updated > 0) {
+                auditLogService.log("CLIENT", id, "RENAME_PROPAGATE",
+                    "Имя клиента изменено: '" + before.name() + "' → '" + client.name()
+                    + "', обновлено заказов: " + updated);
+            }
+        }
         auditLogService.log("CLIENT", id, "UPDATE", "Обновлён клиент: " + client.name());
         return client;
     }

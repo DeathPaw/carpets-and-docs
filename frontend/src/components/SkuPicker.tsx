@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getMatchingSkus, getSkuGroups } from '../api/sku'
+import { useEscapeClose } from '../hooks/useEscapeClose'
 import type { OrderItem, SkuGroup, SkuMatchResult } from '../types'
 
 const PRICING_LABEL: Record<string, string> = {
@@ -38,6 +39,7 @@ export default function SkuPicker({
   const [search, setSearch] = useState('')
   const [onlyMatching, setOnlyMatching] = useState(true)
   const [loading, setLoading] = useState(true)
+  useEscapeClose(true, onClose)
 
   useEffect(() => {
     void getSkuGroups().then(setGroups).catch(() => setGroups([]))

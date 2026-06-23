@@ -44,7 +44,7 @@ public class ProfitabilityRepository {
             "LEFT JOIN orders o ON o.id = oi.order_id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
             "LEFT JOIN skus s ON s.id = ois.sku_id " +
-            "WHERE 1=1 " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "WHERE COALESCE(o.paid, FALSE) = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY it.id, it.name ORDER BY revenue DESC NULLS LAST",
             dateParams(dateFrom, dateTo),
             (RowMapper<AnalyticsDto.ProfitByItemType>) (rs, n) -> new AnalyticsDto.ProfitByItemType(
@@ -68,7 +68,7 @@ public class ProfitabilityRepository {
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
             "LEFT JOIN skus s ON s.id = ois.sku_id " +
-            "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "WHERE o.paid = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY c.id, c.name, c.client_type ORDER BY profit DESC NULLS LAST LIMIT 50",
             dateParams(dateFrom, dateTo),
             (RowMapper<AnalyticsDto.ProfitByClient>) (rs, n) -> new AnalyticsDto.ProfitByClient(
@@ -103,7 +103,7 @@ public class ProfitabilityRepository {
             "JOIN skus s ON s.id = ois.sku_id " +
             "JOIN (SELECT order_item_service_id, COUNT(*) AS cnt FROM service_assignees GROUP BY order_item_service_id) assigned_count " +
             "  ON assigned_count.order_item_service_id = ois.id " +
-            "WHERE 1=1 " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "WHERE COALESCE(o.paid, FALSE) = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY e.id, e.name ORDER BY revenue DESC",
             dateParams(dateFrom, dateTo),
             (RowMapper<AnalyticsDto.ProfitByEmployee>) (rs, n) -> new AnalyticsDto.ProfitByEmployee(
@@ -151,7 +151,7 @@ public class ProfitabilityRepository {
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
             "LEFT JOIN skus s ON s.id = ois.sku_id " +
-            "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "WHERE o.paid = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
             "GROUP BY COALESCE(o.pickup_district, '(без района)') ORDER BY profit DESC NULLS LAST",
             dateParams(dateFrom, dateTo),
             (RowMapper<AnalyticsDto.ProfitByDistrict>) (rs, n) -> new AnalyticsDto.ProfitByDistrict(
@@ -172,7 +172,7 @@ public class ProfitabilityRepository {
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
             "LEFT JOIN skus s ON s.id = ois.sku_id " +
-            "WHERE o.status NOT IN ('CANCELLED') " + dateFilterClause("o", dateFrom, dateTo));
+            "WHERE o.paid = TRUE " + dateFilterClause("o", dateFrom, dateTo));
         if (clientId != null) {
             sb.append(" AND o.client_id = :clientId ");
             p.put("clientId", clientId);

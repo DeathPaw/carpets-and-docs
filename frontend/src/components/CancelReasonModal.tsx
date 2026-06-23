@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useEscapeClose } from '../hooks/useEscapeClose'
 
 interface Props {
   title?: string
@@ -21,6 +22,7 @@ export default function CancelReasonModal({
   onCancel,
 }: Props) {
   const [reason, setReason] = useState('')
+  useEscapeClose(true, onCancel)
 
   const trimmed = reason.trim()
   const tooShort = trimmed.length < MIN_LEN

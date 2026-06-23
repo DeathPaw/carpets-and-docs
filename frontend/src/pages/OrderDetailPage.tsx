@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, payOrder, createWarrantyOrder,
-  updateOrderItemDescription, updateOrderItemDimensions, duplicateOrder, duplicateItem,
+  updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem,
@@ -135,6 +135,8 @@ function ServicesPanel({
   const itemId = item.id
   const [services, setServices] = useState<OrderItemService[]>([])
   const [loading, setLoading] = useState(true)
+  // V19 (#1): отменённые услуги по дефолту скрыты. Снять галку — показать.
+  const [hideCancelledServices, setHideCancelledServices] = useState(true)
   const [skuPickerOpen, setSkuPickerOpen] = useState(false)
   const [assignModal, setAssignModal] = useState<number | null>(null)
   const [selectedEmployees, setSelectedEmployees] = useState<number[]>([])
@@ -159,6 +161,10 @@ function ServicesPanel({
   }
 
   useEffect(() => { void load() }, [orderId, itemId, itemTypeId])
+  // V19 (#5): когда родитель обновил позицию (например, после updateDimensions меняется
+  // item.updated_at), услуги тоже могли пересчитаться на бэке — перезагружаем их список,
+  // иначе цена услуги отображалась stale (480 ₽ вместо 480 × 6 = 2880 ₽).
+  useEffect(() => { if (item.updated_at) void load() }, [item.updated_at])
 
   const [cancelServiceId, setCancelServiceId] = useState<number | null>(null)
 
@@ -293,15 +299,27 @@ function ServicesPanel({
     <div style={{ marginTop: 8 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
         <h4 style={{ margin: 0 }}>Услуги</h4>
-        {/* V10: вместо чипов «+ Стирка / + Чистка» — единая кнопка с открытием
-            SkuPicker'а. Picker сам показывает подходящие SKU по атрибутам позиции. */}
-        {isEditable && (
-          <button
-            type="button"
-            onClick={() => setSkuPickerOpen(true)}
-            className="btn-primary btn-sm"
-          >+ Добавить услугу</button>
-        )}
+        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+          {/* V19 (#1): тумблер видимости отменённых услуг. По дефолту скрыты. */}
+          {services.some(s => s.status === 'CANCELLED') && (
+            <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.85em', color: '#7f8c8d', cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                style={{ width: 'auto' }}
+                checked={!hideCancelledServices}
+                onChange={e => setHideCancelledServices(!e.target.checked)}
+              />
+              Показать отменённые
+            </label>
+          )}
+          {isEditable && (
+            <button
+              type="button"
+              onClick={() => setSkuPickerOpen(true)}
+              className="btn-primary btn-sm"
+            >+ Добавить услугу</button>
+          )}
+        </div>
       </div>
 
       {dimWarning && <div className="error-msg" style={{ marginBottom: 8 }}>{dimWarning}</div>}
@@ -326,7 +344,7 @@ function ServicesPanel({
             </tr>
           </thead>
           <tbody>
-            {services.map(s => {
+            {(hideCancelledServices ? services.filter(s => s.status !== 'CANCELLED') : services).map(s => {
               const blocked = isServiceBlocked(s)
               const noAssignees = !s.assignees || s.assignees.length === 0
               // Подсказку «Назначьте исполнителя» помещаем в колонку «Исполнители» —
@@ -602,7 +620,7 @@ function ServicesPanel({
 // ---- Item Row ----
 function ItemRow({
   item, index, orderId, employees, roles, onRefresh, isEditable, initialPhotos, isDefaultType,
-  freshlyAdded,
+  freshlyAdded, onCancelItem,
 }: {
   item: OrderItem
   index: number
@@ -611,18 +629,11 @@ function ItemRow({
   roles: EmployeeRole[]
   onRefresh: () => void
   isEditable: boolean
-  /** Фото, переданные из родителя (батч-fetch). Если не передано — компонент сам подгрузит. */
   initialPhotos?: ItemPhoto[]
-  /** Дефолтный тип (доставка/оформление) — пробрасывается в ServicesPanel,
-      чтобы тот скрыл цены услуг (они входят в стоимость позиции). */
   isDefaultType: boolean
-  /** true — позиция только что добавлена в этой же сессии. Тогда:
-      • строка автоматически раскрыта (детали + услуги видны),
-      • режим редактирования описания включён сразу,
-      • фокус ставится на поле описания.
-      Миша на встрече 11 мая: «не заставляй оператора отдельно раскрывать каждую
-      только что добавленную позицию — это лишний клик». */
   freshlyAdded?: boolean
+  /** V19: открыть модалку отмены позиции в родителе (используется единая CancelReasonModal). */
+  onCancelItem: (item: OrderItem) => void
 }) {
   const { showToast } = useToast()
   const [expanded, setExpanded] = useState(!!freshlyAdded)
@@ -686,32 +697,28 @@ function ItemRow({
   // Ручное редактирование цены позиции удалено: цена = сумма цен услуг, оператор
   // меняет цену только на уровне услуги (там есть ✏️, ✓, кнопка «А» для сброса).
 
-  const saveDimensions = async () => {
-    // Валидация: только положительные числа в разумных пределах. Защищает от опечаток
-    // (длина 9999, отрицательный вес и т.п.) которые потом сломают расчёт цены.
+  const saveDimensions = async (opts?: { keepEditing?: boolean, silent?: boolean }) => {
     const fields: { key: keyof typeof dimensions; label: string; max: number }[] = [
-      { key: 'length',         label: 'Длина',     max: 50 },     // м
-      { key: 'width',          label: 'Ширина',    max: 50 },     // м
-      { key: 'weight',         label: 'Вес',       max: 500 },    // кг
-      { key: 'area',           label: 'Площадь',   max: 2500 },   // м²
-      { key: 'running_meters', label: 'Пог.метры', max: 1000 },   // м
+      { key: 'length',         label: 'Длина',     max: 50 },
+      { key: 'width',          label: 'Ширина',    max: 50 },
+      { key: 'weight',         label: 'Вес',       max: 500 },
+      { key: 'area',           label: 'Площадь',   max: 2500 },
+      { key: 'running_meters', label: 'Пог.метры', max: 1000 },
     ]
     for (const f of fields) {
       const raw = dimensions[f.key]
       if (!raw) continue
-      const n = Number(raw)
+      const n = Number(String(raw).replace(',', '.'))
       if (!Number.isFinite(n) || n <= 0) {
-        showToast(`${f.label}: укажите положительное число`, 'error')
-        return
+        if (!opts?.silent) showToast(`${f.label}: укажите положительное число`, 'error')
+        return false
       }
       if (n > f.max) {
-        showToast(`${f.label}: значение слишком большое (максимум ${f.max})`, 'error')
-        return
+        if (!opts?.silent) showToast(`${f.label}: значение слишком большое (максимум ${f.max})`, 'error')
+        return false
       }
     }
     try {
-      // V3: пользователь часто вводит "0,4" (русская запятая) → Number() даёт NaN.
-      // Нормализуем запятую в точку перед парсингом.
       const parseNum = (s: string): number | null => {
         if (!s.trim()) return null
         const n = Number(s.replace(',', '.'))
@@ -730,10 +737,23 @@ function ItemRow({
         area:   areaN ?? undefined,
         running_meters: parseNum(dimensions.running_meters) ?? undefined,
       })
-      setEditDimensions(false)
+      if (!opts?.keepEditing) setEditDimensions(false)
       onRefresh()
-    } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения размеров'; showToast(msg, 'error') }
+      return true
+    } catch (e: unknown) {
+      if (!opts?.silent) {
+        const msg = (e as any)?.response?.data?.message || 'Ошибка сохранения размеров'
+        showToast(msg, 'error')
+      }
+      return false
+    }
   }
+
+  // V19 (#4): автосохранение размеров при потере фокуса.
+  // Если оператор переключился на что-то другое (например, нажал «+ Добавить услугу»),
+  // последние введённые значения уже в БД — бэк не скажет «размеры не заполнены».
+  // silent=true чтобы не спамить тостами, keepEditing=true чтобы поле осталось активным.
+  const handleDimensionBlur = () => { void saveDimensions({ keepEditing: true, silent: true }) }
 
   return (
     <>
@@ -810,7 +830,7 @@ function ItemRow({
             <div style={{ display: 'flex', gap: 4, flexDirection: 'column' }}>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
-                  type="text" inputMode="decimal" pattern="[0-9.,]*"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*" onBlur={handleDimensionBlur}
                   placeholder="Длина"
                   value={dimensions.length}
                   onChange={e => setDimensions(d => {
@@ -826,7 +846,7 @@ function ItemRow({
                   style={{ width: 60 }}
                 />
                 <input
-                  type="text" inputMode="decimal" pattern="[0-9.,]*"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*" onBlur={handleDimensionBlur}
                   placeholder="Ширина"
                   value={dimensions.width}
                   onChange={e => setDimensions(d => {
@@ -841,7 +861,7 @@ function ItemRow({
                   style={{ width: 60 }}
                 />
                 <input
-                  type="text" inputMode="decimal" pattern="[0-9.,]*"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*" onBlur={handleDimensionBlur}
                   placeholder="Вес"
                   value={dimensions.weight}
                   onChange={e => setDimensions(d => ({...d, weight: e.target.value}))}
@@ -850,14 +870,14 @@ function ItemRow({
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
                 <input
-                  type="text" inputMode="decimal" pattern="[0-9.,]*"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*" onBlur={handleDimensionBlur}
                   placeholder="Площадь"
                   value={dimensions.area}
                   onChange={e => setDimensions(d => ({...d, area: e.target.value}))}
                   style={{ width: 60 }}
                 />
                 <input
-                  type="text" inputMode="decimal" pattern="[0-9.,]*"
+                  type="text" inputMode="decimal" pattern="[0-9.,]*" onBlur={handleDimensionBlur}
                   placeholder="Пог.м"
                   value={dimensions.running_meters}
                   onChange={e => setDimensions(d => ({...d, running_meters: e.target.value}))}
@@ -865,7 +885,7 @@ function ItemRow({
                 />
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" tabIndex={-1} onClick={saveDimensions}>&#10003;</button>
+                <button className="btn-success btn-sm" tabIndex={-1} onClick={() => void saveDimensions()}>&#10003;</button>
                 <button className="btn-secondary btn-sm" tabIndex={-1} onClick={() => setEditDimensions(false)}>&#10005;</button>
               </div>
             </div>
@@ -890,16 +910,27 @@ function ItemRow({
         </td>
         {isEditable && (
           <td style={{ textAlign: 'right' }}>
-            <button
-              className="btn-secondary btn-sm"
-              onClick={async () => {
-                try {
-                  await duplicateItem(orderId, item.id)
-                  onRefresh()
-                } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка дублирования позиции'; showToast(msg, 'error') }
-              }}
-              title="Дублировать позицию"
-            >Дубль</button>
+            <div style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}>
+              <button
+                className="btn-secondary btn-sm"
+                onClick={async () => {
+                  try {
+                    await duplicateItem(orderId, item.id)
+                    onRefresh()
+                  } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка дублирования позиции'; showToast(msg, 'error') }
+                }}
+                title="Дублировать позицию"
+              >Дубль</button>
+              {/* V19 (#11): кнопка отмены позиции — работает даже если на позиции нет услуг.
+                  Раньше оператор не мог отменить «пустую» позицию (некого было отменять). */}
+              {item.status !== 'CANCELLED' && (
+                <button
+                  className="btn-danger btn-sm"
+                  title="Отменить позицию"
+                  onClick={() => onCancelItem(item)}
+                >× Отменить</button>
+              )}
+            </div>
           </td>
         )}
       </tr>
@@ -1020,7 +1051,11 @@ export default function OrderDetailPage() {
   const orderId = Number(id)
 
   // Скрывать отменённые позиции (тумблер в карточке + автоматически в PDF).
-  const [hideCanceledItems, setHideCanceledItems] = useState(false)
+  // V19 (#1): по дефолту отменённые СКРЫТЫ — оператор видит только активные.
+  // Чтобы посмотреть отменённые — снимает галку.
+  const [hideCanceledItems, setHideCanceledItems] = useState(true)
+  // V19 (#3): отмена позиции — через единую CancelReasonModal, а не браузерный prompt().
+  const [cancelItem, setCancelItem] = useState<OrderItem | null>(null)
   const [order, setOrder] = useState<Order | null>(null)
   const [items, setItems] = useState<OrderItem[]>([])
   // Все фото по заказу одним батчем — раздаём в ItemRow через initialPhotos.
@@ -1504,11 +1539,55 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               <div style={{ marginBottom: 8 }}><strong>Скидка:</strong> {order.discount_percent}%</div>
             )}
             <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${order.payment_type ? PAYMENT_LABELS[order.payment_type] : ''})` : 'Нет'}</div>
-            <div style={{ marginBottom: 8 }}>
+            <div style={{ marginBottom: 8, display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
               <strong>Клиент:</strong>{' '}
               <button className="btn-secondary btn-sm" onClick={openClientCard} style={{ marginLeft: 4 }}>
                 {order.client_name}
               </button>
+              {/* V19: быстрое переименование клиента прямо из заказа. Меняет имя у самого
+                  клиента (и у всех его заказов — это уже бэк делает в ClientController.update). */}
+              {isEditable && order.client_id && (
+                <button
+                  className="btn-secondary btn-sm"
+                  title="Переименовать клиента (обновится во всех его заказах)"
+                  onClick={async () => {
+                    const newName = prompt('Новое имя клиента:', order.client_name)?.trim()
+                    if (!newName || newName === order.client_name) return
+                    try {
+                      const c = await getClient(order.client_id!)
+                      // Для физлица — пытаемся разбить введённое на «фамилия имя»
+                      const isIndividual = c.client_type === 'INDIVIDUAL'
+                      const parts = newName.split(/\s+/)
+                      const newLastName = isIndividual && parts.length >= 2 ? parts[0] : (c.last_name ?? undefined)
+                      const newFirstName = isIndividual && parts.length >= 2 ? parts.slice(1).join(' ') : (c.first_name ?? undefined)
+                      await (await import('../api/clients')).updateClient(c.id, {
+                        client_type: c.client_type,
+                        name: newName,
+                        first_name: newFirstName ?? undefined,
+                        last_name: newLastName ?? undefined,
+                        phone: c.phone ?? '',
+                        extra_phone: c.extra_phone ?? undefined,
+                        address: c.address ?? undefined,
+                        apartment: c.apartment ?? undefined,
+                        district: c.district ?? undefined,
+                        inn: c.inn ?? undefined,
+                        contact_person: c.contact_person ?? undefined,
+                        contact_person_phone: c.contact_person_phone ?? undefined,
+                        comment: c.comment ?? undefined,
+                        is_pensioner: c.is_pensioner,
+                        is_problem: c.is_problem,
+                        is_regular: c.is_regular,
+                        lat: c.lat,
+                        lon: c.lon,
+                      } as any)
+                      await loadOrder()
+                      showToast('Имя клиента обновлено во всех его заказах', 'success')
+                    } catch (e: unknown) {
+                      showToast((e as any)?.response?.data?.message || 'Ошибка переименования', 'error')
+                    }
+                  }}
+                >✎</button>
+              )}
             </div>
             {order.client_address && <div style={{ marginBottom: 8 }}><strong>Адрес клиента:</strong> {order.client_address}</div>}
             {order.is_warranty && (
@@ -1877,15 +1956,18 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
         <div className="page-header" style={{ marginBottom: 12 }}>
           <h2 style={{ margin: 0 }}>Позиции заказа</h2>
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: '0.9em', color: '#7f8c8d' }}>
-              <input
-                type="checkbox"
-                checked={hideCanceledItems}
-                onChange={e => setHideCanceledItems(e.target.checked)}
-                style={{ width: 'auto' }}
-              />
-              Скрыть отменённые
-            </label>
+            {/* V19 (#1): отменённые позиции скрыты по дефолту. Снять галку — показать. */}
+            {items.some(i => i.status === 'CANCELLED') && (
+              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: '0.9em', color: '#7f8c8d' }}>
+                <input
+                  type="checkbox"
+                  checked={!hideCanceledItems}
+                  onChange={e => setHideCanceledItems(!e.target.checked)}
+                  style={{ width: 'auto' }}
+                />
+                Показать отменённые
+              </label>
+            )}
             {isEditable && (
               <button className="btn-primary" onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
             )}
@@ -1900,7 +1982,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               <th style={{ width: 160 }}>Размеры</th>
               <th style={{ width: 120 }}>Статус</th>
               <th style={{ width: 120, textAlign: 'right' }}>Стоимость</th>
-              {isEditable && <th style={{ width: 80, textAlign: 'right' }}>Действия</th>}
+              {isEditable && <th style={{ width: 160, textAlign: 'right' }}>Действия</th>}
             </tr>
           </thead>
           <tbody>
@@ -1924,6 +2006,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                     initialPhotos={photosByItemId.get(item.id) || []}
                     isDefaultType={false}
                     freshlyAdded={freshlyAddedIds.has(item.id)}
+                    onCancelItem={(it) => setCancelItem(it)}
                   />
                 ))
               })()
@@ -2083,6 +2166,25 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           onConfirm={confirmCancelOrder}
         />
       )}
+      {/* V19 (#3): модалка отмены позиции — та же CancelReasonModal что у услуг. */}
+      {cancelItem && (
+        <CancelReasonModal
+          title="Отмена позиции"
+          subject={`Позиция #${cancelItem.id} «${cancelItem.item_type_name || ''}» будет отменена.`}
+          onCancel={() => setCancelItem(null)}
+          onConfirm={async (reason) => {
+            const itemId = cancelItem.id
+            setCancelItem(null)
+            try {
+              await updateOrderItemStatus(orderId, itemId, { status: 'CANCELLED', cancellation_reason: reason })
+              await loadOrder()
+              showToast('Позиция отменена', 'success')
+            } catch (e: unknown) {
+              showToast((e as any)?.response?.data?.message || 'Ошибка отмены', 'error')
+            }
+          }}
+        />
+      )}
       {showWarranty && (
         <WarrantyModal
           items={items}
@@ -2110,6 +2212,18 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                   {showClientCard.client_type === 'LEGAL_ENTITY' ? 'Юридическое лицо' : 'Физическое лицо'} &middot; #{showClientCard.id}
                 </div>
               </div>
+              {/* V19 (#8): кнопка «Редактировать» — открывает страницу клиентов с предзаполненным формом редактирования. */}
+              {isEditable && (
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => {
+                    const cid = showClientCard.id
+                    setShowClientCard(null)
+                    navigate(`/clients?editId=${cid}`)
+                  }}
+                  title="Редактировать данные клиента"
+                >✎ Редактировать</button>
+              )}
             </div>
             <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
               <div style={{ flex: '1 1 250px' }}>

@@ -24,6 +24,8 @@ export interface ClientFormState {
   contact_person_phone: string
   inn: string
   address: string
+  /** V19 (#4, #9): квартира — отдельно от адреса. */
+  apartment: string
   district: string
   comment: string
   lat: number | null
@@ -41,6 +43,7 @@ export const emptyClientForm = (): ClientFormState => ({
   contact_person_phone: '',
   inn: '',
   address: '',
+  apartment: '',
   district: '',
   comment: '',
   lat: null,
@@ -217,14 +220,23 @@ export default function ClientFormFields({ value, onChange, phoneExtra, onPhoneV
           value={v.address}
           onChange={onAddressManualChange}
           onResolved={onAddressResolved}
-          // Если у клиента уже есть координаты (загружены из БД при редактировании) —
-          // адрес считаем подтверждённым. Сбросится только если оператор начнёт править.
           externallyConfirmed={v.lat != null && v.lon != null}
         />
       </div>
-      <div className="form-group">
-        <label>Район</label>
-        <DistrictSelect value={v.district} onChange={d => set({ district: d })} width="100%" />
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        <div className="form-group" style={{ flex: '1 1 200px' }}>
+          <label>Район</label>
+          <DistrictSelect value={v.district} onChange={d => set({ district: d })} width="100%" />
+        </div>
+        {/* V19 (#4): квартира — в адрес не вводим, оператор ломает поиск. */}
+        <div className="form-group" style={{ flex: '0 0 130px' }}>
+          <label>Кв./офис</label>
+          <input
+            value={v.apartment}
+            onChange={e => set({ apartment: e.target.value })}
+            placeholder="25"
+          />
+        </div>
       </div>
       <div className="form-group">
         <label>Комментарий</label>

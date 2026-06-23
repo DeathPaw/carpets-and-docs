@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { addOrderItem } from '../../api/orders'
 import type { OrderItem, ItemType, PaymentType } from '../../types'
 import Tiles, { hashColor } from '../Tiles'
+import { useEscapeClose } from '../../hooks/useEscapeClose'
 
 /**
  * Опции для выбора типа оплаты — 3 варианта, дроп-даун заменён на плитки
@@ -38,6 +39,7 @@ export function WarrantyModal({
   const [selectedIds, setSelectedIds] = useState<number[]>(items.map(i => i.id))
   const [comment, setComment] = useState('')
   const [error, setError] = useState('')
+  useEscapeClose(true, onClose)
 
   const toggle = (id: number) => {
     setSelectedIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])
@@ -113,6 +115,7 @@ export function AddItemModal({
   const [cart, setCart] = useState<number[]>([])
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  useEscapeClose(true, onClose)
 
   const addToCart = (typeId: number) => {
     setCart(c => [...c, typeId])
@@ -292,6 +295,7 @@ function pluralPositions(n: number): string {
 // ---- Простое окно «Оплатить» (на странице DELIVERED) ----
 export function PayModal({ onClose, onPay }: { onClose: () => void; onPay: (pt: PaymentType) => void }) {
   const [paymentType, setPaymentType] = useState<PaymentType>('CARD')
+  useEscapeClose(true, onClose)
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()}>
@@ -324,6 +328,7 @@ export function DeliverAndPayModal({
   const [date, setDate] = useState(today)
   const [slot, setSlot] = useState('')
   const [paymentType, setPaymentType] = useState<PaymentType>('CARD')
+  useEscapeClose(true, onClose)
   return (
     <div className="modal-overlay" onClick={onClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 460 }}>

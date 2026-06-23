@@ -400,6 +400,16 @@ public class OrderRepository {
         );
     }
 
+    /**
+     * V19 (#7): после переименования клиента — пробрасываем новое имя в денормализованную
+     * колонку orders.client_name. Иначе старое имя останется в карточках всех его заказов.
+     */
+    public int updateClientNameInOrders(Long clientId, String newName) {
+        return jdbc.update(
+            "UPDATE orders SET client_name = :nm, updated_at = NOW() WHERE client_id = :id",
+            new MapSqlParameterSource().addValue("nm", newName).addValue("id", clientId));
+    }
+
     /** V17: пометить/снять флаг проблемного заказа. reason обязателен при TRUE. */
     public void setProblem(Long orderId, boolean isProblem, String reason) {
         jdbc.update(

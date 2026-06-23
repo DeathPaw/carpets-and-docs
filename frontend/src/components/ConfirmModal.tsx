@@ -1,3 +1,5 @@
+import { useEscapeClose } from '../hooks/useEscapeClose'
+
 interface ConfirmModalProps {
   title: string
   message: string
@@ -9,6 +11,7 @@ interface ConfirmModalProps {
 }
 
 export default function ConfirmModal({ title, message, onConfirm, onCancel, confirmText = 'Подтвердить', cancelText = 'Отмена', danger }: ConfirmModalProps) {
+  useEscapeClose(true, onCancel)
   return (
     <div className="modal-overlay" onClick={onCancel}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 400 }}>

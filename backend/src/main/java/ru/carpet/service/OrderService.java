@@ -232,42 +232,48 @@ public class OrderService {
      * item_type из его атрибутов и создаём позицию + услугу.
      */
     /**
-     * V18: вместо «одна позиция на каждый auto-add SKU» строим 2 позиции:
-     *  • «Забор»: paid Доставка(забор) + lifecycle Оформление + Приём
-     *  • «Отвоз»: paid Доставка(отвоз)
-     * Если оператор хочет — может «свапнуть» платную доставку на Самовывоз (отдельный endpoint).
-     * Это убирает мешанину «4 позиции Доставка» которая путала оператора.
+     * V18/V19: строим позиции из auto-add SKU. Группировка:
+     *  • «Оформление» (auto_complete_on_status=CREATED) — отдельная позиция (бэк-офис).
+     *  • «Забор» (triggers_order_status=IN_PROGRESS + auto_complete=null) — отдельная,
+     *    содержит платную Доставку(забор) + Приём (auto_complete_on_status=IN_PROGRESS).
+     *  • «Отвоз» (triggers_order_status=DELIVERED) — отдельная позиция с Доставкой(отвоз).
+     * Это убирает путаницу «4 позиции Доставка» и одновременно делает Оформление
+     * отдельной услугой (а не вложенной в Доставку, как просил оператор #2).
      */
     private void attachAutoAddSkus(Long orderId) {
         var autoSkus = skuService.findAutoAdd();
         Long currentEmployeeId = resolveCurrentEmployeeId();
 
-        // Группируем по lifecycle-смыслу: всё что auto_complete_on_status=IN_PROGRESS
-        // (Доставка-забор, Приём) — в «Забор»; всё что =DELIVERED (Доставка-отвоз) — в «Отвоз»;
-        // всё что =CREATED (Оформление) — тоже в «Забор», т.к. это вход в воронку.
+        java.util.List<ru.carpet.model.Sku> oformlenieSkus = new java.util.ArrayList<>();
         java.util.List<ru.carpet.model.Sku> zaborSkus = new java.util.ArrayList<>();
         java.util.List<ru.carpet.model.Sku> otvozSkus = new java.util.ArrayList<>();
         for (var sku : autoSkus) {
-            String trg = sku.autoCompleteOnStatus();          // куда двигает SKU при DONE
-            String trigOrder = sku.triggersOrderStatus();     // куда двигает заказ при DONE
-            // «Отвоз» — если SKU триггерит заказ в DELIVERED (Доставка-отвоз).
-            if ("DELIVERED".equals(trigOrder)) {
+            String autoCmp = sku.autoCompleteOnStatus();      // куда переключает услугу заказ
+            String trigOrder = sku.triggersOrderStatus();     // куда триггерит заказ при DONE
+            if ("CREATED".equals(autoCmp)) {
+                // Оформление — отдельная позиция, оператор-фронт-офис.
+                oformlenieSkus.add(sku);
+            } else if ("DELIVERED".equals(trigOrder)) {
                 otvozSkus.add(sku);
             } else {
-                // Всё остальное (Доставка-забор, Оформление, Приём, и любое другое) — в Забор.
+                // Доставка-забор + Приём (IN_PROGRESS).
                 zaborSkus.add(sku);
             }
         }
 
         Long deliveryItemTypeId = resolveDeliveryItemTypeId(autoSkus);
         if (deliveryItemTypeId != null) {
+            if (!oformlenieSkus.isEmpty()) {
+                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Оформление");
+                attachLifecycleSkus(item.id(), oformlenieSkus, currentEmployeeId);
+            }
             if (!zaborSkus.isEmpty()) {
-                OrderItem zaborItem = itemRepository.save(orderId, deliveryItemTypeId, "Забор");
-                attachLifecycleSkus(zaborItem.id(), zaborSkus, currentEmployeeId);
+                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Забор");
+                attachLifecycleSkus(item.id(), zaborSkus, currentEmployeeId);
             }
             if (!otvozSkus.isEmpty()) {
-                OrderItem otvozItem = itemRepository.save(orderId, deliveryItemTypeId, "Отвоз");
-                attachLifecycleSkus(otvozItem.id(), otvozSkus, currentEmployeeId);
+                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Отвоз");
+                attachLifecycleSkus(item.id(), otvozSkus, currentEmployeeId);
             }
         }
     }

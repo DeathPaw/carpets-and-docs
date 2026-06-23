@@ -30,6 +30,9 @@ export default function CreateOrderModal({ onClose, onCreated }: {
   const [sameAddress, setSameAddress] = useState(true)
   const [pickupAddress, setPickupAddress] = useState('')
   const [deliveryAddress, setDeliveryAddress] = useState('')
+  // V19 (#4, #9): квартира — отдельное поле, в адрес не ввести (мешает геокодированию).
+  const [pickupApartment, setPickupApartment] = useState('')
+  const [deliveryApartment, setDeliveryApartment] = useState('')
   const [pickupDistrict, setPickupDistrict] = useState('')
   const [deliveryDistrict, setDeliveryDistrict] = useState('')
   const [pickupCoords, setPickupCoords] = useState<{ lat: number | null; lon: number | null }>({ lat: null, lon: null })
@@ -83,6 +86,11 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       if (c.lat != null && c.lon != null) {
         setPickupCoords({ lat: Number(c.lat), lon: Number(c.lon) })
         setDeliveryCoords({ lat: Number(c.lat), lon: Number(c.lon) })
+      }
+      // V19 (#7, #9): квартира из карточки клиента тянется в оба адреса заказа.
+      if (c.apartment) {
+        setPickupApartment(c.apartment)
+        setDeliveryApartment(c.apartment)
       }
     } else {
       setClientSourceAddress('')
@@ -138,6 +146,7 @@ export default function CreateOrderModal({ onClose, onCreated }: {
             phone: newClientForm.phone.trim() ? formatPhone(newClientForm.phone) : undefined,
             extra_phone: newClientForm.extra_phone.trim() ? formatPhone(newClientForm.extra_phone) : undefined,
             address: newClientForm.address.trim() || undefined,
+            apartment: newClientForm.apartment.trim() || undefined,
             district: newClientForm.district.trim() || undefined,
             inn: newClientForm.inn.trim() || undefined,
             contact_person: newClientForm.contact_person.trim() || undefined,
@@ -155,6 +164,9 @@ export default function CreateOrderModal({ onClose, onCreated }: {
         clientName = newClient.name
         if (newClient.address && !pickupAddress) setPickupAddress(newClient.address)
         if (newClient.address && !deliveryAddress) setDeliveryAddress(newClient.address)
+        // V19 (#7, #9): квартира из новой карточки клиента — в забор/доставку заказа.
+        if (newClient.apartment && !pickupApartment) setPickupApartment(newClient.apartment)
+        if (newClient.apartment && !deliveryApartment) setDeliveryApartment(newClient.apartment)
       } else {
         if (!selectedClientId) {
           setError('Введите имя клиента и выберите из списка')
@@ -204,11 +216,17 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       }
 
       const order = await createOrder(orderData)
-      // Установить районы и координаты через updateDetails
-      if (finalPickupDistrict || finalDeliveryDistrict || finalPickupLat != null || finalDeliveryLat != null) {
+      // Установить районы, координаты и квартиры через updateDetails.
+      // V19 (#9): квартиру всегда сохраняем (даже если районы/координаты пустые).
+      const hasAnyDetail = finalPickupDistrict || finalDeliveryDistrict
+        || finalPickupLat != null || finalDeliveryLat != null
+        || pickupApartment || deliveryApartment
+      if (hasAnyDetail) {
         await updateOrderDetails(order.id, {
           pickup_address: finalPickupAddress || null,
           delivery_address: finalDeliveryAddress || null,
+          pickup_apartment: pickupApartment || null,
+          delivery_apartment: sameAddress ? (pickupApartment || null) : (deliveryApartment || null),
           pickup_district: finalPickupDistrict || null,
           delivery_district: finalDeliveryDistrict || finalPickupDistrict || null,
           pickup_lat: finalPickupLat,
@@ -384,7 +402,7 @@ export default function CreateOrderModal({ onClose, onCreated }: {
                   </div>
                 ) : null
               })()}
-              <div style={{ marginTop: 4 }}>
+              <div style={{ marginTop: 4, display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                 <DistrictSelect
                   value={pickupDistrict}
                   onChange={v => {
@@ -393,6 +411,18 @@ export default function CreateOrderModal({ onClose, onCreated }: {
                   }}
                   width={220}
                 />
+                {/* V19 (#4, #9): отдельное поле «Квартира/офис» — не идёт в геокодирование. */}
+                <div className="form-group" style={{ marginBottom: 0, flex: '0 0 130px' }}>
+                  <label style={{ fontSize: '0.85em' }}>Кв./офис</label>
+                  <input
+                    value={pickupApartment}
+                    onChange={e => {
+                      setPickupApartment(e.target.value)
+                      if (sameAddress) setDeliveryApartment(e.target.value)
+                    }}
+                    placeholder="25"
+                  />
+                </div>
               </div>
             </div>
             <div style={{ marginBottom: 8 }}>
@@ -432,12 +462,20 @@ export default function CreateOrderModal({ onClose, onCreated }: {
                     </div>
                   ) : null
                 })()}
-                <div style={{ marginTop: 4 }}>
+                <div style={{ marginTop: 4, display: 'flex', gap: 8, alignItems: 'flex-end', flexWrap: 'wrap' }}>
                   <DistrictSelect
                     value={deliveryDistrict}
                     onChange={v => { setDeliveryDistrict(v) }}
                     width={220}
                   />
+                  <div className="form-group" style={{ marginBottom: 0, flex: '0 0 130px' }}>
+                    <label style={{ fontSize: '0.85em' }}>Кв./офис</label>
+                    <input
+                      value={deliveryApartment}
+                      onChange={e => setDeliveryApartment(e.target.value)}
+                      placeholder="25"
+                    />
+                  </div>
                 </div>
               </div>
             )}

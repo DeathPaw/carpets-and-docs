@@ -1,5 +1,6 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import FeedbackButton from './FeedbackButton'
+import SuggesterButton from './SuggesterButton'
 import NotificationBell from './NotificationBell'
 import TrainingBanner from '../training/TrainingBanner'
 import { isTrainingMode } from '../training'
@@ -116,6 +117,7 @@ export default function Layout() {
       </div>
 
       <FeedbackButton />
+      <SuggesterButton />
       {!isReadonly && <NotificationBell />}
     </div>
   )

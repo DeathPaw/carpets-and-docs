@@ -73,6 +73,23 @@ public class TrainingDataSeeder implements CommandLineRunner {
         // Заказы с привязкой к SKU и водитель с разными интервалами на сегодня.
         seedOrdersWithSkus(typeIds, skuIds, employeeIds, clientIds);
         seedLogisticsWave(typeIds, skuIds, employeeIds, clientIds);
+        // V11: web-юзера тоже надо создать, иначе войти не получится
+        // (после V11 авторизация ходит в таблицу users, а не в app.admin.* конфиг).
+        seedUsers();
+    }
+
+    /**
+     * V11: создаём минимум 1 web-юзера для входа. Логин/пароль = admin/foxy
+     * (как заявлено в application-training.yml и в README). Пароль — BCrypt-хэш.
+     */
+    private void seedUsers() {
+        // Хэш для пароля "foxy" (BCrypt cost 10). Совпадает с V12 продакшен-сидом.
+        String foxyHash = "$2b$10$ZacUBGv.2FKv5o8f3FTc4OrUV1l0zWwRJ7f0jQiOd7u1CTw73XEBq";
+        jdbc.update("""
+            INSERT INTO users (username, password_hash, display_name, role, is_active)
+            VALUES ('admin', :h, 'Администратор тренажёра', 'SUPERVISOR', TRUE)
+            ON CONFLICT (username) DO NOTHING
+        """, Map.of("h", foxyHash));
     }
 
     // ---------- SKU-каталог (V10) ----------
@@ -118,18 +135,43 @@ public class TrainingDataSeeder implements CommandLineRunner {
                 new BigDecimal("280"), new BigDecimal("110"),
                 false, null,
                 attr("item_type", String.valueOf(types.get("Шторы")))));
-        // Доставка — auto-add, фикс 500 ₽, бесплатно от 3000 ₽
-        ids.put("Доставка стандартная",
-            insertSku(groups.get("Доставка"), "Доставка стандартная", "FIXED",
-                new BigDecimal("500"), new BigDecimal("200"),
+        // V18: Доставка теперь = 2 SKU (забор + отвоз), оба auto-add.
+        // «Доставка (забор)»  — триггерит заказ в IN_PROGRESS при DONE → попадает в позицию «Забор».
+        // «Доставка (отвоз)» — триггерит заказ в DELIVERED при DONE → попадает в позицию «Отвоз».
+        ids.put("Доставка (забор)",
+            insertSku(groups.get("Доставка"), "Доставка (забор)", "FIXED",
+                new BigDecimal("300"), new BigDecimal("150"),
                 true, new BigDecimal("3000"),
+                null, "IN_PROGRESS", true,  // exclude_from_status_calc=true: lifecycle, не блокирует DONE
                 attr("item_type", String.valueOf(types.get("Доставка")))));
-        // Приём — auto-add, бесплатно всегда (price=0)
+        ids.put("Доставка (отвоз)",
+            insertSku(groups.get("Доставка"), "Доставка (отвоз)", "FIXED",
+                new BigDecimal("300"), new BigDecimal("150"),
+                true, new BigDecimal("3000"),
+                null, "DELIVERED", true,
+                attr("item_type", String.valueOf(types.get("Доставка")))));
+        // V18: Самовывоз — НЕ auto-add. Оператор меняет платную доставку на бесплатный самовывоз
+        // через кнопку «↔ Самовывоз» рядом с услугой.
+        ids.put("Самовывоз (привоз клиентом)",
+            insertSku(groups.get("Доставка"), "Самовывоз (привоз клиентом)", "FIXED",
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                false, null,
+                null, "IN_PROGRESS", true,
+                attr("item_type", String.valueOf(types.get("Доставка")))));
+        ids.put("Самовывоз (отвоз клиентом)",
+            insertSku(groups.get("Доставка"), "Самовывоз (отвоз клиентом)", "FIXED",
+                BigDecimal.ZERO, BigDecimal.ZERO,
+                false, null,
+                null, "DELIVERED", true,
+                attr("item_type", String.valueOf(types.get("Доставка")))));
+        // Приём — auto-add, бесплатно. item_type=Доставка (а не Приём!) — чтобы
+        // attachAutoAddSkus положил Приём в позицию «Забор» рядом с Доставкой.
         ids.put("Приём в офисе",
             insertSku(groups.get("Приём"), "Приём в офисе", "FIXED",
                 BigDecimal.ZERO, BigDecimal.ZERO,
                 true, null,
-                attr("item_type", String.valueOf(types.get("Приём")))));
+                "IN_PROGRESS", null, true,
+                attr("item_type", String.valueOf(types.get("Доставка")))));
         return ids;
     }
 
@@ -144,9 +186,21 @@ public class TrainingDataSeeder implements CommandLineRunner {
                            BigDecimal price, BigDecimal costPrice,
                            boolean isAutoAdd, BigDecimal freeThreshold,
                            Map<String, List<String>> attrs) {
+        return insertSku(groupId, name, pricingType, price, costPrice, isAutoAdd, freeThreshold,
+                null, null, false, attrs);
+    }
+
+    /** V17/V18: расширенный insertSku — поддерживает lifecycle-поля (для логики «Забор/Отвоз»). */
+    private long insertSku(Long groupId, String name, String pricingType,
+                           BigDecimal price, BigDecimal costPrice,
+                           boolean isAutoAdd, BigDecimal freeThreshold,
+                           String autoCompleteOnStatus, String triggersOrderStatus,
+                           boolean excludeFromStatusCalc,
+                           Map<String, List<String>> attrs) {
         Long skuId = jdbc.queryForObject("""
-            INSERT INTO skus(group_id, name, pricing_type, price, cost_price, is_auto_add, free_threshold)
-            VALUES (:g, :n, :pt, :p, :cp, :aa, :ft) RETURNING id
+            INSERT INTO skus(group_id, name, pricing_type, price, cost_price, is_auto_add, free_threshold,
+                             auto_complete_on_status, triggers_order_status, exclude_from_status_calc)
+            VALUES (:g, :n, :pt, :p, :cp, :aa, :ft, :acs, :tos, :exc) RETURNING id
         """, new MapSqlParameterSource()
             .addValue("g",  groupId)
             .addValue("n",  name)
@@ -154,7 +208,10 @@ public class TrainingDataSeeder implements CommandLineRunner {
             .addValue("p",  price)
             .addValue("cp", costPrice)
             .addValue("aa", isAutoAdd)
-            .addValue("ft", freeThreshold),
+            .addValue("ft", freeThreshold)
+            .addValue("acs", autoCompleteOnStatus)
+            .addValue("tos", triggersOrderStatus)
+            .addValue("exc", excludeFromStatusCalc),
             Long.class);
         // Атрибуты в EAV.
         for (var e : attrs.entrySet()) {
@@ -346,26 +403,28 @@ public class TrainingDataSeeder implements CommandLineRunner {
     /** Возвращает map имя_клиента → id. */
     private Map<String, Long> seedClients() {
         Map<String, Long> ids = new HashMap<>();
-        ids.put("Иванов",   insertClient("Иванов Иван Иванович",     "INDIVIDUAL",   "+7 (921) 111-22-33", "ivanov@example.com",  "Невский пр., д. 100, кв. 5",        "Центральный"));
-        ids.put("Петрова",  insertClient("Петрова Мария Сергеевна",  "INDIVIDUAL",   "+7 (921) 222-33-44", "petrova@example.com", "ул. Фурштатская, д. 12, кв. 3",      "Центральный"));
-        ids.put("ЧистыйДом",insertClient("ООО \"Чистый дом\"",        "LEGAL_ENTITY", "+7 (812) 333-44-55", "info@chistydom.ru",   "Лиговский пр., д. 50",               "Центральный"));
-        ids.put("Сидоров",  insertClient("Сидоров Алексей Петрович", "INDIVIDUAL",   "+7 (921) 444-55-66", null,                  "пр. Просвещения, д. 25, кв. 18",     "Выборгский"));
-        ids.put("Кузьмина", insertClient("Кузьмина Ольга Андреевна", "INDIVIDUAL",   "+7 (921) 555-66-77", "kuzmina@mail.ru",     "Большой пр. П.С., д. 80, кв. 12",    "Петроградский"));
-        ids.put("Волков",   insertClient("Волков Дмитрий Олегович",  "INDIVIDUAL",   "+7 (921) 666-77-88", null,                  "ул. Савушкина, д. 119, кв. 7",       "Приморский"));
+        // V18: квартира — отдельное поле, в адресе не дублируем (мешает геокодированию).
+        ids.put("Иванов",   insertClient("Иванов Иван Иванович",     "INDIVIDUAL",   "+7 (921) 111-22-33", "ivanov@example.com",  "Невский пр., д. 100",         "5",  "Центральный"));
+        ids.put("Петрова",  insertClient("Петрова Мария Сергеевна",  "INDIVIDUAL",   "+7 (921) 222-33-44", "petrova@example.com", "ул. Фурштатская, д. 12",      "3",  "Центральный"));
+        ids.put("ЧистыйДом",insertClient("ООО \"Чистый дом\"",        "LEGAL_ENTITY", "+7 (812) 333-44-55", "info@chistydom.ru",   "Лиговский пр., д. 50",        null, "Центральный"));
+        ids.put("Сидоров",  insertClient("Сидоров Алексей Петрович", "INDIVIDUAL",   "+7 (921) 444-55-66", null,                  "пр. Просвещения, д. 25",      "18", "Выборгский"));
+        ids.put("Кузьмина", insertClient("Кузьмина Ольга Андреевна", "INDIVIDUAL",   "+7 (921) 555-66-77", "kuzmina@mail.ru",     "Большой пр. П.С., д. 80",     "12", "Петроградский"));
+        ids.put("Волков",   insertClient("Волков Дмитрий Олегович",  "INDIVIDUAL",   "+7 (921) 666-77-88", null,                  "ул. Савушкина, д. 119",       "7",  "Приморский"));
         return ids;
     }
 
-    private long insertClient(String name, String type, String phone, String email, String address, String district) {
+    private long insertClient(String name, String type, String phone, String email, String address, String apartment, String district) {
         var p = new MapSqlParameterSource()
             .addValue("ct", type)
             .addValue("n",  name)
             .addValue("ph", phone)
             .addValue("em", email)
             .addValue("ad", address)
+            .addValue("ap", apartment)
             .addValue("ds", district);
         return jdbc.queryForObject(
-            "INSERT INTO clients(client_type, name, phone, email, address, district) " +
-            "VALUES (:ct, :n, :ph, :em, :ad, :ds) RETURNING id",
+            "INSERT INTO clients(client_type, name, phone, email, address, apartment, district) " +
+            "VALUES (:ct, :n, :ph, :em, :ad, :ap, :ds) RETURNING id",
             p, Long.class
         );
     }
@@ -396,13 +455,13 @@ public class TrainingDataSeeder implements CommandLineRunner {
         Long skuStirka  = skus.get("Стирка штор");
 
         createOrder(clients.get("Иванов"), "Иванов Иван Иванович",
-            "Невский пр., д. 100, кв. 5", "Центральный", "LEAD",
+            "Невский пр., д. 100", "Центральный", "LEAD",
             today, null, false, null, today.atStartOfDay(),
             List.of(new ItemSpec(types.get("Ковёр"), "Шерстяной 2×3 м", bd(3), bd(2), bd(6), null,
                 List.of(new SkuRef(skuChistka, "CREATED", bd("2700"), List.of())))));
 
         createOrder(clients.get("Петрова"), "Петрова Мария Сергеевна",
-            "ул. Фурштатская, д. 12, кв. 3", "Центральный", "CREATED",
+            "ул. Фурштатская, д. 12", "Центральный", "CREATED",
             today.plusDays(1), null, false, null, today.minusDays(1).atStartOfDay(),
             List.of(new ItemSpec(types.get("Палас"), "Синтетика 2×4 м", bd(4), bd(2), bd(8), null,
                 List.of(new SkuRef(skuChistka, "CREATED", bd("3040"), List.of())))));
@@ -416,7 +475,7 @@ public class TrainingDataSeeder implements CommandLineRunner {
                     new SkuRef(skuRestor,  "CREATED",     bd("3500"), List.of(employees.get("Сергей Петров")))))));
 
         createOrder(clients.get("Сидоров"), "Сидоров Алексей Петрович",
-            "пр. Просвещения, д. 25, кв. 18", "Выборгский", "PARTIALLY_DONE",
+            "пр. Просвещения, д. 25", "Выборгский", "PARTIALLY_DONE",
             today.minusDays(3), today.plusDays(1), false, null, today.minusDays(4).atStartOfDay(),
             List.of(
                 new ItemSpec(types.get("Шторы"), "Гардины 4 шт", null, null, null, bd(3),
@@ -425,13 +484,13 @@ public class TrainingDataSeeder implements CommandLineRunner {
                     List.of(new SkuRef(skuChistka, "IN_PROGRESS", bd("1600"), List.of(employees.get("Анна Иванова")))))));
 
         createOrder(clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
-            "Большой пр. П.С., д. 80, кв. 12", "Петроградский", "DONE",
+            "Большой пр. П.С., д. 80", "Петроградский", "DONE",
             today.minusDays(5), today, false, null, today.minusDays(6).atStartOfDay(),
             List.of(new ItemSpec(types.get("Ковёр"), "Шёлк 2×3 м", bd(3), bd(2), bd(6), null,
                 List.of(new SkuRef(skuChistka, "DONE", bd("2700"), List.of(employees.get("Сергей Петров")))))));
 
         createOrder(clients.get("Иванов"), "Иванов Иван Иванович",
-            "Невский пр., д. 100, кв. 5", "Центральный", "DELIVERED",
+            "Невский пр., д. 100", "Центральный", "DELIVERED",
             today.minusDays(10), today.minusDays(7), true, "CARD", today.minusDays(11).atStartOfDay(),
             List.of(new ItemSpec(types.get("Ковёр"), "Шерсть 2×3 м", bd(3), bd(2), bd(6), null,
                 List.of(new SkuRef(skuChistka, "DONE", bd("2700"), List.of(employees.get("Анна Иванова")))))));
@@ -443,22 +502,69 @@ public class TrainingDataSeeder implements CommandLineRunner {
                 List.of(new SkuRef(skuChistka, "DONE", bd("6750"), List.of(employees.get("Анна Иванова")))))));
 
         createOrder(clients.get("Петрова"), "Петрова Мария Сергеевна",
-            "ул. Фурштатская, д. 12, кв. 3", "Центральный", "DELIVERED",
+            "ул. Фурштатская, д. 12", "Центральный", "DELIVERED",
             today.minusDays(30), today.minusDays(25), true, "CASH", today.minusDays(32).atStartOfDay(),
             List.of(new ItemSpec(types.get("Шторы"), "Тюль 6 шт", null, null, null, bd(6),
                 List.of(new SkuRef(skuStirka, "DONE", bd("1680"), List.of(employees.get("Марина Соколова")))))));
 
         createOrder(clients.get("Волков"), "Волков Дмитрий Олегович",
-            "ул. Савушкина, д. 119, кв. 7", "Приморский", "DELIVERED",
+            "ул. Савушкина, д. 119", "Приморский", "DELIVERED",
             today.minusDays(45), today.minusDays(40), true, "CARD", today.minusDays(46).atStartOfDay(),
             List.of(new ItemSpec(types.get("Покрывало"), "Шерсть евро", bd(2), bd(2), bd(4), null,
                 List.of(new SkuRef(skuChistka, "DONE", bd("1600"), List.of(employees.get("Анна Иванова")))))));
 
         createOrder(clients.get("Иванов"), "Иванов Иван Иванович",
-            "Невский пр., д. 100, кв. 5", "Центральный", "DELIVERED",
+            "Невский пр., д. 100", "Центральный", "DELIVERED",
             today.minusDays(60), today.minusDays(55), true, "CARD", today.minusDays(62).atStartOfDay(),
             List.of(new ItemSpec(types.get("Ковёр"), "Машинной вязки 2×3 м", bd(3), bd(2), bd(6), null,
                 List.of(new SkuRef(skuChistka, "DONE", bd("2700"), List.of(employees.get("Сергей Петров")))))));
+
+        // V17 + V18 демо-заказ: с квартирой, проблемным флагом, оператором-оформителем.
+        createOrderFull(clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
+            "Большой пр. П.С., д. 80", "Петроградский",
+            "12", "12",
+            "PARTIALLY_DONE", today.minusDays(2), today.plusDays(2), false, null,
+            today.minusDays(3).atStartOfDay(),
+            true, "Клиент сообщил о пятне после стирки — нужно переделать за наш счёт",
+            employees.get("Анна Иванова"),
+            List.of(new ItemSpec(types.get("Ковёр"), "Шерсть 2×2 м", bd(2), bd(2), bd(4), null,
+                List.of(new SkuRef(skuChistka, "DONE", bd("1800"), List.of(employees.get("Анна Иванова")))))));
+
+        // V19 демо-заказ: гарантийный возврат (все позиции бесплатны).
+        // Создаём напрямую через repository.saveWarranty + копированием позиции.
+        Long warrantyClientId = clients.get("Иванов");
+        Long warrantyParent   = jdbc.queryForObject(
+            "SELECT id FROM orders WHERE client_id = :c ORDER BY id LIMIT 1",
+            Map.of("c", warrantyClientId), Long.class);
+        Long warrantyOrderId = jdbc.queryForObject("""
+            INSERT INTO orders(client_id, client_name, status, is_warranty, parent_order_id,
+                               pickup_address, pickup_district, pickup_apartment,
+                               total_amount, base_amount, created_at, updated_at,
+                               comment)
+            VALUES (:c, :cn, 'CREATED', TRUE, :pp, :pa, :pd, :pap,
+                    0, 0, :now, :now,
+                    'Гарантийный возврат: запах не ушёл, перестираем за счёт компании')
+            RETURNING id
+        """, new MapSqlParameterSource()
+            .addValue("c",  warrantyClientId)
+            .addValue("cn", "Иванов Иван Иванович")
+            .addValue("pp", warrantyParent)
+            .addValue("pa", "Невский пр., д. 100")
+            .addValue("pd", "Центральный")
+            .addValue("pap","5")
+            .addValue("now", today.minusDays(1).atStartOfDay()),
+            Long.class);
+        // Позиция гарантии — 0₽
+        Long warrItemId = jdbc.queryForObject("""
+            INSERT INTO order_items(order_id, item_type_id, description, status, price,
+                                    length, width, area)
+            VALUES (:o, :tt, 'Перестирка по гарантии', 'CREATED', 0, 3, 2, 6)
+            RETURNING id
+        """, Map.of("o", warrantyOrderId, "tt", types.get("Ковёр")), Long.class);
+        jdbc.update("""
+            INSERT INTO order_item_services(order_item_id, sku_id, sku_version_id, status, price, is_manual_price)
+            VALUES (:i, :s, (SELECT current_version_id FROM skus WHERE id = :s), 'CREATED', 0, TRUE)
+        """, Map.of("i", warrItemId, "s", skuChistka));
     }
 
     /**
@@ -477,44 +583,46 @@ public class TrainingDataSeeder implements CommandLineRunner {
         Long sergey        = employees.get("Сергей Петров");
         Long skuChistka    = skus.get("Чистка ковра");
 
-        createLogisticsOrder("Сегодня · утро", clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
-            "Большой пр. П.С., д. 80, кв. 12", "Петроградский",
-            today, "08:00-12:00", null, null, "CREATED", oleg, anna,
+        // V18: слоты из справочника — будни 17:00-20:30, сб 10:00-20:30. Тренажёру
+        // безопаснее использовать перекрытие 17:00-20:00 — попадает в оба окна.
+        createLogisticsOrder("Сегодня · 17-18", clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
+            "Большой пр. П.С., д. 80", "Петроградский",
+            today, "17:00-18:00", null, null, "CREATED", oleg, anna,
             types.get("Палас"), skuChistka, "Палас 2×3 м", bd(3), bd(2), bd(6));
 
-        createLogisticsOrder("Сегодня · день", clients.get("Волков"), "Волков Дмитрий Олегович",
-            "ул. Савушкина, д. 119, кв. 7", "Приморский",
-            today, "12:00-18:00", null, null, "CREATED", oleg, sergey,
+        createLogisticsOrder("Сегодня · 18-19", clients.get("Волков"), "Волков Дмитрий Олегович",
+            "ул. Савушкина, д. 119", "Приморский",
+            today, "18:00-19:00", null, null, "CREATED", oleg, sergey,
             types.get("Ковёр"), skuChistka, "Ковёр шерсть 3×4 м", bd(4), bd(3), bd(12));
 
-        createLogisticsOrder("Сегодня · вечер", clients.get("Сидоров"), "Сидоров Алексей Петрович",
-            "пр. Просвещения, д. 25, кв. 18", "Выборгский",
-            today, "18:00-22:00", null, null, "CREATED", oleg, anna,
+        createLogisticsOrder("Сегодня · 19-20", clients.get("Сидоров"), "Сидоров Алексей Петрович",
+            "пр. Просвещения, д. 25", "Выборгский",
+            today, "19:00-20:00", null, null, "CREATED", oleg, anna,
             types.get("Покрывало"), skuChistka, "Покрывало шерсть", bd(2), bd(2), bd(4));
 
-        createLogisticsOrder("Доставка сегодня · день", clients.get("Иванов"), "Иванов Иван Иванович",
-            "Невский пр., д. 100, кв. 5", "Центральный",
-            today.minusDays(3), "08:00-12:00", today, "12:00-18:00", "DONE", oleg, anna,
+        createLogisticsOrder("Доставка сегодня · 17-18", clients.get("Иванов"), "Иванов Иван Иванович",
+            "Невский пр., д. 100", "Центральный",
+            today.minusDays(3), "17:00-18:00", today, "17:00-18:00", "DONE", oleg, anna,
             types.get("Ковёр"), skuChistka, "Ковёр шёлк 2×3 м", bd(3), bd(2), bd(6));
 
-        createLogisticsOrder("Доставка сегодня · вечер", clients.get("Петрова"), "Петрова Мария Сергеевна",
-            "ул. Фурштатская, д. 12, кв. 3", "Центральный",
-            today.minusDays(2), "12:00-18:00", today, "18:00-22:00", "DONE", oleg, sergey,
+        createLogisticsOrder("Доставка сегодня · 18-19", clients.get("Петрова"), "Петрова Мария Сергеевна",
+            "ул. Фурштатская, д. 12", "Центральный",
+            today.minusDays(2), "17:00-18:00", today, "18:00-19:00", "DONE", oleg, sergey,
             types.get("Палас"), skuChistka, "Палас 2×3 м", bd(3), bd(2), bd(6));
 
-        createLogisticsOrder("Завтра · утро", clients.get("ЧистыйДом"), "ООО \"Чистый дом\"",
+        createLogisticsOrder("Завтра · 17-18", clients.get("ЧистыйДом"), "ООО \"Чистый дом\"",
             "Лиговский пр., д. 50", "Центральный",
-            tomorrow, "08:00-12:00", null, null, "CREATED", null, anna,
+            tomorrow, "17:00-18:00", null, null, "CREATED", null, anna,
             types.get("Ковёр"), skuChistka, "Ковёр персидский 4×5 м", bd(5), bd(4), bd(20));
 
-        createLogisticsOrder("Завтра · день", clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
-            "Большой пр. П.С., д. 80, кв. 12", "Петроградский",
-            tomorrow, "12:00-18:00", null, null, "CREATED", null, sergey,
+        createLogisticsOrder("Завтра · 18-19", clients.get("Кузьмина"), "Кузьмина Ольга Андреевна",
+            "Большой пр. П.С., д. 80", "Петроградский",
+            tomorrow, "18:00-19:00", null, null, "CREATED", null, sergey,
             types.get("Ковёр"), skuChistka, "Ковёр 2×3 м", bd(3), bd(2), bd(6));
 
-        createLogisticsOrder("Завтра · вечер", clients.get("Волков"), "Волков Дмитрий Олегович",
-            "ул. Савушкина, д. 119, кв. 7", "Приморский",
-            tomorrow, "18:00-22:00", null, null, "CREATED", null, anna,
+        createLogisticsOrder("Завтра · 19-20", clients.get("Волков"), "Волков Дмитрий Олегович",
+            "ул. Савушкина, д. 119", "Приморский",
+            tomorrow, "19:00-20:00", null, null, "CREATED", null, anna,
             types.get("Палас"), skuChistka, "Палас 3×4 м", bd(4), bd(3), bd(12));
     }
 
@@ -525,21 +633,47 @@ public class TrainingDataSeeder implements CommandLineRunner {
         boolean paid, String paymentType, LocalDateTime createdAt,
         List<ItemSpec> items
     ) {
+        createOrderFull(clientId, clientName, pickupAddress, pickupDistrict,
+                null, null, status, pickupDate, deliveryDate, paid, paymentType, createdAt,
+                false, null, null, items);
+    }
+
+    /**
+     * V17 + V18: расширенный createOrder поддерживает квартиру, оператора-оформителя,
+     * проблемный флаг. Старая перегрузка делегирует сюда с null/false.
+     */
+    private void createOrderFull(
+        Long clientId, String clientName,
+        String pickupAddress, String pickupDistrict,
+        String pickupApartment, String deliveryApartment,
+        String status, LocalDate pickupDate, LocalDate deliveryDate,
+        boolean paid, String paymentType, LocalDateTime createdAt,
+        boolean isProblem, String problemReason, Long assignedOperatorEmpId,
+        List<ItemSpec> items
+    ) {
         BigDecimal total = BigDecimal.ZERO;
         for (var it : items) for (var s : it.services()) total = total.add(s.price());
         Long orderId = jdbc.queryForObject("""
             INSERT INTO orders(client_id, client_name, status, pickup_address, pickup_district,
+                               pickup_apartment, delivery_apartment,
                                pickup_date, delivery_date, paid, payment_type, payment_date,
-                               total_amount, base_amount, created_at, updated_at)
-            VALUES (:c, :cn, :st, :pa, :pd, :pdate, :ddate, :paid, :pt, :paydate,
-                    :total, :total, :created, :created) RETURNING id
+                               total_amount, base_amount,
+                               is_problem, problem_reason, assigned_operator_id,
+                               created_at, updated_at)
+            VALUES (:c, :cn, :st, :pa, :pd, :pap, :dap,
+                    :pdate, :ddate, :paid, :pt, :paydate,
+                    :total, :total, :probF, :probR, :aoid,
+                    :created, :created) RETURNING id
         """, new MapSqlParameterSource()
             .addValue("c", clientId).addValue("cn", clientName).addValue("st", status)
             .addValue("pa", pickupAddress).addValue("pd", pickupDistrict)
+            .addValue("pap", pickupApartment).addValue("dap", deliveryApartment)
             .addValue("pdate", pickupDate).addValue("ddate", deliveryDate)
             .addValue("paid", paid).addValue("pt", paymentType)
             .addValue("paydate", paid ? createdAt.plusDays(2) : null)
-            .addValue("total", total).addValue("created", createdAt),
+            .addValue("total", total).addValue("created", createdAt)
+            .addValue("probF", isProblem).addValue("probR", problemReason)
+            .addValue("aoid", assignedOperatorEmpId),
             Long.class);
         for (var it : items) insertItemAndServices(orderId, it, status);
     }

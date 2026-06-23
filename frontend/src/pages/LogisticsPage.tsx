@@ -89,6 +89,76 @@ function daysSince(createdAt: string): number {
   return Math.floor((now - created) / (1000 * 60 * 60 * 24))
 }
 
+/**
+ * V19 (#6): печать маршрутного листа на конкретный день.
+ * Поля: №, отвоз/забор, ФИ клиента, адрес (+ кв.), телефон, сумма, комментарий, время.
+ */
+function printRouteSheet(date: string, cards: OrderCard[]): void {
+  const dayCards = cards.filter(c => c.date === date)
+    .sort((a, b) => (a.timeSlot || '').localeCompare(b.timeSlot || ''))
+  const formattedDate = new Date(date).toLocaleDateString('ru', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
+
+  const rows = dayCards.map((c, idx) => {
+    const apartment = c.type === 'pickup' ? c.order.pickup_apartment : c.order.delivery_apartment
+    const addr = (c.address || '—') + (apartment ? `, кв. ${apartment}` : '')
+    const phone = (c.order as { client_phone?: string }).client_phone || c.order.client_address || '—'
+    return `<tr>
+      <td style="padding:6px 8px;text-align:center">${idx + 1}</td>
+      <td style="padding:6px 8px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}</td>
+      <td style="padding:6px 8px">#${String(c.order.id).padStart(5, '0')}</td>
+      <td style="padding:6px 8px">${c.order.client_name}</td>
+      <td style="padding:6px 8px">${addr}</td>
+      <td style="padding:6px 8px;white-space:nowrap">${phone}</td>
+      <td style="padding:6px 8px;text-align:right;white-space:nowrap">${Number(c.order.total_amount).toFixed(0)} ₽</td>
+      <td style="padding:6px 8px;font-size:0.85em">${c.timeSlot || '—'}</td>
+      <td style="padding:6px 8px;font-size:0.85em;color:#555">${c.order.comment || ''}</td>
+    </tr>`
+  }).join('')
+
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+    <title>Маршрутный лист ${date}</title>
+    <style>
+      body{font-family:Arial,sans-serif;font-size:12px;margin:24px;color:#222}
+      h1{font-size:18px;margin:0 0 6px}
+      .sub{color:#666;margin-bottom:14px}
+      table{width:100%;border-collapse:collapse}
+      th{background:#ecf0f1;text-align:left;padding:6px 8px;border:1px solid #bdc3c7;font-size:11px}
+      td{border:1px solid #d6dbdf;font-size:12px;vertical-align:top}
+      tr:nth-child(even) td{background:#fafafa}
+      @media print{ body{margin:10mm} @page{margin:10mm} }
+    </style></head><body>
+    <h1>Маршрутный лист</h1>
+    <div class="sub">${formattedDate} · всего ${dayCards.length} ${dayCards.length === 1 ? 'выезд' : 'выездов'}</div>
+    <table>
+      <thead><tr>
+        <th style="width:32px">#</th>
+        <th style="width:60px">Тип</th>
+        <th style="width:90px">Заказ</th>
+        <th>ФИ клиента</th>
+        <th>Адрес</th>
+        <th>Телефон</th>
+        <th>Сумма</th>
+        <th>Время</th>
+        <th>Комментарий</th>
+      </tr></thead>
+      <tbody>${rows || '<tr><td colspan=9 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
+    </table>
+    </body></html>`
+
+  const iframe = document.createElement('iframe')
+  iframe.style.position = 'fixed'; iframe.style.left = '-9999px'; iframe.style.top = '-9999px'
+  document.body.appendChild(iframe)
+  const doc = iframe.contentDocument || iframe.contentWindow?.document
+  if (doc) {
+    doc.open(); doc.write(html); doc.close()
+    setTimeout(() => {
+      iframe.contentWindow?.print()
+      iframe.addEventListener('afterprint', () => document.body.removeChild(iframe))
+      setTimeout(() => { if (iframe.parentNode) document.body.removeChild(iframe) }, 60000)
+    }, 300)
+  }
+}
+
 export default function LogisticsPage() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
@@ -711,15 +781,25 @@ export default function LogisticsPage() {
   const visibleMapCards = filteredCards.filter(c => c.date && weekDays.includes(c.date))
   const mapPoints: MapPoint[] = visibleMapCards
     .filter(c => c.lat != null && c.lon != null)
-    .map(c => ({
-      lat: c.lat as number,
-      lon: c.lon as number,
-      kind: c.type,
-      // V12: цвет маркера = цвет дня недели. На карте сразу видно, где «вторничные» точки.
-      color: c.date ? dayColor(c.date) : undefined,
-      title: `${c.type === 'pickup' ? 'Забор' : 'Доставка'} #${String(c.order.id).padStart(5, '0')}`,
-      description: `${c.order.client_name}${c.address ? ' · ' + c.address : ''}${c.timeSlot ? ' · ' + c.timeSlot : ''}`,
-    }))
+    .map(c => {
+      // V19 (#7): apartment-suffix к адресу для удобства водителя.
+      const apt = c.type === 'pickup' ? c.order.pickup_apartment : c.order.delivery_apartment
+      return {
+        lat: c.lat as number,
+        lon: c.lon as number,
+        kind: c.type,
+        color: c.date ? dayColor(c.date) : undefined,
+        // Структурные поля — для красивого тултипа: дата → время → № → адрес → имя.
+        date: c.date ?? undefined,
+        time: c.timeSlot ?? undefined,
+        orderNumber: `#${String(c.order.id).padStart(5, '0')}`,
+        address: (c.address || '') + (apt ? `, кв. ${apt}` : ''),
+        clientName: c.order.client_name,
+        // Сохраняем title/description как fallback (вдруг где-то ещё рисуется).
+        title: `${c.type === 'pickup' ? 'Забор' : 'Доставка'} #${String(c.order.id).padStart(5, '0')}`,
+        description: `${c.order.client_name}${c.address ? ' · ' + c.address : ''}${c.timeSlot ? ' · ' + c.timeSlot : ''}`,
+      }
+    })
 
   return (
     <div>
@@ -902,6 +982,23 @@ export default function LogisticsPage() {
             )}
           </span>
         )}
+        {/* V19 (#6): печать маршрутного листа на конкретный день. */}
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+          <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Маршрутный лист на:</label>
+          <select id="route-print-day" defaultValue={today} style={{ width: 'auto' }}>
+            {weekDays.map(d => (
+              <option key={d} value={d}>{formatDayHeader(d)}</option>
+            ))}
+          </select>
+          <button
+            className="btn-secondary btn-sm"
+            onClick={() => {
+              const sel = document.getElementById('route-print-day') as HTMLSelectElement | null
+              const date = sel?.value || today
+              printRouteSheet(date, filteredCards)
+            }}
+          >🖨 Печать</button>
+        </div>
       </div>
 
       {loading ? (
