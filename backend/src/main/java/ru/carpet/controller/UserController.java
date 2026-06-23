@@ -44,6 +44,7 @@ public class UserController {
                 ? ((Number) body.get("employee_id")).longValue() : null;
 
         AppUser user = repo.create(username, encoder.encode(password), displayName, role, employeeId);
+        repo.syncEmployeeRoleFromUserRole(employeeId, role);
         audit.log("USER", user.id(), "CREATE", "Создан пользователь " + username + " [" + role + "]");
         return toPublic(user);
     }
@@ -57,6 +58,7 @@ public class UserController {
         boolean isActive = body.get("is_active") == null || (Boolean) body.get("is_active");
 
         AppUser user = repo.update(id, displayName, role, employeeId, isActive);
+        repo.syncEmployeeRoleFromUserRole(employeeId, role);
         audit.log("USER", user.id(), "UPDATE", "Обновлён пользователь " + user.username() + " [" + role + "]");
         return toPublic(user);
     }

@@ -101,6 +101,29 @@ public class AppUserRepository {
                 Map.of("p", passwordHash, "id", id));
     }
 
+    /**
+     * V24: если у employee ещё нет роли, проставляем «Оператор»/«Админ» по user.role.
+     * Нужно, чтобы оператор/админ появлялся в селекторе исполнителей услуги
+     * «Оформление» (фильтр идёт через employee_role_item_types).
+     *
+     * Не затираем уже назначенную роль (например «Водитель»): если человек явно
+     * назначен водителем — оператор он или нет, его роль водителя важнее.
+     * Для unknown user.role или null employeeId — no-op.
+     */
+    public void syncEmployeeRoleFromUserRole(Long employeeId, String userRole) {
+        if (employeeId == null || userRole == null) return;
+        String empRoleName = switch (userRole) {
+            case "OPERATOR" -> "Оператор";
+            case "ADMIN", "SUPERVISOR" -> "Админ";
+            default -> null;
+        };
+        if (empRoleName == null) return;
+        jdbc.update(
+                "UPDATE employees SET role_id = (SELECT id FROM employee_roles WHERE name = :rn), " +
+                "updated_at = NOW() WHERE id = :id AND role_id IS NULL",
+                Map.of("rn", empRoleName, "id", employeeId));
+    }
+
     public long count() {
         Long c = jdbc.queryForObject("SELECT COUNT(*) FROM users", Map.of(), Long.class);
         return c != null ? c : 0;

@@ -398,7 +398,7 @@ function ServicesPanel({
                             showToast((e as any)?.response?.data?.message || 'Ошибка свапа', 'error')
                           }
                         }}
-                      >↔ {isDelivery ? 'Самовывоз' : 'Платная доставка'}</button>
+                      >↔ {isSelfPickup ? 'Платная' : 'Самовывоз'}</button>
                     )}
                   </td>
                   <td>
