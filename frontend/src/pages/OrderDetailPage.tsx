@@ -350,16 +350,26 @@ function ServicesPanel({
               // Подсказку «Назначьте исполнителя» помещаем в колонку «Исполнители» —
               // чтобы колонка «Действия» во всех строках имела одинаковый layout (select + кнопка).
               const showAssignHint = noAssignees && s.status === 'CREATED' && !blocked
-              // V18: для услуг доставки/самовывоза показываем кнопку «свап» — оператор быстро
-              // меняет платную Доставку на Самовывоз и обратно. По имени SKU определяем тип.
+              // V18/V20/V21: свап «платная услуга» ↔ «Самовывоз».
+              // По умолчанию (V20) у заказа 3 услуги: Приём, Доставка, Оформление.
+              // Свапаются Приём и Доставка — обе с одноимённым Самовывозом.
+              // Legacy SKU «Доставка (забор)»/«Доставка (отвоз)» (исторические заказы)
+              // тоже работают через подстроку имени.
               const name = (s.sku_name || '').toLowerCase()
               const isDelivery = name.includes('доставка')
+              const isIntake = name === 'приём' || name === 'прием' || name.startsWith('приём ') || name.startsWith('прием ')
               const isSelfPickup = name.includes('самовывоз')
-              const swapTargetName = isDelivery
-                ? (name.includes('забор') ? 'Самовывоз (привоз клиентом)' : 'Самовывоз (отвоз клиентом)')
-                : (isSelfPickup
-                  ? (name.includes('привоз') ? 'Доставка (забор)' : 'Доставка (отвоз)')
-                  : null)
+              let swapTargetName: string | null = null
+              if (isDelivery) {
+                if (name.includes('забор')) swapTargetName = 'Самовывоз (привоз клиентом)'
+                else if (name.includes('отвоз')) swapTargetName = 'Самовывоз (отвоз клиентом)'
+                else swapTargetName = 'Самовывоз (отвоз клиентом)' // новая «Доставка» → отвозит клиент
+              } else if (isIntake) {
+                swapTargetName = 'Самовывоз (привоз клиентом)' // клиент сам привозит вещи в офис
+              } else if (isSelfPickup) {
+                if (name.includes('привоз')) swapTargetName = 'Приём'
+                else swapTargetName = 'Доставка'
+              }
               return (
                 <tr key={s.id} style={blocked ? { background: '#fff3cd' } : undefined}>
                   <td>

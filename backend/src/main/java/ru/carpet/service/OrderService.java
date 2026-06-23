@@ -232,49 +232,21 @@ public class OrderService {
      * item_type из его атрибутов и создаём позицию + услугу.
      */
     /**
-     * V18/V19: строим позиции из auto-add SKU. Группировка:
-     *  • «Оформление» (auto_complete_on_status=CREATED) — отдельная позиция (бэк-офис).
-     *  • «Забор» (triggers_order_status=IN_PROGRESS + auto_complete=null) — отдельная,
-     *    содержит платную Доставку(забор) + Приём (auto_complete_on_status=IN_PROGRESS).
-     *  • «Отвоз» (triggers_order_status=DELIVERED) — отдельная позиция с Доставкой(отвоз).
-     * Это убирает путаницу «4 позиции Доставка» и одновременно делает Оформление
-     * отдельной услугой (а не вложенной в Доставку, как просил оператор #2).
+     * V20: одна auto-add SKU = одна позиция (description = название SKU, одна услуга внутри).
+     * После V20 миграции auto-add'ом помечены 3 SKU: Прием, Доставка, Оформление —
+     * каждая порождает отдельную позицию с одной одноимённой услугой. Существующие заказы
+     * не трогаем (attachAutoAddSkus вызывается только при создании).
      */
     private void attachAutoAddSkus(Long orderId) {
         var autoSkus = skuService.findAutoAdd();
         Long currentEmployeeId = resolveCurrentEmployeeId();
 
-        java.util.List<ru.carpet.model.Sku> oformlenieSkus = new java.util.ArrayList<>();
-        java.util.List<ru.carpet.model.Sku> zaborSkus = new java.util.ArrayList<>();
-        java.util.List<ru.carpet.model.Sku> otvozSkus = new java.util.ArrayList<>();
         for (var sku : autoSkus) {
-            String autoCmp = sku.autoCompleteOnStatus();      // куда переключает услугу заказ
-            String trigOrder = sku.triggersOrderStatus();     // куда триггерит заказ при DONE
-            if ("CREATED".equals(autoCmp)) {
-                // Оформление — отдельная позиция, оператор-фронт-офис.
-                oformlenieSkus.add(sku);
-            } else if ("DELIVERED".equals(trigOrder)) {
-                otvozSkus.add(sku);
-            } else {
-                // Доставка-забор + Приём (IN_PROGRESS).
-                zaborSkus.add(sku);
-            }
-        }
-
-        Long deliveryItemTypeId = resolveDeliveryItemTypeId(autoSkus);
-        if (deliveryItemTypeId != null) {
-            if (!oformlenieSkus.isEmpty()) {
-                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Оформление");
-                attachLifecycleSkus(item.id(), oformlenieSkus, currentEmployeeId);
-            }
-            if (!zaborSkus.isEmpty()) {
-                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Забор");
-                attachLifecycleSkus(item.id(), zaborSkus, currentEmployeeId);
-            }
-            if (!otvozSkus.isEmpty()) {
-                OrderItem item = itemRepository.save(orderId, deliveryItemTypeId, "Отвоз");
-                attachLifecycleSkus(item.id(), otvozSkus, currentEmployeeId);
-            }
+            // item_type подтягивается из атрибута самой SKU.
+            Long itemTypeId = resolveDeliveryItemTypeId(java.util.List.of(sku));
+            if (itemTypeId == null) continue;
+            OrderItem item = itemRepository.save(orderId, itemTypeId, sku.name());
+            attachLifecycleSkus(item.id(), java.util.List.of(sku), currentEmployeeId);
         }
     }
 
@@ -297,8 +269,11 @@ public class OrderService {
             BigDecimal price = sku.price() == null ? BigDecimal.ZERO : sku.price();
             Long serviceId = serviceInstanceRepository.saveOne(itemId, sku.id(), price);
             totalPrice = totalPrice.add(price);
-            // V17: «оформление» (CREATED) — автоназначаем оператора-создателя.
-            if (currentEmployeeId != null && "CREATED".equals(sku.autoCompleteOnStatus())) {
+            // V17/V21: услуга «Оформление» (triggers_order_status='CREATED') —
+            // автоназначаем оператора-создателя как исполнителя.
+            // Раньше тут стояла проверка sku.autoCompleteOnStatus(), но у «Оформление»
+            // оно с V16 было NULL — поэтому автоназначение не срабатывало.
+            if (currentEmployeeId != null && "CREATED".equals(sku.triggersOrderStatus())) {
                 serviceInstanceRepository.assignEmployee(serviceId, currentEmployeeId);
             }
         }

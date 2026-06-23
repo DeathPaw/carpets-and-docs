@@ -103,6 +103,12 @@ powershell -NoProfile -Command "$t=Get-ScheduledTask -TaskName 'CarpetOrdersAuto
 
 echo Task registered (SYSTEM user, no battery limits, no logon required).
 
+REM Daily DB backup task (хранит последние 3 daily-дампа + 1 pre-update от update.bat).
+schtasks /Delete /TN "CarpetOrdersBackup" /F >nul 2>&1
+schtasks /Create /SC DAILY /ST 04:00 /TN "CarpetOrdersBackup" /TR "\"%ROOT%\deploy\backup.bat\"" /RL HIGHEST /RU SYSTEM /F >nul || goto :err
+powershell -NoProfile -Command "$t=Get-ScheduledTask -TaskName 'CarpetOrdersBackup'; $t.Settings.DisallowStartIfOnBatteries=$false; $t.Settings.StopIfGoingOnBatteries=$false; $t.Settings.StartWhenAvailable=$true; Set-ScheduledTask -InputObject $t" >nul 2>&1
+echo Daily backup task registered (04:00, keeps 3 days).
+
 echo.
 echo === [6/6] Starting application ===
 call "%ROOT%\deploy\start.bat"
