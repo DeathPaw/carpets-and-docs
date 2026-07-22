@@ -1091,6 +1091,10 @@ export default function OrderDetailPage() {
   const [allModifiers, setAllModifiers] = useState<PriceModifier[]>([])
   // V19: модификаторы которые уже на клиенте — чтобы скрывать кнопку «→ клиенту» для них.
   const [clientModifierIds, setClientModifierIds] = useState<Set<number>>(new Set())
+  // Флаг is_problem подгружается сразу с загрузкой заказа — чтобы был красный
+  // алерт «Проблемный клиент» прямо на странице заказа, а не только в модалке
+  // карточки клиента.
+  const [clientIsProblem, setClientIsProblem] = useState<boolean>(false)
   const [showClientCard, setShowClientCard] = useState<Client | null>(null)
   const [clientCardMods, setClientCardMods] = useState<PriceModifier[]>([])
   const [clientEvents, setClientEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
@@ -1144,8 +1148,11 @@ export default function OrderDetailPage() {
         getClientModifiers(o.client_id).then(mods => {
           setClientModifierIds(new Set(mods.map(m => m.id)))
         }).catch(() => setClientModifierIds(new Set()))
+        // Флаг «Проблемный клиент» — для алерта на странице заказа.
+        getClient(o.client_id).then(c => setClientIsProblem(!!c.is_problem)).catch(() => setClientIsProblem(false))
       } else {
         setClientModifierIds(new Set())
+        setClientIsProblem(false)
       }
       setCommentValue(o.comment ?? '')
       setDetails({
@@ -1598,7 +1605,56 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                   }}
                 >✎</button>
               )}
+              {isEditable && order.client_id && (
+                <button
+                  className="btn-secondary btn-sm"
+                  title="Пометить клиента как проблемного / снять метку"
+                  onClick={async () => {
+                    try {
+                      const c = await getClient(order.client_id!)
+                      const nextProblem = !c.is_problem
+                      const msg = nextProblem
+                        ? `Пометить «${c.name}» как проблемного клиента? Все операторы будут видеть красный алерт при выборе клиента.`
+                        : `Снять с «${c.name}» метку проблемного клиента?`
+                      if (!window.confirm(msg)) return
+                      await (await import('../api/clients')).updateClient(c.id, {
+                        client_type: c.client_type,
+                        name: c.name,
+                        first_name: c.first_name ?? undefined,
+                        last_name: c.last_name ?? undefined,
+                        phone: c.phone ?? '',
+                        extra_phone: c.extra_phone ?? undefined,
+                        address: c.address ?? undefined,
+                        apartment: c.apartment ?? undefined,
+                        district: c.district ?? undefined,
+                        inn: c.inn ?? undefined,
+                        contact_person: c.contact_person ?? undefined,
+                        contact_person_phone: c.contact_person_phone ?? undefined,
+                        comment: c.comment ?? undefined,
+                        is_pensioner: c.is_pensioner,
+                        is_problem: nextProblem,
+                        is_regular: c.is_regular,
+                        lat: c.lat,
+                        lon: c.lon,
+                      } as any)
+                      await loadOrder()
+                      showToast(nextProblem ? 'Клиент помечен проблемным' : 'Метка снята', 'success')
+                    } catch (e: unknown) {
+                      showToast((e as any)?.response?.data?.message || 'Ошибка обновления клиента', 'error')
+                    }
+                  }}
+                >⚠</button>
+              )}
             </div>
+            {clientIsProblem && (
+              <div style={{
+                marginBottom: 8, padding: '6px 10px', background: '#fdecea',
+                border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21',
+                fontWeight: 600, fontSize: '0.9em',
+              }}>
+                ⚠ Проблемный клиент
+              </div>
+            )}
             {order.client_address && <div style={{ marginBottom: 8 }}><strong>Адрес клиента:</strong> {order.client_address}</div>}
             {order.is_warranty && (
               <div style={{ marginBottom: 8 }}>

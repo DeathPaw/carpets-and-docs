@@ -38,12 +38,15 @@ function CreateClientModal({
         }
       : emptyClientForm()
   )
-  // Флаги (пенсионер / проблемный / постоянный) сохраняем при редактировании, чтобы
-  // не сбросились — UI для них на этой странице исторически не было, в OrdersPage тоже нет.
-  // При создании всегда false. Для управления ими — отдельный экран (по плану).
+  // Пенсионер/постоянный клиент теперь живут как модификаторы цены; is_pensioner/is_regular
+  // храним в БД для обратной совместимости, но UI-переключателя для них здесь нет —
+  // при редактировании просто сохраняем текущее значение.
+  // is_problem — отдельный флаг с UI-тумблером (оператор помечает проблемного клиента,
+  // при выборе клиента в CreateOrderModal и в его карточке отрисовывается красный алерт).
+  const [isProblem, setIsProblem] = useState(editClient?.is_problem || false)
   const flags = {
     is_pensioner: editClient?.is_pensioner || false,
-    is_problem: editClient?.is_problem || false,
+    is_problem: isProblem,
     is_regular: editClient?.is_regular || false,
   }
   const [error, setError] = useState('')
@@ -107,6 +110,30 @@ function CreateClientModal({
         <h2>{editClient ? 'Редактировать клиента' : 'Новый клиент'}</h2>
 
         <ClientFormFields value={form} onChange={setForm} />
+
+        <div style={{ marginBottom: 12 }}>
+          <label style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer',
+            padding: '6px 12px', borderRadius: 4,
+            background: isProblem ? '#fdecea' : '#f5f5f5',
+            border: `1px solid ${isProblem ? '#e74c3c' : '#ddd'}`,
+            color: isProblem ? '#922b21' : '#555', fontWeight: isProblem ? 600 : 400,
+          }}>
+            <input
+              type="checkbox"
+              checked={isProblem}
+              onChange={e => setIsProblem(e.target.checked)}
+              style={{ margin: 0 }}
+            />
+            ⚠ Проблемный клиент
+          </label>
+          {isProblem && (
+            <div style={{ marginTop: 4, fontSize: '0.82em', color: '#7f8c8d' }}>
+              При создании заказа этот клиент будет отмечен красным алертом,
+              администраторы получат уведомление.
+            </div>
+          )}
+        </div>
 
         {allMods.length > 0 && (
           <div style={{ marginBottom: 12 }}>
