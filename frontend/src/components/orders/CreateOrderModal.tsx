@@ -1,13 +1,13 @@
 import { useState } from 'react'
 import { createOrder, updateOrderDetails } from '../../api/orders'
-import { searchClients, createClient } from '../../api/clients'
+import { searchClients, createClient, getClientModifiers } from '../../api/clients'
 import DistrictSelect from '../DistrictSelect'
 import AddressInput, { type AddressResolved } from '../AddressInput'
 import { formatPhone } from '../PhoneInput'
 import ClientFormFields, {
   type ClientFormState, emptyClientForm, validateClientForm,
 } from '../ClientFormFields'
-import type { Order, CreateOrderRequest, Client } from '../../types'
+import type { Order, CreateOrderRequest, Client, PriceModifier } from '../../types'
 
 /**
  * Модалка создания заказа. Раньше жила прямо в OrdersPage.tsx и занимала ~450 строк
@@ -48,6 +48,8 @@ export default function CreateOrderModal({ onClose, onCreated }: {
     setClientSearch(q)
     setSelectedClientId(null)
     setSelectedClientName('')
+    setSelectedClient(null)
+    setSelectedClientMods([])
     if (searchTimer) clearTimeout(searchTimer)
     if (!q.trim()) { setClients([]); return }
     const timer = setTimeout(async () => {
@@ -63,12 +65,19 @@ export default function CreateOrderModal({ onClose, onCreated }: {
   // подсказку «адрес клиента / изменён вручную» под полем. Сравниваем с тем,
   // что сейчас в поле адреса; равно — значит оператор ничего не правил.
   const [clientSourceAddress, setClientSourceAddress] = useState<string>('')
+  // Флаги/модификаторы выбранного клиента — оператор должен сразу видеть,
+  // что клиент проблемный или что у него привязана скидка/наценка.
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
+  const [selectedClientMods, setSelectedClientMods] = useState<PriceModifier[]>([])
 
   const selectClient = (c: Client) => {
     setSelectedClientId(c.id)
     setSelectedClientName(c.name)
+    setSelectedClient(c)
     setClientSearch(c.name)
     setClients([])
+    // Модификаторы клиента подгружаем сразу, чтобы отрисовать плашки под полем поиска.
+    getClientModifiers(c.id).then(setSelectedClientMods).catch(() => setSelectedClientMods([]))
     // Старый сценарий открывал модалку «Использовать адрес клиента?» — это лишний клик
     // (Миша на встрече: «вот этот поп-ап точно лишний клик, у тебя адрес уже есть»).
     // Теперь сразу подставляем адрес в поля забора и доставки, включая координаты и район.
@@ -176,8 +185,10 @@ export default function CreateOrderModal({ onClose, onCreated }: {
         clientName = selectedClientName
       }
 
-      // Адреса: если customAddress — берём из полей, иначе из адреса клиента
-      const selectedClient = clients.find(c => c.id === clientId)
+      // Адреса: если customAddress — берём из полей, иначе из адреса клиента.
+      // ⚠ Раньше искали через clients.find, но после selectClient массив clients
+      // очищается (закрываем dropdown), и find возвращал undefined. Используем
+      // state selectedClient — он выставляется в selectClient и живёт до сброса.
       const clientAddr = showNewClient ? newClientForm.address.trim() : (selectedClient?.address || '')
       const clientDist = showNewClient ? newClientForm.district.trim() : (selectedClient?.district || '')
       const clientLat = showNewClient ? newClientForm.lat : (selectedClient?.lat ?? null)
@@ -308,6 +319,31 @@ export default function CreateOrderModal({ onClose, onCreated }: {
               {selectedClientId && (
                 <div style={{ marginTop: 4, fontSize: '0.9em', color: '#27ae60' }}>
                   Выбран: {selectedClientName} (#{selectedClientId})
+                </div>
+              )}
+              {selectedClientId && selectedClient?.is_problem && (
+                <div style={{
+                  marginTop: 8, padding: '8px 10px', background: '#fdecea',
+                  border: '1px solid #e74c3c', borderRadius: 4, fontSize: '0.88em', color: '#922b21',
+                }}>
+                  ⚠ Проблемный клиент
+                </div>
+              )}
+              {selectedClientId && selectedClientMods.length > 0 && (
+                <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                  {selectedClientMods.map(m => {
+                    const isDiscount = Number(m.percent) < 0
+                    return (
+                      <span key={m.id} style={{
+                        padding: '3px 8px', borderRadius: 12, fontSize: '0.82em',
+                        background: isDiscount ? '#eafaf1' : '#fef5e7',
+                        color: isDiscount ? '#186a3b' : '#7d6608',
+                        border: `1px solid ${isDiscount ? '#a9dfbf' : '#f9e79f'}`,
+                      }}>
+                        {m.name} {Number(m.percent) > 0 ? '+' : ''}{m.percent}%
+                      </span>
+                    )
+                  })}
                 </div>
               )}
             </div>

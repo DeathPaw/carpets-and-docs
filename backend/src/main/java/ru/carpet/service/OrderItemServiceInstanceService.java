@@ -175,6 +175,14 @@ public class OrderItemServiceInstanceService {
         if (status == ServiceStatus.DONE && instance.skuId() != null) {
             orderService.checkServiceTrigger(instance.orderItemId(), instance.skuId());
         }
+        // Отмена «Оформления» = отмена заказа. По просьбе оператора автоотмены
+        // «все позиции отменены → заказ отменён» больше нет; вместо этого
+        // единственный триггер автоотмены — отмена самой услуги «Оформление»
+        // (SKU с triggers_order_status='CREATED'). Причину отмены услуги
+        // прокидываем в отмену заказа.
+        if (status == ServiceStatus.CANCELLED && instance.skuId() != null) {
+            orderService.checkServiceCancelTrigger(instance.orderItemId(), instance.skuId(), cancellationReason);
+        }
 
         return repository.findById(serviceId).orElseThrow();
     }

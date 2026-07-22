@@ -448,6 +448,28 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
     const [defects, setDefects]   = useState(s.item_defects || '')
     const [saving, setSaving]     = useState(false)
 
+    // Автопересчёт площади при вводе длины/ширины — как в OrderDetailPage.
+    // Раньше на мобилке площадь не двигалась после изменения размеров, и оператор
+    // молча уходил с несогласованными значениями (или считал в уме). Теперь если
+    // введены и длина, и ширина — площадь пересчитывается. Для круглых/овальных
+    // ковров оператор оставляет L/W пустыми и вводит площадь руками.
+    const onLengthChange = (v: string) => {
+        setLength(v)
+        const l = v ? Number(v) : null
+        const w = width ? Number(width) : null
+        if (l != null && !isNaN(l) && w != null && !isNaN(w)) {
+            setArea(String(Math.round(l * w * 100) / 100))
+        }
+    }
+    const onWidthChange = (v: string) => {
+        setWidth(v)
+        const l = length ? Number(length) : null
+        const w = v ? Number(v) : null
+        if (l != null && !isNaN(l) && w != null && !isNaN(w)) {
+            setArea(String(Math.round(l * w * 100) / 100))
+        }
+    }
+
     const save = async () => {
         setSaving(true)
         try {
@@ -473,8 +495,8 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
                     {s.item_type_name} в заказе #{s.order_id} ({s.client_name})
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
-                    <Field label="Длина, м"  value={length} onChange={setLength} />
-                    <Field label="Ширина, м" value={width}  onChange={setWidth} />
+                    <Field label="Длина, м"  value={length} onChange={onLengthChange} />
+                    <Field label="Ширина, м" value={width}  onChange={onWidthChange} />
                     <Field label="Площадь, м²" value={area} onChange={setArea} />
                     <Field label="Вес, кг"   value={weight} onChange={setWeight} />
                 </div>

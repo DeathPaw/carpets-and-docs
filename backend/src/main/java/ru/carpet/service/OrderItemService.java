@@ -132,6 +132,10 @@ public class OrderItemService {
         // позиции больше нет (упрощение модели после первого прода) — менять цену
         // оператор может только на конкретной услуге через её editPrice/«А».
         orderItemRepository.updatePrice(orderItemId, totalServicePrice);
+        // Синхронизация статуса позиции с составом услуг: свап/добавление/удаление
+        // услуг тоже меняет их набор, а из этих путей вызывается только recalculateItemPrice.
+        // Без этого позиция «застревала»: услуга уже DONE, а позиция всё ещё CREATED.
+        recalculateItemStatus(orderItemId);
         orderService.recalculateTotalAmount(item.orderId());
     }
 

@@ -505,9 +505,14 @@ public class OrderService {
         long partiallyDoneCount = target.stream().filter(i -> i.status() == OrderItemStatus.PARTIALLY_DONE).count();
         long doneOrCancelledCount = doneCount + cancelledCount;
 
-        if (doneOrCancelledCount == target.size()) {
-            if (doneCount > 0) return OrderStatus.DONE;
-            return OrderStatus.CANCELLED;
+        // Автоперевод в DONE — если все значимые позиции закрыты (хотя бы одна — DONE).
+        // Автоперевода в CANCELLED больше нет: раньше «все позиции отменены» тянуло
+        // заказ в CANCELLED, но по фидбэку оператора это мешало — отменили пачку позиций
+        // при перекомпоновке заказа и получили отменённый заказ. Отмена заказа теперь
+        // — только явное действие оператора либо отмена услуги «Оформление»
+        // (см. checkServiceCancelTrigger).
+        if (doneOrCancelledCount == target.size() && doneCount > 0) {
+            return OrderStatus.DONE;
         }
         if (doneCount > 0 || partiallyDoneCount > 0) return OrderStatus.PARTIALLY_DONE;
         if (inProgressCount > 0) return OrderStatus.IN_PROGRESS;
@@ -577,6 +582,35 @@ public class OrderService {
             historyRepository.save(item.orderId(), order.status(), targetStatus);
             auditLogService.log("ORDER", item.orderId(), "LIFECYCLE_TRIGGER",
                     "SKU «" + sku.name() + "» завершена → заказ #" + item.orderId() + " → " + targetStatus);
+        } catch (Exception ignored) {}
+    }
+
+    /**
+     * Отмена услуги «Оформление» (SKU с triggers_order_status='CREATED') автоматически
+     * отменяет весь заказ. Причина отмены услуги проксируется в отмену заказа.
+     * Прочие услуги при отмене на статус заказа не влияют — оператор может отменить
+     * доставку/приём/произвольную услугу, не отменяя весь заказ.
+     */
+    @Transactional
+    public void checkServiceCancelTrigger(Long orderItemId, Long skuId, String cancellationReason) {
+        if (skuId == null) return;
+        try {
+            Sku sku = skuService.findById(skuId);
+            if (!"CREATED".equals(sku.triggersOrderStatus())) return;
+            OrderItem item = itemRepository.findById(orderItemId).orElse(null);
+            if (item == null) return;
+            Order order = findById(item.orderId());
+            // Финальные и уже отменённые заказы не трогаем.
+            if (order.status() == OrderStatus.CANCELLED
+                    || order.status() == OrderStatus.DELIVERED
+                    || order.status() == OrderStatus.COMPLETED) return;
+            String reason = cancellationReason == null || cancellationReason.trim().isEmpty()
+                    ? "Отменена услуга «" + sku.name() + "»"
+                    : cancellationReason.trim();
+            repository.updateStatusWithReason(item.orderId(), OrderStatus.CANCELLED, reason);
+            historyRepository.save(item.orderId(), order.status(), OrderStatus.CANCELLED);
+            auditLogService.log("ORDER", item.orderId(), "LIFECYCLE_TRIGGER",
+                    "SKU «" + sku.name() + "» отменена → заказ #" + item.orderId() + " → CANCELLED (причина: " + reason + ")");
         } catch (Exception ignored) {}
     }
 

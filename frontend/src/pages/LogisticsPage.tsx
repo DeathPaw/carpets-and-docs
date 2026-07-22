@@ -6,6 +6,7 @@ import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import { hashColor } from '../components/Tiles'
 import { formatOrderNumber } from '../utils/format'
+import { PAYMENT_LABELS } from '../constants/statuses'
 import { useAuth } from '../auth/AuthContext'
 import type { Order, Employee } from '../types'
 
@@ -101,7 +102,12 @@ function printRouteSheet(date: string, cards: OrderCard[]): void {
   const rows = dayCards.map((c, idx) => {
     const apartment = c.type === 'pickup' ? c.order.pickup_apartment : c.order.delivery_apartment
     const addr = (c.address || '—') + (apartment ? `, кв. ${apartment}` : '')
-    const phone = (c.order as { client_phone?: string }).client_phone || c.order.client_address || '—'
+    // Раньше в fallback шёл client_address — из-за этого в колонке «Телефон» рисовался
+    // адрес клиента. Теперь при отсутствии телефона показываем прочерк.
+    const phone = (c.order as { client_phone?: string }).client_phone || '—'
+    // Тип оплаты в маршрутный лист: до выдачи (paid=false) показываем «не выбран»,
+    // чтобы водитель заранее знал, чем клиент собирается расплачиваться.
+    const payment = c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—'
     return `<tr>
       <td style="padding:6px 8px;text-align:center">${idx + 1}</td>
       <td style="padding:6px 8px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}</td>
@@ -110,6 +116,7 @@ function printRouteSheet(date: string, cards: OrderCard[]): void {
       <td style="padding:6px 8px">${addr}</td>
       <td style="padding:6px 8px;white-space:nowrap">${phone}</td>
       <td style="padding:6px 8px;text-align:right;white-space:nowrap">${Number(c.order.total_amount).toFixed(0)} ₽</td>
+      <td style="padding:6px 8px;white-space:nowrap">${payment}</td>
       <td style="padding:6px 8px;font-size:0.85em">${c.timeSlot || '—'}</td>
       <td style="padding:6px 8px;font-size:0.85em;color:#555">${c.order.comment || ''}</td>
     </tr>`
@@ -138,10 +145,11 @@ function printRouteSheet(date: string, cards: OrderCard[]): void {
         <th>Адрес</th>
         <th>Телефон</th>
         <th>Сумма</th>
+        <th>Оплата</th>
         <th>Время</th>
         <th>Комментарий</th>
       </tr></thead>
-      <tbody>${rows || '<tr><td colspan=9 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan=10 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
     </table>
     </body></html>`
 
@@ -1005,53 +1013,50 @@ export default function LogisticsPage() {
         <div className="loading">Загрузка...</div>
       ) : (
         <>
-          {/* No-date section с собственным фильтром.
-              Раньше блок скрывался когда не было нераспределённых карточек,
-              из-за чего оператор не мог перетащить заказ обратно «без даты»
-              (фидбэк пользователя 11 мая). Теперь блок всегда рендерится —
-              если пуст, это drop-zone с подсказкой «перетащите сюда, чтобы снять с даты». */}
-          {true && (
-            <div style={{ marginBottom: 16 }}>
-              <div style={{
-                display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                marginBottom: 4, padding: '0 4px', flexWrap: 'wrap', gap: 8,
-              }}>
-                <strong style={{ fontSize: '0.95em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.5 }}>
-                  Без даты ({(cardsByDay.get('no-date')?.length ?? 0)})
-                </strong>
-                <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
-                  {[
-                    { v: 'all'   as NoDateFilter, label: 'Все' },
-                    { v: 'leads' as NoDateFilter, label: 'Лиды без забора' },
-                    { v: 'ready' as NoDateFilter, label: 'Готовы без доставки' },
-                    { v: 'old'   as NoDateFilter, label: 'Старше 7 дней' },
-                  ].map(f => (
-                    <button
-                      key={f.v}
-                      onClick={() => setNoDateFilter(f.v)}
-                      style={{
-                        padding: '4px 10px', border: 'none', cursor: 'pointer', fontSize: '0.82em',
-                        background: noDateFilter === f.v ? '#3498db' : '#fff',
-                        color: noDateFilter === f.v ? '#fff' : '#555',
-                      }}
-                    >{f.label}</button>
-                  ))}
-                </div>
-              </div>
-              {renderDaySection(
-                'no-date',
-                'Назначьте перетаскиванием на день недели',
-                noDateCards,
-                { noDateMode: true },
-              )}
-            </div>
-          )}
-
           {/* Дни недели — горизонтальная сетка из 7 колонок (Пн..Вс).
-              Внутри каждого дня — 4 слота сверху вниз (Утро, День, Вечер, Без слота).
+              Оператор просил календарь СВЕРХУ, а «Без даты» вниз — распределение
+              по дням это основная работа, «Без даты» скорее очередь на разбор.
               На узких экранах через CSS сетка переключается на стек (см. .logistics-week-grid). */}
           <div className="logistics-week-grid">
             {weekDays.map(day => renderDaySection(day, formatDayHeader(day), cardsByDay.get(day) || []))}
+          </div>
+
+          {/* No-date section с собственным фильтром.
+              Блок всегда рендерится — если пуст, это drop-zone с подсказкой
+              «перетащите сюда, чтобы снять с даты». */}
+          <div style={{ marginTop: 16 }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 4, padding: '0 4px', flexWrap: 'wrap', gap: 8,
+            }}>
+              <strong style={{ fontSize: '0.95em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+                Без даты ({(cardsByDay.get('no-date')?.length ?? 0)})
+              </strong>
+              <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
+                {[
+                  { v: 'all'   as NoDateFilter, label: 'Все' },
+                  { v: 'leads' as NoDateFilter, label: 'Лиды без забора' },
+                  { v: 'ready' as NoDateFilter, label: 'Готовы без доставки' },
+                  { v: 'old'   as NoDateFilter, label: 'Старше 7 дней' },
+                ].map(f => (
+                  <button
+                    key={f.v}
+                    onClick={() => setNoDateFilter(f.v)}
+                    style={{
+                      padding: '4px 10px', border: 'none', cursor: 'pointer', fontSize: '0.82em',
+                      background: noDateFilter === f.v ? '#3498db' : '#fff',
+                      color: noDateFilter === f.v ? '#fff' : '#555',
+                    }}
+                  >{f.label}</button>
+                ))}
+              </div>
+            </div>
+            {renderDaySection(
+              'no-date',
+              'Назначьте перетаскиванием на день недели',
+              noDateCards,
+              { noDateMode: true },
+            )}
           </div>
         </>
       )}

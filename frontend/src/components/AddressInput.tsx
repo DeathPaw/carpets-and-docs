@@ -92,7 +92,15 @@ export default function AddressInput({
     try {
       const body: Record<string, unknown> = { query, count: 10 }
       if (cityFilter) {
-        body.locations = [{ city: cityFilter }]
+        // Оператор просил показывать пригороды/Ленобласть (Гатчина, Всеволожск, и т.д.),
+        // а также «пропущенные» СПб-пригороды типа Петергоф/Пушкин.
+        // DaData locations = OR: адрес подходит, если попадает под ЛЮБУЮ из локаций.
+        // Для СПб оставляем city-фильтр (включает внутригородские территории —
+        // Пушкин, Петергоф, Кронштадт), для области — фильтр по региону.
+        body.locations = [
+          { city: cityFilter },
+          { region: 'Ленинградская' },
+        ]
         body.from_bound = { value: 'street' }
         body.to_bound = { value: 'house' }
       }

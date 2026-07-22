@@ -287,7 +287,16 @@ function ClientCardModal({
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap' }}>
+        {client.is_problem && (
+          <div style={{
+            marginTop: 12, padding: '8px 12px', background: '#fdecea',
+            border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21', fontWeight: 600,
+          }}>
+            ⚠ Проблемный клиент
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', marginTop: client.is_problem ? 12 : 0 }}>
           <div style={{ flex: '1 1 250px' }}>
             {!isLegal && (
               <>
