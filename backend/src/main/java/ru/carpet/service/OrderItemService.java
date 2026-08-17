@@ -71,6 +71,10 @@ public class OrderItemService {
         findById(itemId);
         orderItemRepository.updateStatusWithReason(itemId, newStatus, reason);
         OrderItem item = orderItemRepository.findById(itemId).orElseThrow();
+        // Отменённая позиция выпадает из суммы заказа: sumPriceByOrderId её уже не
+        // считает, но без явного пересчёта base_amount/total_amount оставались
+        // старыми — в «Расчёт стоимости» базовая сумма менялась, а ИТОГО нет.
+        orderService.recalculateTotalAmount(item.orderId());
         orderService.recalculateOrderStatus(item.orderId());
         return item;
     }
@@ -87,11 +91,15 @@ public class OrderItemService {
         OrderItem item = findById(itemId);
         Order order = orderRepository.findById(item.orderId())
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + item.orderId()));
-        if (order.status() == OrderStatus.DELIVERED
-                || order.status() == OrderStatus.COMPLETED
-                || order.status() == OrderStatus.CANCELLED) {
+        // Блокируем правку только у оплаченного заказа: там уже закрыты деньги,
+        // менять состав — значит расходиться с чеком. DELIVERED/CANCELLED раньше
+        // тоже блокировались, но оператор, ошибочно переведя заказ, не мог ничего
+        // исправить без разработчика; теперь он либо правит на месте, либо
+        // откатывает статус (OrderService.rollbackStatus).
+        if (order.status() == OrderStatus.COMPLETED) {
             throw new ru.carpet.exception.BusinessRuleException(
-                    "Нельзя редактировать параметры позиции для заказа в статусе " + order.status());
+                    "Заказ завершён и оплачен — редактирование позиций закрыто. "
+                    + "Для корректировки оформите гарантийный возврат.");
         }
         // Авто-площадь = длина × ширина, если оператор её не задал.
         // Для круглых/овальных ковров оператор отправит area явно, она пройдёт как есть.

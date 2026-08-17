@@ -420,6 +420,64 @@ public class OrderService {
         return repository.findById(orderId).orElseThrow();
     }
 
+    /**
+     * Откат статуса заказа на один шаг назад по истории.
+     *
+     * <p>Зачем: обычные переходы односторонние (validateStatusTransition), и оператор,
+     * промахнувшийся кнопкой (например, отправил заказ в «Доставлен»), раньше не мог
+     * ничего исправить без разработчика — заказ вставал в статус, где редактирование
+     * состава заблокировано.
+     *
+     * <p>Правила:
+     * <ul>
+     *   <li>берём предыдущий статус из order_status_history (последняя запись);</li>
+     *   <li>причина обязательна — откат это исправление ошибки, оно должно быть объяснено;</li>
+     *   <li>из COMPLETED не откатываем: заказ оплачен, сначала нужен возврат оплаты;</li>
+     *   <li>снимаем cancellation_reason, если откатываем отмену.</li>
+     * </ul>
+     */
+    @Transactional
+    public Order rollbackStatus(Long orderId, String reason) {
+        Order order = findById(orderId);
+        String trimmed = reason == null ? "" : reason.trim();
+        if (trimmed.length() < 10) {
+            throw new BusinessRuleException("Для отката статуса укажите причину (минимум 10 символов).");
+        }
+        if (order.status() == OrderStatus.COMPLETED) {
+            throw new BusinessRuleException(
+                "Заказ завершён и оплачен — откат статуса невозможен. "
+                + "Если нужна корректировка, оформите гарантийный возврат.");
+        }
+        OrderStatus previous = historyRepository.findPreviousStatus(orderId);
+        if (previous == null) {
+            throw new BusinessRuleException(
+                "Некуда откатывать: у заказа нет предыдущего статуса в истории.");
+        }
+        OrderStatus current = order.status();
+        if (previous == current) {
+            throw new BusinessRuleException("Предыдущий статус совпадает с текущим — откат не нужен.");
+        }
+        // Откат из CANCELLED должен снять причину отмены, иначе она «прилипнет»
+        // к живому заказу и будет висеть в интерфейсе.
+        if (current == OrderStatus.CANCELLED) {
+            repository.updateStatusWithReason(orderId, previous, null);
+        } else {
+            repository.updateStatus(orderId, previous);
+        }
+        historyRepository.save(orderId, current, previous);
+        auditLogService.log("ORDER", orderId, "STATUS_ROLLBACK",
+                "Откат статуса заказа #" + orderId + ": " + current + " → " + previous
+                        + " (причина: " + trimmed + ")");
+        notifyOperators(
+            "ORDER_STATUS_CHANGED",
+            "Откат заказа #" + String.format("%05d", orderId) + ": " + current + " → " + previous,
+            "ORDER",
+            orderId,
+            order.assignedOperatorId()
+        );
+        return repository.findById(orderId).orElseThrow();
+    }
+
     private void validateStatusTransition(OrderStatus current, OrderStatus next) {
         // Ручные переходы: LEAD→CREATED, CREATED→FOR_PICKUP, DONE→DELIVERED, DELIVERED→COMPLETED (через оплату), любой активный→CANCELLED
         // IN_PROGRESS, PARTIALLY_DONE, DONE — автоматически из позиций через recalculateOrderStatus
@@ -836,8 +894,27 @@ public class OrderService {
         for (OrderModifier m : modifiers) {
             modifierSum = modifierSum.add(baseAmount.multiply(m.percent()).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
         }
-        BigDecimal total = baseAmount.add(modifierSum);
+        BigDecimal total = roundDownToHundred(baseAmount.add(modifierSum));
         repository.updateTotalAmount(orderId, total);
+    }
+
+    /**
+     * Округление итоговой суммы заказа ВНИЗ до ближайшей сотни рублей —
+     * оператору неудобно называть клиенту «6499.20», округляем в пользу клиента.
+     * 6499.20 → 6400, 6400.00 → 6400, 6599.99 → 6500, 6999.99 → 6900.
+     *
+     * Округляем только ИТОГО. base_amount и цены позиций остаются точными:
+     * по ним считается доходность и себестоимость, там копейки важны.
+     */
+    static BigDecimal roundDownToHundred(BigDecimal amount) {
+        if (amount == null) return BigDecimal.ZERO;
+        // Отрицательных итогов быть не должно (скидка >100% запрещена), но если
+        // вдруг — не «улетаем» вниз ещё на сотню, просто отдаём как есть.
+        if (amount.signum() <= 0) return amount.setScale(2, RoundingMode.HALF_UP);
+        return amount
+                .divide(BigDecimal.valueOf(100), 0, RoundingMode.FLOOR)
+                .multiply(BigDecimal.valueOf(100))
+                .setScale(2, RoundingMode.HALF_UP);
     }
 
     /**

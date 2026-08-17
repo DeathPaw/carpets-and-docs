@@ -1,9 +1,11 @@
-import { useEffect, useState, useMemo } from 'react'
+import { useEffect, useState, useMemo, useCallback } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getOrders, updateActualDates, setOrderDriver } from '../api/orders'
 import { getDrivers } from '../api/references'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import MultiSelectFilter from '../components/MultiSelectFilter'
+import CompleteDeliveriesModal from '../components/logistics/CompleteDeliveriesModal'
+import { getDeliverySlots, slotValue, slotLabel, type DeliverySlot } from '../api/deliverySlots'
 import { hashColor } from '../components/Tiles'
 import { formatOrderNumber } from '../utils/format'
 import { PAYMENT_LABELS } from '../constants/statuses'
@@ -23,6 +25,8 @@ interface OrderCard {
   address: string | null
   lat: number | null
   lon: number | null
+  /** Развозка уже выполнена (DELIVERED/COMPLETED) — карточка живёт в архиве дня, не перетаскивается. */
+  archived?: boolean
 }
 
 const DAY_NAMES = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб']
@@ -31,18 +35,31 @@ const MONTH_NAMES_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'и
 interface SlotDef {
   value: string
   label: string
-  short: string  // короткая для drop-зон
   color: string  // цветовая полоска слева на карточке
 }
-const SLOT_DEFS: SlotDef[] = [
-  { value: '08:00-12:00', label: '8:00–12:00', short: 'Утро 8–12',  color: '#74b9ff' },
-  { value: '12:00-18:00', label: '12:00–18:00', short: 'День 12–18', color: '#fdcb6e' },
-  { value: '18:00-22:00', label: '18:00–22:00', short: 'Вечер 18–22', color: '#a29bfe' },
-]
 
-const slotColor = (slot: string | null): string => {
-  const def = SLOT_DEFS.find(s => s.value === slot)
-  return def ? def.color : '#bdc3c7'
+/**
+ * Палитра слотов. Слоты приходят из справочника (delivery_time_slots) и у каждого
+ * дня недели свой набор, поэтому цвет не хранится в БД — берём по позиции слота
+ * внутри дня. Порядок стабильный (sort_order, start_time), значит и цвет стабильный.
+ */
+const SLOT_PALETTE = ['#74b9ff', '#fdcb6e', '#a29bfe', '#55efc4', '#fab1a0', '#81ecec']
+
+/**
+ * Слоты дня из справочника. Раньше здесь был хардкод 8–12/12–18/18–22, из-за
+ * чего настройки рабочего времени в Справочниках на логистику не влияли и
+ * выходные не отличались от будней (правка №4).
+ */
+function slotDefsForDate(dateStr: string, slots: DeliverySlot[]): SlotDef[] {
+  const dow = new Date(dateStr).getDay()
+  return slots
+    .filter(s => s.day_of_week === dow && s.is_active)
+    .sort((a, b) => (a.sort_order - b.sort_order) || a.start_time.localeCompare(b.start_time))
+    .map((s, i) => ({
+      value: slotValue(s),
+      label: s.label ? `${s.label} · ${slotLabel(s)}` : slotLabel(s),
+      color: SLOT_PALETTE[i % SLOT_PALETTE.length],
+    }))
 }
 
 function getMonday(dateStr: string): string {
@@ -108,9 +125,13 @@ function printRouteSheet(date: string, cards: OrderCard[]): void {
     // Тип оплаты в маршрутный лист: до выдачи (paid=false) показываем «не выбран»,
     // чтобы водитель заранее знал, чем клиент собирается расплачиваться.
     const payment = c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—'
-    return `<tr>
+    // Архивный маршрутный лист: выполненные точки помечаем галкой и глушим цвет,
+    // чтобы при перепечатке прошедшей развозки было видно, что уже отработано.
+    const rowStyle = c.archived ? ' style="color:#7f8c8d"' : ''
+    const mark = c.archived ? ' ✓' : ''
+    return `<tr${rowStyle}>
       <td style="padding:6px 8px;text-align:center">${idx + 1}</td>
-      <td style="padding:6px 8px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}</td>
+      <td style="padding:6px 8px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}${mark}</td>
       <td style="padding:6px 8px">#${String(c.order.id).padStart(5, '0')}</td>
       <td style="padding:6px 8px">${c.order.client_name}</td>
       <td style="padding:6px 8px">${addr}</td>
@@ -192,11 +213,37 @@ export default function LogisticsPage() {
   const [horizon, setHorizon] = useState<Horizon>(4)
   // Карта в sidebar — по умолчанию свёрнута, разворачивается по клику.
   const [mapExpanded, setMapExpanded] = useState(false)
+  // День для маршрутного листа и массового завершения развозки.
+  const [routeDay, setRouteDay] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [showComplete, setShowComplete] = useState(false)
+  // Слоты доставки из справочника — у каждого дня недели свой набор (правка №4).
+  const [slots, setSlots] = useState<DeliverySlot[]>([])
+  useEffect(() => { void getDeliverySlots().then(setSlots).catch(() => setSlots([])) }, [])
+
+  /** Цвет полоски слота на карточке. Ищем слот по его строковому значению во всех днях. */
+  const slotColor = useCallback((slot: string | null): string => {
+    if (!slot) return '#bdc3c7'
+    for (const day of [1, 2, 3, 4, 5, 6, 0]) {
+      const defs = slots
+        .filter(s => s.day_of_week === day && s.is_active)
+        .sort((a, b) => (a.sort_order - b.sort_order) || a.start_time.localeCompare(b.start_time))
+      const idx = defs.findIndex(s => slotValue(s) === slot)
+      if (idx >= 0) return SLOT_PALETTE[idx % SLOT_PALETTE.length]
+    }
+    return '#bdc3c7'
+  }, [slots])
 
   useEffect(() => {
     const fromUrl = searchParams.get('district')
     if (fromUrl !== null) setDistrictFilters(fromUrl ? [fromUrl] : [])
   }, [searchParams])
+
+  // Выбранный день маршрутного листа должен принадлежать показанной неделе:
+  // при переключении недели select иначе «повисает» на дате из прошлой.
+  useEffect(() => {
+    const days = getWeekDays(weekStart)
+    if (!days.includes(routeDay)) setRouteDay(days[0])
+  }, [weekStart, routeDay])
 
   /** Toggle района в фильтре: добавляет если нет, убирает если есть. */
   const toggleDistrict = (d: string) => {
@@ -206,6 +253,29 @@ export default function LogisticsPage() {
   }
 
   const [allOrders, setAllOrders] = useState<Order[]>([])
+
+  /**
+   * Опции фильтра «Временной слот»: справочник + слоты, реально встречающиеся
+   * в заказах. Второе нужно, чтобы по старым значениям (08:00-12:00 и т.п.)
+   * тоже можно было отфильтровать — иначе такие заказы не найти.
+   */
+  const allSlotOptions = useMemo(() => {
+    const seen = new Map<string, string>()
+    for (const s of slots) {
+      if (!s.is_active) continue
+      const v = slotValue(s)
+      if (!seen.has(v)) seen.set(v, s.label ? `${s.label} · ${slotLabel(s)}` : slotLabel(s))
+    }
+    for (const o of allOrders) {
+      for (const v of [o.actual_pickup_time_slot, o.actual_delivery_time_slot]) {
+        if (v && !seen.has(v)) seen.set(v, `${v} · вне графика`)
+      }
+    }
+    return [...seen.entries()]
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([value, label]) => ({ value, label }))
+  }, [slots, allOrders])
+
   const [loading, setLoading] = useState(false)
   const [dragData, setDragData] = useState<{orderId: number, type: CardType} | null>(null)
   const [dragOverDay, setDragOverDay] = useState<string | null>(null)
@@ -233,31 +303,41 @@ export default function LogisticsPage() {
 
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true)
-      try {
-        const results = await Promise.all([
-          getOrders('LEAD', 0, 200),
-          getOrders('CREATED', 0, 200),
-          getOrders('FOR_PICKUP', 0, 200),
-          getOrders('IN_PROGRESS', 0, 200),
-          getOrders('PARTIALLY_DONE', 0, 200),
-          getOrders('DONE', 0, 200),
-        ])
-        const allFetched = results.flatMap(r => Array.isArray(r) ? r as unknown as Order[] : r.content)
-        setAllOrders(allFetched)
-      } catch { /* ignore */ }
-      finally { setLoading(false) }
-    }
-    void load()
+  /** Полная перезагрузка списка заказов. Вынесена из useEffect — её дёргает
+   *  модалка массового завершения развозки, чтобы обновить доску после оплат. */
+  const reload = useCallback(async () => {
+    setLoading(true)
+    try {
+      const results = await Promise.all([
+        getOrders('LEAD', 0, 200),
+        getOrders('CREATED', 0, 200),
+        getOrders('FOR_PICKUP', 0, 200),
+        getOrders('IN_PROGRESS', 0, 200),
+        getOrders('PARTIALLY_DONE', 0, 200),
+        getOrders('DONE', 0, 200),
+        // Завершённые развозки нужны для архива маршрутных листов: раньше заказ
+        // после «Доставлен» пропадал со своего дня, и посмотреть/перепечатать
+        // состав прошедшей развозки было невозможно.
+        getOrders('PARTIALLY_DELIVERED', 0, 200),
+        getOrders('DELIVERED', 0, 200),
+        getOrders('COMPLETED', 0, 200),
+      ])
+      const allFetched = results.flatMap(r => Array.isArray(r) ? r as unknown as Order[] : r.content)
+      setAllOrders(allFetched)
+    } catch { /* ignore */ }
+    finally { setLoading(false) }
   }, [])
+
+  useEffect(() => { void reload() }, [reload])
 
   // Build cards from orders
   const allCards = useMemo((): OrderCard[] => {
     const cards: OrderCard[] = []
     const pickupStatuses = new Set(['LEAD', 'CREATED', 'FOR_PICKUP'])
-    const deliveryStatuses = new Set(['DONE'])
+    // DELIVERED/PARTIALLY_DELIVERED/COMPLETED остаются на своём дне как архив
+    // выполненной развозки (перетаскивать их уже нельзя — см. archived ниже).
+    const deliveryStatuses = new Set(['DONE', 'PARTIALLY_DELIVERED', 'DELIVERED', 'COMPLETED'])
+    const archivedStatuses = new Set(['PARTIALLY_DELIVERED', 'DELIVERED', 'COMPLETED'])
 
     const showPickup = typeFilters.length === 0 || typeFilters.includes('pickup')
     const showDelivery = typeFilters.length === 0 || typeFilters.includes('delivery')
@@ -277,7 +357,10 @@ export default function LogisticsPage() {
         }
       }
       if (deliveryStatuses.has(o.status)) {
-        if (showDelivery) {
+        // Завершённую развозку показываем только если у неё есть фактическая дата —
+        // иначе она свалится в «Без даты» и замусорит очередь на разбор.
+        const archived = archivedStatuses.has(o.status)
+        if (showDelivery && (!archived || o.actual_delivery_date)) {
           cards.push({
             order: o,
             type: 'delivery',
@@ -287,6 +370,7 @@ export default function LogisticsPage() {
             address: o.delivery_address || o.client_address,
             lat: o.delivery_lat != null ? Number(o.delivery_lat) : null,
             lon: o.delivery_lon != null ? Number(o.delivery_lon) : null,
+            archived,
           })
         }
       }
@@ -504,25 +588,29 @@ export default function LogisticsPage() {
     const typeColor = isPickup ? '#3498db' : '#27ae60'
     const sColor = slotColor(card.timeSlot)
     const viewer = isReadonly
+    // Архивная карточка (развозка уже выполнена) — приглушена и не таскается:
+    // менять дату у состоявшейся доставки нельзя, она уже история.
+    const archived = !!card.archived
     return (
       <div
         key={`${card.order.id}-${card.type}`}
         // В режиме просмотра drag не нужен — карточки только показываем.
-        draggable={!viewer}
-        onDragStart={() => !viewer && handleDragStart(card.order.id, card.type)}
+        draggable={!viewer && !archived}
+        onDragStart={() => !viewer && !archived && handleDragStart(card.order.id, card.type)}
         onDragEnd={() => setDragData(null)}
         onClick={() => navigate(`/orders/${card.order.id}`)}
-        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}`}
+        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}${archived ? ' · развозка выполнена' : ''}`}
         style={{
           padding: '6px 8px',
           marginBottom: 4,
           borderRadius: 5,
           // полоска слева — тип (забор/доставка); полоска слота — внешний боксшэдоу.
-          borderLeft: `3px solid ${typeColor}`,
+          borderLeft: `3px solid ${archived ? '#95a5a6' : typeColor}`,
           boxShadow: 'inset 3px 0 0 0 ' + sColor,
           paddingLeft: 12,
-          background: '#fff',
-          cursor: 'grab',
+          background: archived ? '#f7f9f9' : '#fff',
+          opacity: archived ? 0.72 : 1,
+          cursor: archived ? 'pointer' : 'grab',
           fontSize: '0.78em',
           minWidth: 0,
           // тонкая обычная тень
@@ -534,6 +622,7 @@ export default function LogisticsPage() {
           fontWeight: 700, color: card.district ? '#2c3e50' : '#ccc',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>
+          {archived && <span title="Развозка выполнена" style={{ marginRight: 4 }}>✓</span>}
           {card.district || '—'}
         </div>
         <div style={{
@@ -618,9 +707,32 @@ export default function LogisticsPage() {
   // Drag-over конкретного слота — для hover-тени.
   const [dragOverSlot, setDragOverSlot] = useState<string | null>(null)
 
+  /**
+   * Слоты дня: из справочника + «осиротевшие».
+   *
+   * Осиротевший слот — значение, записанное в заказе, которого в справочнике
+   * этого дня нет. Так выглядят заказы, назначенные на старые захардкоженные
+   * слоты (08:00-12:00 / 12:00-18:00 / 18:00-22:00), и заказы на слот, который
+   * потом удалили из справочника. Показываем их отдельной зоной внизу дня:
+   * заказ не теряется, оператор видит исходное время и может перетащить его
+   * в актуальный слот. Данные при этом не переписываем.
+   */
+  const slotZonesForDay = (dateStr: string, cards: OrderCard[]): SlotDef[] => {
+    const defs = slotDefsForDate(dateStr, slots)
+    const known = new Set(defs.map(d => d.value))
+    const orphans = [...new Set(
+      cards.map(c => c.timeSlot).filter((v): v is string => !!v && !known.has(v))
+    )].sort()
+    return [
+      ...defs,
+      ...orphans.map(value => ({ value, label: `${value} · вне графика`, color: '#e59866' })),
+    ]
+  }
+
   /** Группировка карточек дня по слотам. Ключ — value слота или 'none' для пустого. */
-  const groupCardsBySlot = (cards: OrderCard[]): Record<string, OrderCard[]> => {
-    const map: Record<string, OrderCard[]> = { '08:00-12:00': [], '12:00-18:00': [], '18:00-22:00': [], 'none': [] }
+  const groupCardsBySlot = (zones: SlotDef[], cards: OrderCard[]): Record<string, OrderCard[]> => {
+    const map: Record<string, OrderCard[]> = { none: [] }
+    for (const def of zones) map[def.value] = []
     for (const c of cards) {
       const key = c.timeSlot || 'none'
       if (map[key]) map[key].push(c)
@@ -675,7 +787,8 @@ export default function LogisticsPage() {
   const renderDaySection = (dateStr: string, label: string, cards: OrderCard[], opts?: { hideEmpty?: boolean, noDateMode?: boolean }) => {
     const isToday = dateStr === today
     const isDragOverDay = dragOverDay === dateStr
-    const grouped = groupCardsBySlot(cards)
+    const zones = slotZonesForDay(dateStr, cards)
+    const grouped = groupCardsBySlot(zones, cards)
 
     // «Без даты» — единая drop-зона без разбивки на слоты (в нём нет смысла).
     // Drop сюда сбрасывает actual_pickup/delivery_date в null, возвращая заказ
@@ -772,8 +885,10 @@ export default function LogisticsPage() {
             {cards.length}
           </span>
         </div>
-        {/* Слоты постоянно видны, вертикально сверху вниз. */}
-        {SLOT_DEFS.map(s =>
+        {/* Слоты постоянно видны, вертикально сверху вниз. Набор берётся из
+            справочника под день недели этой даты (у выходных он другой) плюс
+            «вне графика» — слоты из старых заказов, которых в справочнике нет. */}
+        {zones.map(s =>
           renderSlotZone(dateStr, { value: s.value, label: s.label, color: s.color }, grouped[s.value] || [])
         )}
         {/* «Без слота» — показываем только если в нём что-то есть или идёт перетаскивание.
@@ -935,7 +1050,7 @@ export default function LogisticsPage() {
           <label>Временной слот</label>
           <MultiSelectFilter
             options={[
-              ...SLOT_DEFS.map(s => ({ value: s.value, label: s.label })),
+              ...allSlotOptions,
               { value: 'none', label: 'Без слота' },
             ]}
             value={timeSlotFilters}
@@ -993,19 +1108,28 @@ export default function LogisticsPage() {
         {/* V19 (#6): печать маршрутного листа на конкретный день. */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Маршрутный лист на:</label>
-          <select id="route-print-day" defaultValue={today} style={{ width: 'auto' }}>
+          <select
+            value={routeDay}
+            onChange={e => setRouteDay(e.target.value)}
+            style={{ width: 'auto' }}
+          >
             {weekDays.map(d => (
               <option key={d} value={d}>{formatDayHeader(d)}</option>
             ))}
           </select>
           <button
             className="btn-secondary btn-sm"
-            onClick={() => {
-              const sel = document.getElementById('route-print-day') as HTMLSelectElement | null
-              const date = sel?.value || today
-              printRouteSheet(date, filteredCards)
-            }}
+            onClick={() => printRouteSheet(routeDay, filteredCards)}
           >🖨 Печать</button>
+          {/* Правка №2: массовое завершение развозки — оператор закрывает все
+              доставки дня из одного окна, без захода в каждую карточку. */}
+          {!isReadonly && (
+            <button
+              className="btn-success btn-sm"
+              title="Оплатить и завершить доставки этого дня, не открывая каждый заказ"
+              onClick={() => setShowComplete(true)}
+            >✓ Завершить развозку</button>
+          )}
         </div>
       </div>
 
@@ -1330,6 +1454,20 @@ export default function LogisticsPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Правка №2: массовое завершение развозки за выбранный день.
+          Берём доставки этого дня с учётом активных фильтров — оператор часто
+          закрывает развозку по конкретному району. */}
+      {showComplete && (
+        <CompleteDeliveriesModal
+          date={routeDay}
+          rows={filteredCards
+            .filter(c => c.type === 'delivery' && c.date === routeDay && !c.order.paid)
+            .map(c => ({ order: c.order, address: c.address, timeSlot: c.timeSlot }))}
+          onClose={() => setShowComplete(false)}
+          onFinished={(changed) => { if (changed) void reload() }}
+        />
       )}
     </div>
   )

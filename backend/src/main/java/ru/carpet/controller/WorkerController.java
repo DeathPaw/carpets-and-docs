@@ -4,6 +4,10 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.web.bind.annotation.*;
+import ru.carpet.exception.BusinessRuleException;
+import ru.carpet.model.ServiceStatus;
+import ru.carpet.service.OrderItemService;
+import ru.carpet.service.OrderItemServiceInstanceService;
 
 import java.math.BigDecimal;
 import java.util.HashMap;
@@ -30,9 +34,15 @@ import java.util.Map;
 public class WorkerController {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final OrderItemServiceInstanceService serviceInstanceService;
+    private final OrderItemService orderItemService;
 
-    public WorkerController(NamedParameterJdbcTemplate jdbc) {
+    public WorkerController(NamedParameterJdbcTemplate jdbc,
+                            OrderItemServiceInstanceService serviceInstanceService,
+                            OrderItemService orderItemService) {
         this.jdbc = jdbc;
+        this.serviceInstanceService = serviceInstanceService;
+        this.orderItemService = orderItemService;
     }
 
     // ---------- 1. Список сотрудников для экрана выбора плитки ----------
@@ -142,9 +152,18 @@ public class WorkerController {
         if (!List.of("CREATED", "IN_PROGRESS", "DONE").contains(newStatus)) {
             return ResponseEntity.badRequest().body(Map.of("error", "Недопустимый статус"));
         }
-        jdbc.update(
-            "UPDATE order_item_services SET status = :st, updated_at = NOW() WHERE id = :id",
-            Map.of("st", newStatus, "id", serviceId));
+        // Раньше тут был сырой UPDATE в обход сервисного слоя — из-за этого стирщик
+        // закрывал услугу с телефона, а позиция в заказе оставалась «Создана»:
+        // не пересчитывались статус позиции, статус заказа и lifecycle-триггеры
+        // (например «Приём» → заказ IN_PROGRESS). Теперь идём через тот же сервис,
+        // что и веб-интерфейс — поведение мобилки и десктопа совпадает.
+        try {
+            serviceInstanceService.updateStatus(serviceId, ServiceStatus.valueOf(newStatus));
+        } catch (BusinessRuleException e) {
+            // Например «не заполнена площадь» для услуги с расчётом по площади —
+            // отдаём текст как есть, мобилка показывает его в alert.
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -159,16 +178,19 @@ public class WorkerController {
         if (!isItemAssignee(employeeId, itemId)) {
             return ResponseEntity.status(403).body(Map.of("error", "Позиция не назначена на вас"));
         }
-        var params = new MapSqlParameterSource("id", itemId)
-            .addValue("l", asDecimal(body.get("length")))
-            .addValue("w", asDecimal(body.get("width")))
-            .addValue("a", asDecimal(body.get("area")))
-            .addValue("wt", asDecimal(body.get("weight")));
-        jdbc.update("""
-            UPDATE order_items
-               SET length = :l, width = :w, area = :a, weight = :wt, updated_at = NOW()
-             WHERE id = :id
-            """, params);
+        // Через сервисный слой, а не сырым UPDATE: смена размеров должна пересчитать
+        // цены услуг (BY_AREA/BY_WEIGHT) и сумму заказа. Раньше стирщик правил размеры
+        // с телефона, а цена оставалась от старых габаритов.
+        try {
+            orderItemService.updateDimensions(itemId,
+                asDecimal(body.get("length")),
+                asDecimal(body.get("width")),
+                asDecimal(body.get("weight")),
+                asDecimal(body.get("area")),
+                null);
+        } catch (BusinessRuleException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
         return ResponseEntity.ok(Map.of("ok", true));
     }
 

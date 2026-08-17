@@ -10,6 +10,8 @@ import java.util.List;
 import java.util.Map;
 
 import static ru.carpet.repository.AnalyticsHelpers.COST_EXPR;
+import static ru.carpet.repository.AnalyticsHelpers.REVENUE_EXPR;
+import static ru.carpet.repository.AnalyticsHelpers.REVENUE_RATIO;
 import static ru.carpet.repository.AnalyticsHelpers.dateFilterClause;
 import static ru.carpet.repository.AnalyticsHelpers.dateParams;
 import static ru.carpet.repository.AnalyticsHelpers.longOrZero;
@@ -18,8 +20,11 @@ import static ru.carpet.repository.AnalyticsHelpers.nz;
 /**
  * Доходность — все срезы prof... запросы. Раньше жили в общем AnalyticsRepository.
  *
- * <p>Везде {@code revenue = SUM(ois.price)} (только DONE-услуги),
- * {@code cost} — расчёт по cost_price из price_list через {@link AnalyticsHelpers#COST_EXPR}.
+ * <p>Единый алгоритм выручки: заказ целиком — {@code orders.total_amount};
+ * срез мельче заказа (тип позиции, сотрудник, район) — цена DONE-услуги,
+ * умноженная на {@link AnalyticsHelpers#REVENUE_RATIO} (доля модификаторов и
+ * округления). Так любой срез суммируется ровно в total_amount заказа.
+ * {@code cost} — расчёт по cost_price SKU через {@link AnalyticsHelpers#COST_EXPR}.
  */
 @Repository
 public class ProfitabilityRepository {
@@ -35,9 +40,9 @@ public class ProfitabilityRepository {
         return jdbc.query(
             "SELECT it.id, it.name, " +
             "COUNT(DISTINCT oi.id) AS items_count, " +
-            "COALESCE(SUM(ois.price), 0) AS revenue, " +
+            REVENUE_EXPR + " AS revenue, " +
             COST_EXPR + " AS cost, " +
-            "COALESCE(SUM(ois.price), 0) - " + COST_EXPR + " AS profit, " +
+            REVENUE_EXPR + " - " + COST_EXPR + " AS profit, " +
             "COUNT(*) FILTER (WHERE ois.id IS NOT NULL AND s.cost_price IS NULL) AS cost_missing " +
             "FROM item_types it " +
             "LEFT JOIN order_items oi ON oi.item_type_id = it.id " +
@@ -55,20 +60,33 @@ public class ProfitabilityRepository {
         );
     }
 
-    /** Доходность по клиентам. */
+    /**
+     * Доходность по клиентам.
+     *
+     * <p>Считаем в два шага: сначала сворачиваем в подзапросе каждый заказ
+     * (выручка = {@code o.total_amount}, ровно как в {@link #profitByOrder}),
+     * потом суммируем заказы по клиенту. Раньше выручка тут была
+     * {@code SUM(ois.price)} — сумма БЕЗ модификаторов, из-за чего доходность
+     * одного заказа в карточке и в этой сводке отличалась.
+     */
     public List<AnalyticsDto.ProfitByClient> profitByClient(String dateFrom, String dateTo) {
         return jdbc.query(
+            "WITH per_order AS ( " +
+            "  SELECT o.id, o.client_id, o.total_amount, " + COST_EXPR + " AS cost " +
+            "  FROM orders o " +
+            "  LEFT JOIN order_items oi ON oi.order_id = o.id " +
+            "  LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
+            "  LEFT JOIN skus s ON s.id = ois.sku_id " +
+            "  WHERE o.paid = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "  GROUP BY o.id, o.client_id, o.total_amount " +
+            ") " +
             "SELECT c.id AS client_id, c.name, c.client_type, " +
-            "COUNT(DISTINCT o.id) AS orders_count, " +
-            "COALESCE(SUM(ois.price), 0) AS revenue, " +
-            COST_EXPR + " AS cost, " +
-            "COALESCE(SUM(ois.price), 0) - " + COST_EXPR + " AS profit " +
+            "COUNT(po.id) AS orders_count, " +
+            "COALESCE(SUM(po.total_amount), 0) AS revenue, " +
+            "COALESCE(SUM(po.cost), 0) AS cost, " +
+            "COALESCE(SUM(po.total_amount - po.cost), 0) AS profit " +
             "FROM clients c " +
-            "JOIN orders o ON o.client_id = c.id " +
-            "LEFT JOIN order_items oi ON oi.order_id = o.id " +
-            "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +
-            "LEFT JOIN skus s ON s.id = ois.sku_id " +
-            "WHERE o.paid = TRUE " + dateFilterClause("o", dateFrom, dateTo) + " " +
+            "JOIN per_order po ON po.client_id = c.id " +
             "GROUP BY c.id, c.name, c.client_type ORDER BY profit DESC NULLS LAST LIMIT 50",
             dateParams(dateFrom, dateTo),
             (RowMapper<AnalyticsDto.ProfitByClient>) (rs, n) -> new AnalyticsDto.ProfitByClient(
@@ -84,7 +102,9 @@ public class ProfitabilityRepository {
         return jdbc.query(
             "SELECT e.id AS employee_id, e.name, " +
             "COUNT(DISTINCT ois.id) AS services_count, " +
-            "COALESCE(SUM(ois.price / NULLIF(assigned_count.cnt, 0)), 0) AS revenue, " +
+            // Выручка услуги делится поровну между её исполнителями и берётся
+            // с коэффициентом заказа (модификаторы + округление) — см. REVENUE_RATIO.
+            "COALESCE(SUM(ois.price * " + REVENUE_RATIO + " / NULLIF(assigned_count.cnt, 0)), 0) AS revenue, " +
             // V10: cost/pricing идут с SKU напрямую (ois.sku_id → skus s).
             "COALESCE(SUM((s.cost_price * CASE " +
             "  WHEN s.pricing_type = 'FIXED'             THEN 1 " +
@@ -121,7 +141,7 @@ public class ProfitabilityRepository {
             // V10: услуга = SKU. service_id здесь — это sku_id.
             "SELECT s.id AS service_id, s.name AS service_name, " +
             "COUNT(DISTINCT ois.id) AS count, " +
-            "COALESCE(SUM(ois.price / NULLIF(assigned_count.cnt, 0)), 0) AS revenue " +
+            "COALESCE(SUM(ois.price * " + REVENUE_RATIO + " / NULLIF(assigned_count.cnt, 0)), 0) AS revenue " +
             "FROM service_assignees sa " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id AND ois.status = 'DONE' " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
@@ -144,9 +164,9 @@ public class ProfitabilityRepository {
         return jdbc.query(
             "SELECT COALESCE(o.pickup_district, '(без района)') AS district, " +
             "COUNT(DISTINCT o.id) AS orders_count, " +
-            "COALESCE(SUM(ois.price), 0) AS revenue, " +
+            REVENUE_EXPR + " AS revenue, " +
             COST_EXPR + " AS cost, " +
-            "COALESCE(SUM(ois.price), 0) - " + COST_EXPR + " AS profit " +
+            REVENUE_EXPR + " - " + COST_EXPR + " AS profit " +
             "FROM orders o " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id AND ois.status = 'DONE' " +

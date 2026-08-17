@@ -80,6 +80,10 @@ export const createOrder = (data: CreateOrderRequest) =>
 export const updateOrderStatus = (id: number, data: UpdateStatusRequest) =>
   client.patch<Order>(`/api/orders/${id}/status`, data).then(r => r.data)
 
+/** Откат статуса на шаг назад по истории. Причина обязательна (≥10 символов). */
+export const rollbackOrderStatus = (id: number, reason: string) =>
+  client.patch<Order>(`/api/orders/${id}/status/rollback`, { reason }).then(r => r.data)
+
 /** V17: пометить заказ проблемным (или снять флаг). При TRUE reason обязателен (≥10 симв). */
 export const setOrderProblem = (id: number, isProblem: boolean, reason?: string) =>
   client.patch<Order>(`/api/orders/${id}/problem`, { is_problem: isProblem, reason: reason ?? null }).then(r => r.data)

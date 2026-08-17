@@ -6,6 +6,9 @@ import {
 } from '../../api/worker'
 import { t } from '../../i18n'
 
+/** Вкладки списка услуг работника (правка №6). */
+type TabKey = 'new' | 'progress' | 'done'
+
 /**
  * Главный экран работника после входа — список услуг, назначенных мне.
  *
@@ -35,6 +38,14 @@ export default function WorkerHomePage() {
     const employeeName = sessionStorage.getItem('worker_name') || ''
     // V11: нераспределённые услуги, подходящие по роли
     const [available, setAvailable] = useState<any[]>([])
+    // Правка №6: поиск и фильтр по статусу. При десятках заказов пролистывать
+    // один длинный список с телефона неудобно.
+    const [search, setSearch] = useState('')
+    const [tab, setTab] = useState<TabKey>('progress')
+    // Первую вкладку выбираем по данным: если в работе пусто, а взять есть что —
+    // сразу открываем «Не взяты», иначе работник видит пустой экран и решает,
+    // что заказов нет. Срабатывает один раз, дальше вкладку выбирает человек.
+    const [tabPicked, setTabPicked] = useState(false)
 
     useEffect(() => {
         if (!employeeId) { navigate('/worker-login', { replace: true }); return }
@@ -52,6 +63,14 @@ export default function WorkerHomePage() {
             setServices(data)
             setHasRoute(route.length > 0)
             setAvailable(avail)
+            if (!tabPicked) {
+                setTabPicked(true)
+                const hasInProgress = data.some(s => s.service_status === 'IN_PROGRESS')
+                if (!hasInProgress) {
+                    const hasNew = data.some(s => s.service_status === 'CREATED') || (avail?.length ?? 0) > 0
+                    setTab(hasNew ? 'new' : 'done')
+                }
+            }
         } catch {
             setError('Не удалось загрузить услуги. Проверьте интернет.')
         }
@@ -140,8 +159,38 @@ export default function WorkerHomePage() {
         return <div style={{ padding: 24, color: '#7f8c8d', textAlign: 'center' }}>Загрузка...</div>
     }
 
-    const active = services.filter(s => s.service_status !== 'DONE')
-    const done   = services.filter(s => s.service_status === 'DONE')
+    // Правка №6: поиск по номеру заказа / клиенту / типу позиции / названию услуги.
+    // Номер сравниваем и как есть, и с ведущими нулями — работник читает его
+    // с бирки в виде «#00144», а вводит обычно «144».
+    const q = search.trim().toLowerCase()
+    const matches = (s: WorkerService) => {
+        if (!q) return true
+        const digits = q.replace(/\D/g, '')
+        if (digits && (String(s.order_id) === String(Number(digits))
+            || String(s.order_id).padStart(5, '0').includes(digits))) return true
+        return [s.client_name, s.item_type_name, s.service_name, s.item_description]
+            .some(v => (v || '').toLowerCase().includes(q))
+    }
+    const matchesAvailable = (a: any) => {
+        if (!q) return true
+        const digits = q.replace(/\D/g, '')
+        if (digits && (String(a.order_id) === String(Number(digits))
+            || String(a.order_id).padStart(5, '0').includes(digits))) return true
+        return [a.client_name, a.item_type_name, a.service_name]
+            .some((v: string | null) => (v || '').toLowerCase().includes(q))
+    }
+
+    // Вкладки. «Не взяты» = свободные услуги + назначенные на меня, но не начатые.
+    const availableFiltered = available.filter(matchesAvailable)
+    const notStarted = services.filter(s => s.service_status === 'CREATED').filter(matches)
+    const inProgress = services.filter(s => s.service_status === 'IN_PROGRESS').filter(matches)
+    const done       = services.filter(s => s.service_status === 'DONE').filter(matches)
+
+    const TABS: { key: TabKey; label: string; count: number }[] = [
+        { key: 'new',      label: 'Не взяты', count: availableFiltered.length + notStarted.length },
+        { key: 'progress', label: 'В работе', count: inProgress.length },
+        { key: 'done',     label: 'Завершены', count: done.length },
+    ]
 
     return (
         <div style={{ background: '#f4f6f7', minHeight: '100vh', paddingBottom: 80 }}>
@@ -193,62 +242,113 @@ export default function WorkerHomePage() {
                 </div>
             )}
 
-            {/* V11: нераспределённые услуги */}
-            {available.length > 0 && (
+            {/* Правка №6: поиск по заказам. Крупное поле — пальцем на телефоне. */}
+            <div style={{ padding: '10px 16px 0' }}>
+                <div style={{ position: 'relative' }}>
+                    <input
+                        value={search}
+                        onChange={e => setSearch(e.target.value)}
+                        placeholder="Поиск: номер заказа, клиент, тип…"
+                        inputMode="search"
+                        style={{
+                            width: '100%', padding: '11px 34px 11px 12px', fontSize: 16,
+                            border: '1px solid #d6dbdf', borderRadius: 8, boxSizing: 'border-box',
+                        }}
+                    />
+                    {search && (
+                        <button
+                            onClick={() => setSearch('')}
+                            aria-label="Очистить поиск"
+                            style={{
+                                position: 'absolute', right: 4, top: '50%', transform: 'translateY(-50%)',
+                                background: 'none', border: 'none', fontSize: 20, color: '#95a5a6',
+                                cursor: 'pointer', padding: '0 8px', lineHeight: 1,
+                            }}
+                        >&times;</button>
+                    )}
+                </div>
+            </div>
+
+            {/* Правка №6: вкладки статусов. */}
+            <div style={{ display: 'flex', gap: 6, padding: '10px 16px 0' }}>
+                {TABS.map(tb => (
+                    <button
+                        key={tb.key}
+                        onClick={() => setTab(tb.key)}
+                        style={{
+                            flex: 1, padding: '9px 4px', borderRadius: 8, fontSize: 13, fontWeight: 600,
+                            cursor: 'pointer',
+                            border: `1px solid ${tab === tb.key ? '#2c3e50' : '#d6dbdf'}`,
+                            background: tab === tb.key ? '#2c3e50' : '#fff',
+                            color: tab === tb.key ? '#fff' : '#7f8c8d',
+                        }}
+                    >
+                        {tb.label}
+                        <span style={{ opacity: 0.75, marginLeft: 4 }}>{tb.count}</span>
+                    </button>
+                ))}
+            </div>
+
+            {/* Вкладка «Не взяты»: свободные услуги (можно взять) + мои ещё не начатые. */}
+            {tab === 'new' && (
                 <div style={{ padding: '12px 16px' }}>
-                    <div style={{ fontSize: 11, color: '#e67e22', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
-                        Доступные · {available.length}
-                    </div>
-                    {available.map((a: any) => (
-                        <div key={a.service_id} style={{
-                            background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 8,
-                            border: '1px dashed #f39c12', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                        }}>
-                            <div>
-                                <div style={{ fontWeight: 600 }}>{a.service_name}</div>
-                                <div style={{ fontSize: 12, color: '#7f8c8d' }}>
-                                    {a.item_type_name} · Заказ #{a.order_id} · {a.client_name}
+                    {availableFiltered.length === 0 && notStarted.length === 0 ? (
+                        <EmptyState text={search ? 'По запросу ничего не найдено' : 'Нет доступных услуг'} />
+                    ) : (
+                        <>
+                            {availableFiltered.map((a: any) => (
+                                <div key={`avail-${a.service_id}`} style={{
+                                    background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 8,
+                                    border: '1px dashed #f39c12', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                }}>
+                                    <div>
+                                        <div style={{ fontWeight: 600 }}>{a.service_name}</div>
+                                        <div style={{ fontSize: 12, color: '#7f8c8d' }}>
+                                            {a.item_type_name} · Заказ #{String(a.order_id).padStart(5, '0')} · {a.client_name}
+                                        </div>
+                                    </div>
+                                    <button
+                                        onClick={() => void takeService(a.service_id)}
+                                        style={{ padding: '8px 16px', borderRadius: 6, border: 'none',
+                                                 background: '#f39c12', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
+                                    >Взять</button>
                                 </div>
-                            </div>
-                            <button
-                                onClick={() => void takeService(a.service_id)}
-                                style={{ padding: '8px 16px', borderRadius: 6, border: 'none',
-                                         background: '#f39c12', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
-                            >Взять</button>
-                        </div>
+                            ))}
+                            {notStarted.map(s => (
+                                <ServiceCard
+                                    key={s.service_id}
+                                    s={s}
+                                    onAdvance={() => void advance(s)}
+                                    onEdit={() => setEditing(s)}
+                                    onUndo={() => void undoStatus(s)}
+                                />
+                            ))}
+                        </>
+                    )}
+                </div>
+            )}
+
+            {tab === 'progress' && (
+                <div style={{ padding: '12px 16px' }}>
+                    {inProgress.length === 0 ? (
+                        <EmptyState text={search ? 'По запросу ничего не найдено' : t('home.empty')} />
+                    ) : inProgress.map(s => (
+                        <ServiceCard
+                            key={s.service_id}
+                            s={s}
+                            onAdvance={() => void advance(s)}
+                            onEdit={() => setEditing(s)}
+                            onUndo={() => void undoStatus(s)}
+                        />
                     ))}
                 </div>
             )}
 
-            {/* Активные услуги */}
-            <div style={{ padding: '12px 16px' }}>
-                <div style={{ fontSize: 11, color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
-                    {t('home.today')} · {active.length}
-                </div>
-                {active.length === 0 ? (
-                    <div style={{
-                        padding: 24, background: '#fff', borderRadius: 10, textAlign: 'center', color: '#7f8c8d',
-                    }}>
-                        {t('home.empty')}
-                    </div>
-                ) : active.map(s => (
-                    <ServiceCard
-                        key={s.service_id}
-                        s={s}
-                        onAdvance={() => void advance(s)}
-                        onEdit={() => setEditing(s)}
-                        onUndo={() => void undoStatus(s)}
-                    />
-                ))}
-            </div>
-
-            {/* Готовые */}
-            {done.length > 0 && (
+            {tab === 'done' && (
                 <div style={{ padding: '12px 16px' }}>
-                    <div style={{ fontSize: 11, color: '#27ae60', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>
-                        ✓ {t('home.done')} · {done.length}
-                    </div>
-                    {done.map(s => (
+                    {done.length === 0 ? (
+                        <EmptyState text={search ? 'По запросу ничего не найдено' : 'Завершённых пока нет'} />
+                    ) : done.map(s => (
                         <ServiceCard
                             key={s.service_id}
                             s={s}
@@ -277,6 +377,15 @@ export default function WorkerHomePage() {
                     onSaved={() => { setEditing(null); void reload() }}
                 />
             )}
+        </div>
+    )
+}
+
+/** Заглушка пустого списка — одинаковая на всех вкладках. */
+function EmptyState({ text }: { text: string }) {
+    return (
+        <div style={{ padding: 24, background: '#fff', borderRadius: 10, textAlign: 'center', color: '#7f8c8d' }}>
+            {text}
         </div>
     )
 }

@@ -14,6 +14,9 @@ import java.util.Map;
  * <p>Будни 17:00-20:30, Сб 10:00-20:30, Вс — без слотов. Хранится в таблице
  * {@code delivery_time_slots} с полем {@code day_of_week} (0-6, 0=Вс).
  * Фронт при выборе времени забора/доставки фильтрует по дню недели даты.
+ *
+ * <p>V28: {@code end_time} может быть NULL — это слот с фиксированным временем
+ * («доставка строго к 15:00»). Пустая строка от фронта = NULL (см. NULLIF).
  */
 @RestController
 @RequestMapping("/api/delivery-slots")
@@ -63,7 +66,7 @@ public class DeliverySlotController {
         var kh = new GeneratedKeyHolder();
         jdbc.update(
             "INSERT INTO delivery_time_slots (day_of_week, start_time, end_time, label, is_active, sort_order) " +
-            "VALUES (:dow, :st::time, :et::time, :lbl, :act, :so)",
+            "VALUES (:dow, :st::time, NULLIF(:et,'')::time, :lbl, :act, :so)",
             p, kh, new String[]{"id"});
         return jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +
@@ -83,7 +86,8 @@ public class DeliverySlotController {
             .addValue("act",   body.getOrDefault("is_active", true))
             .addValue("so",    body.getOrDefault("sort_order", 0));
         jdbc.update(
-            "UPDATE delivery_time_slots SET day_of_week=:dow, start_time=:st::time, end_time=:et::time, " +
+            "UPDATE delivery_time_slots SET day_of_week=:dow, start_time=:st::time, " +
+            "end_time=NULLIF(:et,'')::time, " +
             "label=:lbl, is_active=:act, sort_order=:so, updated_at=NOW() WHERE id=:id", p);
         return jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +

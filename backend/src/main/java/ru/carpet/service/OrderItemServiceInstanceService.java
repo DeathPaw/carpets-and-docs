@@ -169,7 +169,11 @@ public class OrderItemServiceInstanceService {
         } else {
             repository.updateStatus(serviceId, status);
         }
-        orderItemService.recalculateItemStatus(instance.orderItemId());
+        // recalculateItemPrice = цена позиции (сумма активных услуг) + статус позиции
+        // + пересчёт сумм заказа. Раньше тут был только recalculateItemStatus, из-за
+        // чего отмена услуги меняла статус, но цену позиции и ИТОГО заказа оставляла
+        // старыми — отменённая услуга продолжала «висеть» в деньгах.
+        orderItemService.recalculateItemPrice(instance.orderItemId());
 
         // V11 lifecycle: если услуга стала DONE и у SKU есть triggers_order_status — двигаем заказ.
         if (status == ServiceStatus.DONE && instance.skuId() != null) {

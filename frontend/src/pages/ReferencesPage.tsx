@@ -10,6 +10,10 @@ import {
 } from '../api/sku'
 import type { SkuRequest, SkuVersion } from '../api/sku'
 import { getDistricts, createDistrict, updateDistrict, deleteDistrict } from '../api/districts'
+import {
+  getAllDeliverySlots, createDeliverySlot, updateDeliverySlot, deleteDeliverySlot,
+  slotLabel, type DeliverySlot,
+} from '../api/deliverySlots'
 import { invalidateDistrictCache } from '../components/DistrictSelect'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
@@ -60,11 +64,12 @@ export default function ReferencesPage() {
   const [attrs, setAttrs] = useState<AttributeDefinition[]>([])
   const [modifiers, setModifiers] = useState<PriceModifier[]>([])
   const [districts, setDistricts] = useState<District[]>([])
+  const [slots, setSlots] = useState<DeliverySlot[]>([])
 
   const load = async () => {
-    const [ts, sks, gs, ads, mods, dists] = await Promise.all([
+    const [ts, sks, gs, ads, mods, dists, slts] = await Promise.all([
       getItemTypes(), getSkus(), getSkuGroups(), getAttributeDefinitions(),
-      getPriceModifiers(), getDistricts(false),
+      getPriceModifiers(), getDistricts(false), getAllDeliverySlots(),
     ])
     setTypes(ts)
     setSkus(sks)
@@ -72,6 +77,7 @@ export default function ReferencesPage() {
     setAttrs(ads)
     setModifiers(mods)
     setDistricts(dists)
+    setSlots(slts)
   }
   useEffect(() => { void load() }, [])
 
@@ -87,6 +93,7 @@ export default function ReferencesPage() {
         reload={load} setConfirm={setConfirmAction} showToast={showToast}
       />
       <PriceModifiersCard modifiers={modifiers} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
+      <DeliverySlotsCard slots={slots} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DistrictsCard districts={districts} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
 
       {confirmAction && (
@@ -929,4 +936,153 @@ function DistrictsCard({ districts, reload, setConfirm, showToast }: CardProps<{
       </table>
     </div>
   )
+}
+
+// ============================================================================
+// Слоты доставки — шаблон рабочего времени на каждый день недели (правка №4).
+// ============================================================================
+
+const DOW_NAMES = ['Воскресенье', 'Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота']
+/** Порядок показа: с понедельника, воскресенье последним. */
+const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]
+
+function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{ slots: DeliverySlot[] }>) {
+  // Форма добавления привязана к дню недели: у каждого дня своя строка ввода.
+  const [addFor, setAddFor] = useState<number | null>(null)
+  const [start, setStart] = useState('17:00')
+  const [end, setEnd] = useState('20:30')
+  // «Точное время» — слот без конца интервала, доставка строго к указанному часу.
+  const [exact, setExact] = useState(false)
+  const [label, setLabel] = useState('')
+  const [err, setErr] = useState('')
+
+  const resetForm = () => { setStart('17:00'); setEnd('20:30'); setExact(false); setLabel(''); setErr('') }
+
+  const create = async (dow: number) => {
+    const s = start.trim()
+    if (!/^\d{2}:\d{2}$/.test(s)) { setErr('Время начала — в формате ЧЧ:ММ'); return }
+    if (!exact && !/^\d{2}:\d{2}$/.test(end.trim())) { setErr('Время окончания — в формате ЧЧ:ММ'); return }
+    if (!exact && end.trim() <= s) { setErr('Окончание должно быть позже начала'); return }
+    try {
+      const maxSort = slots.filter(x => x.day_of_week === dow)
+        .reduce((m, x) => Math.max(m, x.sort_order), 0)
+      await createDeliverySlot({
+        day_of_week: dow,
+        start_time: s,
+        // Пустая строка на бэке превращается в NULL (NULLIF) = точное время.
+        end_time: exact ? '' : end.trim(),
+        label: label.trim() || null,
+        is_active: true,
+        sort_order: maxSort + 1,
+      })
+      setAddFor(null); resetForm(); await reload()
+    } catch (e: unknown) {
+      setErr((e as any)?.response?.data?.message || 'Не удалось добавить слот')
+    }
+  }
+
+  const toggleActive = async (slot: DeliverySlot) => {
+    try {
+      await updateDeliverySlot(slot.id, { ...slot, end_time: slot.end_time ?? '', is_active: !slot.is_active })
+      await reload()
+    } catch (e: unknown) {
+      showToast((e as any)?.response?.data?.message || 'Ошибка сохранения', 'error')
+    }
+  }
+
+  const remove = (slot: DeliverySlot) => setConfirm({
+    title: 'Удалить слот',
+    message: `Удалить слот ${slotLabel(slot)} (${DOW_NAMES[slot.day_of_week]})? `
+      + 'У заказов, уже назначенных на этот слот, время сохранится — они просто попадут в «Без слота» на доске логистики.',
+    danger: true,
+    action: async () => {
+      try { await deleteDeliverySlot(slot.id); await reload() }
+      catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка удаления', 'error') }
+    },
+  })
+
+  return (
+    <div className="card">
+      <h2>Слоты доставки</h2>
+      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 12 }}>
+        Рабочее время развозки для каждого дня недели. Эти слоты видны в Логистике
+        (колонки внутри дня, куда перетаскиваются заказы) и в выборе времени у заказа.
+        День без слотов = выходной. Слот «точное время» — для клиентов, которым нужна
+        доставка строго к часу.
+      </div>
+
+      {DOW_ORDER.map(dow => {
+        const daySlots = slots
+          .filter(s => s.day_of_week === dow)
+          .sort((a, b) => (a.sort_order - b.sort_order) || a.start_time.localeCompare(b.start_time))
+        return (
+          <div key={dow} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid #f0f0f0' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong style={{ minWidth: 130 }}>{DOW_NAMES[dow]}</strong>
+              {daySlots.length === 0 && (
+                <span style={{ color: '#95a5a6', fontSize: '0.9em' }}>выходной (слотов нет)</span>
+              )}
+              {daySlots.map(s => (
+                <span
+                  key={s.id}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '3px 8px', borderRadius: 12, fontSize: '0.86em',
+                    background: s.is_active ? '#eaf4fd' : '#f4f6f7',
+                    color: s.is_active ? '#1b4f72' : '#95a5a6',
+                    border: `1px solid ${s.is_active ? '#aed6f1' : '#dfe4e6'}`,
+                    textDecoration: s.is_active ? 'none' : 'line-through',
+                  }}
+                >
+                  {slotLabel(s)}{s.label ? ` · ${s.label}` : ''}
+                  <button
+                    title={s.is_active ? 'Выключить слот' : 'Включить слот'}
+                    onClick={() => void toggleActive(s)}
+                    style={chipBtn}
+                  >{s.is_active ? '⏻' : '↺'}</button>
+                  <button title="Удалить слот" onClick={() => remove(s)} style={{ ...chipBtn, color: '#c0392b' }}>
+                    &times;
+                  </button>
+                </span>
+              ))}
+              <button
+                className="btn-secondary btn-sm"
+                onClick={() => { setAddFor(addFor === dow ? null : dow); resetForm() }}
+              >{addFor === dow ? 'Отмена' : '+ Слот'}</button>
+            </div>
+
+            {addFor === dow && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
+                <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>с</label>
+                <input type="time" value={start} onChange={e => setStart(e.target.value)} style={{ width: 'auto' }} />
+                {!exact && (
+                  <>
+                    <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>до</label>
+                    <input type="time" value={end} onChange={e => setEnd(e.target.value)} style={{ width: 'auto' }} />
+                  </>
+                )}
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.85em' }}>
+                  <input type="checkbox" checked={exact} onChange={e => setExact(e.target.checked)} style={{ margin: 0 }} />
+                  точное время
+                </label>
+                <input
+                  value={label}
+                  onChange={e => setLabel(e.target.value)}
+                  placeholder="Подпись (необязательно)"
+                  style={{ width: 180 }}
+                />
+                <button className="btn-primary btn-sm" onClick={() => void create(dow)}>Добавить</button>
+                {err && <span className="error-msg" style={{ margin: 0 }}>{err}</span>}
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+const chipBtn: React.CSSProperties = {
+  background: 'none', border: 'none', cursor: 'pointer',
+  padding: 0, fontSize: 13, lineHeight: 1, color: 'inherit',
 }

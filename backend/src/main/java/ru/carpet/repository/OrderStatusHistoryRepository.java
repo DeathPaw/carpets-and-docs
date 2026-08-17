@@ -51,4 +51,22 @@ public class OrderStatusHistoryRepository {
                 ROW_MAPPER
         );
     }
+
+    /**
+     * Статус, из которого заказ пришёл в текущий — для кнопки «Откатить».
+     * Берём old_status последней записи. Сортируем по id, а не по changed_at:
+     * несколько переходов внутри одной транзакции получают одинаковый timestamp
+     * (NOW() в Postgres постоянен внутри транзакции), и по времени порядок был бы
+     * недетерминированным. Возвращает null, если истории нет или в ней null.
+     */
+    public OrderStatus findPreviousStatus(Long orderId) {
+        List<String> rows = jdbc.queryForList(
+                "SELECT old_status FROM order_status_history " +
+                "WHERE order_id = :orderId ORDER BY id DESC LIMIT 1",
+                Map.of("orderId", orderId),
+                String.class
+        );
+        if (rows.isEmpty() || rows.get(0) == null) return null;
+        return OrderStatus.valueOf(rows.get(0));
+    }
 }

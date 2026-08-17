@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
-  updateOrderStatus, payOrder, createWarrantyOrder,
+  updateOrderStatus, rollbackOrderStatus, payOrder, createWarrantyOrder,
   updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
@@ -1209,6 +1209,7 @@ export default function OrderDetailPage() {
   }, [orderId])
 
   const [showCancelOrderModal, setShowCancelOrderModal] = useState(false)
+  const [showRollbackModal, setShowRollbackModal] = useState(false)
 
   const changeOrderStatus = async (status: OrderStatus) => {
     if (status === 'CANCELLED') {
@@ -1232,6 +1233,23 @@ export default function OrderDetailPage() {
       setShowCancelOrderModal(false)
     } catch (e: unknown) {
       const msg = (e as any)?.response?.data?.message || 'Ошибка отмены заказа'
+      showToast(msg, 'error')
+    }
+  }
+
+  /** Откат статуса на шаг назад — исправление ошибочного перевода. Причина обязательна. */
+  const confirmRollbackStatus = async (reason: string) => {
+    try {
+      const updated = await rollbackOrderStatus(orderId, reason)
+      setOrder(updated)
+      const hist = await getOrderHistory(orderId)
+      setHistory(hist)
+      setShowRollbackModal(false)
+      // Перегружаем позиции: после отката меняется isEditable и доступные действия.
+      await loadOrder()
+      showToast(`Статус откачен в «${ORDER_STATUS_LABELS[updated.status]}»`, 'success')
+    } catch (e: unknown) {
+      const msg = (e as any)?.response?.data?.message || 'Ошибка отката статуса'
       showToast(msg, 'error')
     }
   }
@@ -1517,13 +1535,13 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
   if (loading) return <div className="loading">Загрузка...</div>
   if (!order) return <div className="error-msg">{error || 'Заказ не найден'}</div>
 
-  // Заказ нельзя редактировать в финальных статусах. DELIVERED ещё можно править
-  // (оператор может уточнить дату доставки и оплатить), а COMPLETED/CANCELLED — нет.
+  // Редактирование закрыто только у оплаченного заказа (COMPLETED): там сошлись
+  // деньги, менять состав нельзя — только гарантийный возврат.
+  // DELIVERED и CANCELLED раньше тоже блокировались, но тогда ошибочный перевод
+  // статуса намертво замораживал заказ. Теперь оператор либо правит на месте,
+  // либо жмёт «↶ Откатить» и возвращает предыдущий статус.
   // В режиме просмотра (моноблок) — всегда readonly.
-  const isEditable = !isReadonly
-                  && order.status !== 'DELIVERED'
-                  && order.status !== 'COMPLETED'
-                  && order.status !== 'CANCELLED'
+  const isEditable = !isReadonly && order.status !== 'COMPLETED'
 
   return (
     <div>
@@ -1942,6 +1960,16 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               </div>
             )
           })()}
+          {/* Откат на шаг назад. Доступен во всех статусах кроме COMPLETED —
+              там заказ оплачен, корректировка только через гарантийный возврат.
+              Прячем при пустой истории: откатывать некуда. */}
+          {!isReadonly && order.status !== 'COMPLETED' && history.length > 0 && (
+            <button
+              className="btn-secondary"
+              title="Вернуть заказ в предыдущий статус (нужно указать причину)"
+              onClick={() => setShowRollbackModal(true)}
+            >↶ Откатить статус</button>
+          )}
           {/* Оплата возможна только когда заказ доставлен. После оплаты заказ становится «Завершённым». */}
           {!isReadonly && !order.paid && order.status === 'DELIVERED' && (
             <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить и завершить</button>
@@ -2154,6 +2182,22 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             )
           })()}
 
+          {/* Округление вниз до сотни делает бэк (OrderService.roundDownToHundred).
+              Показываем строку, иначе оператор не понимает, почему база + модификаторы
+              не сходятся с ИТОГО. */}
+          {(() => {
+            const beforeRounding = Number(order.base_amount)
+              + orderModifiers.reduce((acc, m) => acc + Number(order.base_amount) * m.percent / 100, 0)
+            const diff = beforeRounding - Number(order.total_amount)
+            if (diff < 0.005) return null
+            return (
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: '#7f8c8d', fontSize: '0.9em' }}>
+                <span>Округление до 100 &#8381;:</span>
+                <span>&minus;{diff.toFixed(2)} &#8381;</span>
+              </div>
+            )
+          })()}
+
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '2px solid #333', marginTop: 8, fontSize: '1.1em' }}>
             <strong>ИТОГО:</strong>
             <strong>{Number(order.total_amount).toFixed(2)} &#8381;</strong>
@@ -2230,6 +2274,16 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           subject={`Заказ #${String(order.id).padStart(5, '0')} будет отменён.`}
           onCancel={() => setShowCancelOrderModal(false)}
           onConfirm={confirmCancelOrder}
+        />
+      )}
+      {showRollbackModal && (
+        <CancelReasonModal
+          title="Откат статуса"
+          subject={`Заказ #${String(order.id).padStart(5, '0')} вернётся в предыдущий статус. Причина попадёт в журнал действий.`}
+          confirmLabel="Откатить"
+          placeholder="Например: ошибочно нажал «Доставлен», клиент ещё не получил заказ"
+          onCancel={() => setShowRollbackModal(false)}
+          onConfirm={confirmRollbackStatus}
         />
       )}
       {/* V19 (#3): модалка отмены позиции — та же CancelReasonModal что у услуг. */}

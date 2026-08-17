@@ -36,15 +36,28 @@ export default function TimeSlotSelect({
   const daySlots = slots.filter(s => s.day_of_week === dow)
 
   if (daySlots.length === 0) {
+    // Слотов в справочнике на этот день нет (выходной либо их удалили).
+    // Если у заказа уже проставлено время — обязательно показываем его, иначе
+    // оператор видит пустой disabled-селект и не понимает, что время назначено.
     return (
-      <select value={value} onChange={e => onChange(e.target.value)} disabled>
+      <select value={value} onChange={e => onChange(e.target.value)} disabled={disabled || !value}>
         <option value="">— в этот день доставки нет —</option>
+        {value && <option value={value}>{value} · вне графика</option>}
       </select>
     )
   }
 
   const options: { value: string, label: string }[] = []
   for (const slot of daySlots) {
+    // V28: слот с фиксированным временем (end_time = null) — «доставка строго к 15:00».
+    // Дробить его на часовые подинтервалы нечего, это одна точка во времени.
+    if (!slot.end_time) {
+      options.push({
+        value: slot.start_time,
+        label: `к ${slot.start_time}${slot.label ? ' · ' + slot.label : ''}`,
+      })
+      continue
+    }
     // Целиком: «весь слот»
     options.push({
       value: `${slot.start_time}-${slot.end_time}`,
@@ -68,10 +81,12 @@ export default function TimeSlotSelect({
     }
   }
 
-  // Если у заказа уже сохранён слот, которого нет среди options (например, старый
-  // формат "10:00-13:00") — добавляем как первую опцию, чтобы выбор отобразился.
+  // Если у заказа уже сохранён слот, которого нет среди options (старые
+  // захардкоженные 08:00-12:00 / 12:00-18:00 / 18:00-22:00 или удалённый из
+  // справочника слот) — добавляем первой опцией, чтобы выбор отобразился и
+  // не потерялся при сохранении формы. Формулировка та же, что в Логистике.
   if (value && !options.some(o => o.value === value)) {
-    options.unshift({ value, label: `${value} (нестандартный)` })
+    options.unshift({ value, label: `${value} · вне графика` })
   }
 
   return (

@@ -30,6 +30,24 @@ final class AnalyticsHelpers {
             "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
             "  ELSE 1 END), 0)";
 
+    /**
+     * Коэффициент «цена услуги → фактическая выручка».
+     *
+     * <p>Клиент платит {@code orders.total_amount} — это база минус/плюс модификаторы
+     * и минус округление до сотни. Сумма же голых {@code ois.price} равна
+     * {@code base_amount}, то есть выручке ДО модификаторов. Раньше часть отчётов
+     * брала total_amount, а часть — SUM(ois.price), и доходность одного заказа
+     * в карточке и в сводке по клиентам расходилась ровно на величину модификаторов.
+     *
+     * <p>Теперь каждая услуга берётся с этим коэффициентом: суммы всех срезов
+     * (по клиенту, типу позиции, сотруднику, району) сходятся с total_amount заказа.
+     * Требует алиас {@code o} для orders в запросе.
+     */
+    static final String REVENUE_RATIO = "COALESCE(o.total_amount / NULLIF(o.base_amount, 0), 1)";
+
+    /** Выручка по набору услуг с учётом {@link #REVENUE_RATIO}. Требует алиасы {@code ois} и {@code o}. */
+    static final String REVENUE_EXPR = "COALESCE(SUM(ois.price * " + REVENUE_RATIO + "), 0)";
+
     /** Безопасное чтение Long: возвращает 0 если NULL. */
     static long longOrZero(ResultSet rs, String col) throws SQLException {
         long v = rs.getLong(col);

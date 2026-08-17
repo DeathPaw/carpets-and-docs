@@ -5,6 +5,10 @@ interface Props {
   title?: string
   /** Дополнительный поясняющий текст (что именно отменяем). */
   subject?: string
+  /** Текст кнопки подтверждения. По умолчанию «Отменить» (сценарий отмены). */
+  confirmLabel?: string
+  /** Подсказка в поле причины — своя для каждого сценария. */
+  placeholder?: string
   onConfirm: (reason: string) => void
   onCancel: () => void
 }
@@ -12,12 +16,16 @@ interface Props {
 const MIN_LEN = 10
 
 /**
- * Модалка для подтверждения отмены с обязательным полем «Причина».
- * Кнопка «Отменить заказ/позицию/услугу» неактивна, пока причина короче 10 символов.
+ * Модалка ввода обязательной причины. Используется и для отмены
+ * (заказ/позиция/услуга), и для отката статуса — кнопка подтверждения
+ * и плейсхолдер настраиваются пропсами.
+ * Кнопка неактивна, пока причина короче 10 символов.
  */
 export default function CancelReasonModal({
   title = 'Укажите причину отмены',
   subject,
+  confirmLabel = 'Отменить',
+  placeholder = 'Например: клиент отказался, ковёр уже отдан, ошибка при оформлении…',
   onConfirm,
   onCancel,
 }: Props) {
@@ -39,7 +47,7 @@ export default function CancelReasonModal({
             onChange={e => setReason(e.target.value)}
             rows={3}
             autoFocus
-            placeholder="Например: клиент отказался, ковёр уже отдан, ошибка при оформлении…"
+            placeholder={placeholder}
           />
           <div style={{ fontSize: '0.85em', color: tooShort ? '#e67e22' : '#27ae60', marginTop: 2 }}>
             {tooShort
@@ -55,7 +63,7 @@ export default function CancelReasonModal({
             onClick={() => onConfirm(trimmed)}
             title={tooShort ? `Введите минимум ${MIN_LEN} символов` : ''}
           >
-            Отменить
+            {confirmLabel}
           </button>
         </div>
       </div>

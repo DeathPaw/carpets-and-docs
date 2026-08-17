@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { addOrderItem } from '../../api/orders'
 import type { OrderItem, ItemType, PaymentType } from '../../types'
 import Tiles, { hashColor } from '../Tiles'
+import TimeSlotSelect from '../TimeSlotSelect'
 import { useEscapeClose } from '../../hooks/useEscapeClose'
 
 /**
@@ -13,13 +14,6 @@ const PAYMENT_OPTIONS: { value: PaymentType; label: string }[] = [
     { value: 'CARD',     label: 'Карта' },
     { value: 'CASH',     label: 'Наличные' },
     { value: 'TRANSFER', label: 'Перевод' },
-]
-
-/** Стандартные слоты доставки. Тоже плитки — раньше был обычный select. */
-const TIME_SLOT_OPTIONS: { value: string; label: string }[] = [
-    { value: '08:00-12:00', label: '8:00–12:00' },
-    { value: '12:00-18:00', label: '12:00–18:00' },
-    { value: '18:00-22:00', label: '18:00–22:00' },
 ]
 
 /**
@@ -342,13 +336,10 @@ export function DeliverAndPayModal({
         </div>
         <div className="form-group">
           <label>Временной слот</label>
-          <Tiles<string>
-            options={TIME_SLOT_OPTIONS}
-            value={slot || null}
-            onChange={setSlot}
-            nullLabel="— не указан —"
-            onNull={() => setSlot('')}
-          />
+          {/* Слоты берём из справочника под выбранную дату — как в Логистике.
+              Раньше здесь был хардкод 8–12/12–18/18–22, из-за чего оператор мог
+              поставить время вне рабочего графика. */}
+          <TimeSlotSelect value={slot} onChange={setSlot} date={date} />
         </div>
         <div className="form-group">
           <label>Тип оплаты *</label>

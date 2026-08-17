@@ -100,6 +100,15 @@ public class OrderController {
         return service.updateStatus(id, request.status(), request.cancellationReason());
     }
 
+    /**
+     * Откат статуса на шаг назад по истории. body: {"reason": "..."} (обязательна, ≥10 символов).
+     * Нужен когда оператор промахнулся кнопкой — обычные переходы односторонние.
+     */
+    @PatchMapping("/{id}/status/rollback")
+    public Order rollbackStatus(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return service.rollbackStatus(id, body.get("reason"));
+    }
+
     @PatchMapping("/{id}/comment")
     public Order updateComment(@PathVariable Long id, @RequestBody Map<String, String> body) {
         return service.updateComment(id, body.get("comment"));

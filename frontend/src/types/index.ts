@@ -213,13 +213,23 @@ export type FeedbackStatus =
   | 'REJECTED'
   | 'NEED_INFO'
 
+/** V27: одно вложение обращения. */
+export interface FeedbackScreenshot {
+  id: number
+  data: string            // base64 без data:-префикса
+  content_type: string | null
+}
+
 export interface Feedback {
   id: number
   topic: FeedbackTopic
   body: string
   page_path: string
-  screenshot: string | null         // base64
-  screenshot_type: string | null    // mime
+  /** Legacy: первое вложение. Оставлено для совместимости, читать лучше screenshots. */
+  screenshot: string | null
+  screenshot_type: string | null
+  /** V27: все вложения обращения по порядку. */
+  screenshots: FeedbackScreenshot[]
   submitted_by: string | null
   status: FeedbackStatus
   created_at: string
@@ -229,8 +239,8 @@ export interface CreateFeedbackRequest {
   topic: FeedbackTopic
   body: string
   page_path: string
-  screenshot?: string | null
-  screenshot_type?: string | null
+  /** V27: список вложений. Старые поля screenshot/screenshot_type бэк ещё принимает. */
+  screenshots?: { data: string; content_type: string | null }[]
 }
 
 /** V10: ItemType упрощён — это просто категория вещи клиента. */

@@ -24,12 +24,13 @@ export default function FeedbackButton() {
   const [open, setOpen] = useState(false)
   const [topic, setTopic] = useState<FeedbackTopic>('SUGGESTION_HOW')
   const [body, setBody] = useState('')
-  // Скриншот хранится в base64 (без префикса `data:image/png;base64,`),
-  // mime — в screenshotType. На отправке улетают вместе.
-  const [screenshot, setScreenshot] = useState<string | null>(null)
-  const [screenshotType, setScreenshotType] = useState<string | null>(null)
+  // V27: несколько скриншотов на обращение — одной картинки не хватало, чтобы
+  // показать последовательность действий. base64 хранится без data:-префикса.
+  const [shots, setShots] = useState<{ data: string; contentType: string; name: string }[]>([])
   const [sending, setSending] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const MAX_SHOTS = 10
 
   // Закрытие по Escape — стандарт для модалок.
   useEffect(() => {
@@ -67,8 +68,9 @@ export default function FeedbackButton() {
         // dataUrl = "data:image/png;base64,iVBORw0..."  — отрезаем mime-префикс.
         const comma = dataUrl.indexOf(',')
         const b64 = comma >= 0 ? dataUrl.slice(comma + 1) : dataUrl
-        setScreenshot(b64)
-        setScreenshotType(file.type)
+        setShots(prev => prev.length >= MAX_SHOTS
+          ? prev
+          : [...prev, { data: b64, contentType: file.type || 'image/png', name: file.name || 'скриншот' }])
         resolve()
       }
       reader.onerror = () => resolve()
@@ -76,16 +78,24 @@ export default function FeedbackButton() {
     })
   }
 
-  const onFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0]
-    if (file) void loadFile(file)
+  /** Поддерживаем выбор сразу нескольких файлов (input multiple). */
+  const onFileInput = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    const free = MAX_SHOTS - shots.length
+    if (files.length > free) {
+      showToast(`Можно приложить не больше ${MAX_SHOTS} скриншотов`, 'error')
+    }
+    for (const f of files.slice(0, Math.max(free, 0))) await loadFile(f)
+    // Сбрасываем input, иначе повторный выбор того же файла не сработает.
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
+
+  const removeShot = (idx: number) => setShots(prev => prev.filter((_, i) => i !== idx))
 
   const reset = () => {
     setTopic('SUGGESTION_HOW')
     setBody('')
-    setScreenshot(null)
-    setScreenshotType(null)
+    setShots([])
   }
 
   const submit = async () => {
@@ -100,8 +110,7 @@ export default function FeedbackButton() {
         topic,
         body: body.trim(),
         page_path: path,
-        screenshot,
-        screenshot_type: screenshotType,
+        screenshots: shots.map(s => ({ data: s.data, content_type: s.contentType })),
       })
       showToast('Обращение отправлено разработчику', 'success')
       setOpen(false)
@@ -177,29 +186,61 @@ export default function FeedbackButton() {
             </div>
 
             <div className="form-group">
-              <label>Скриншот (необязательно)</label>
+              <label>Скриншоты (необязательно) {shots.length > 0 && `· ${shots.length} из ${MAX_SHOTS}`}</label>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-                <input type="file" accept="image/*" onChange={onFileInput} style={{ width: 'auto' }} />
-                {screenshot && (
-                  <button
-                    type="button"
-                    className="btn-secondary btn-sm"
-                    onClick={() => { setScreenshot(null); setScreenshotType(null) }}
-                  >Убрать</button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  onChange={onFileInput}
+                  disabled={shots.length >= MAX_SHOTS}
+                  style={{ width: 'auto' }}
+                />
+                {shots.length > 0 && (
+                  <button type="button" className="btn-secondary btn-sm" onClick={() => setShots([])}>
+                    Убрать все
+                  </button>
                 )}
               </div>
-              {screenshot && screenshotType && (
-                <div style={{ marginTop: 8, padding: 4, border: '1px solid #ddd', borderRadius: 4, display: 'inline-block' }}>
-                  <img
-                    src={`data:${screenshotType};base64,${screenshot}`}
-                    alt="Скриншот"
-                    style={{ maxWidth: 360, maxHeight: 200, display: 'block' }}
-                  />
+              {shots.length > 0 && (
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                  {shots.map((s, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        position: 'relative', padding: 4, border: '1px solid #ddd',
+                        borderRadius: 4, background: '#fff',
+                      }}
+                    >
+                      <img
+                        src={`data:${s.contentType};base64,${s.data}`}
+                        alt={s.name}
+                        style={{ width: 120, height: 84, objectFit: 'cover', display: 'block', borderRadius: 2 }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => removeShot(i)}
+                        title="Удалить этот скриншот"
+                        style={{
+                          position: 'absolute', top: -6, right: -6,
+                          width: 22, height: 22, borderRadius: '50%',
+                          border: '1px solid #e74c3c', background: '#fff', color: '#e74c3c',
+                          cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: 0,
+                        }}
+                      >&times;</button>
+                      <div style={{
+                        fontSize: '0.7em', color: '#95a5a6', marginTop: 2, maxWidth: 120,
+                        whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                      }}>{s.name}</div>
+                    </div>
+                  ))}
                 </div>
               )}
               <div style={{ fontSize: '0.78em', color: '#7f8c8d', marginTop: 4 }}>
-                Подсказка: сделайте скриншот (Cmd+Shift+4 на Mac, Win+Shift+S на Windows)
-                и нажмите Ctrl/Cmd+V в этом окне.
+                Можно выбрать сразу несколько файлов или добавлять по одному.
+                Либо сделайте скриншот (Cmd+Shift+4 на Mac, Win+Shift+S на Windows)
+                и нажмите Ctrl/Cmd+V в этом окне — он добавится к списку.
               </div>
             </div>
 

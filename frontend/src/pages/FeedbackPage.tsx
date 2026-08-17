@@ -25,7 +25,10 @@ export default function FeedbackPage() {
   const [topicFilter, setTopicFilter] = useState<FeedbackTopic[]>([])
   const [statusFilter, setStatusFilter] = useState<FeedbackStatus[]>([])
   const [confirmDelete, setConfirmDelete] = useState<Feedback | null>(null)
-  const [enlargedScreenshot, setEnlargedScreenshot] = useState<Feedback | null>(null)
+  // V27: увеличиваем конкретное вложение, а не «скриншот обращения» —
+  // вложений теперь несколько, нужно знать какое именно открыли.
+  const [enlargedScreenshot, setEnlargedScreenshot] =
+    useState<{ data: string; contentType: string | null } | null>(null)
 
   const load = async () => {
     setLoading(true)
@@ -146,19 +149,35 @@ export default function FeedbackPage() {
                       )}
                     </div>
                     <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.5 }}>{f.body}</div>
-                    {f.screenshot && f.screenshot_type && (
-                      <div style={{ marginTop: 8 }}>
-                        <img
-                          src={`data:${f.screenshot_type};base64,${f.screenshot}`}
-                          alt="Скриншот"
-                          onClick={() => setEnlargedScreenshot(f)}
-                          style={{
-                            maxWidth: 240, maxHeight: 160, cursor: 'zoom-in',
-                            border: '1px solid #ddd', borderRadius: 4, display: 'block',
-                          }}
-                        />
-                      </div>
-                    )}
+                    {/* V27: вложений может быть несколько — показываем лентой превью.
+                        Фолбэк на legacy-поле нужен для обращений, пришедших со старого фронта. */}
+                    {(() => {
+                      const shots = f.screenshots?.length
+                        ? f.screenshots
+                        : (f.screenshot && f.screenshot_type
+                            ? [{ id: 0, data: f.screenshot, content_type: f.screenshot_type }]
+                            : [])
+                      if (shots.length === 0) return null
+                      return (
+                        <div style={{ marginTop: 8, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                          {shots.map((s, i) => (
+                            <img
+                              key={s.id || i}
+                              src={`data:${s.content_type || 'image/png'};base64,${s.data}`}
+                              alt={`Скриншот ${i + 1}`}
+                              title={`Скриншот ${i + 1} из ${shots.length} — открыть крупно`}
+                              onClick={() => setEnlargedScreenshot({
+                                data: s.data, contentType: s.content_type,
+                              })}
+                              style={{
+                                width: 150, height: 100, objectFit: 'cover', cursor: 'zoom-in',
+                                border: '1px solid #ddd', borderRadius: 4, display: 'block',
+                              }}
+                            />
+                          ))}
+                        </div>
+                      )
+                    })()}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'flex-end' }}>
                     {/* Селект статуса — оператор-супервизор переводит обращение по жизненному циклу. */}
@@ -185,13 +204,13 @@ export default function FeedbackPage() {
       )}
 
       {/* Модалка для просмотра скриншота в полном размере. */}
-      {enlargedScreenshot && enlargedScreenshot.screenshot && enlargedScreenshot.screenshot_type && (
+      {enlargedScreenshot && (
         <div className="modal-overlay" onClick={() => setEnlargedScreenshot(null)}>
           <div onClick={e => e.stopPropagation()} style={{
             background: '#fff', padding: 12, borderRadius: 6, maxWidth: '95vw', maxHeight: '95vh', overflow: 'auto',
           }}>
             <img
-              src={`data:${enlargedScreenshot.screenshot_type};base64,${enlargedScreenshot.screenshot}`}
+              src={`data:${enlargedScreenshot.contentType || 'image/png'};base64,${enlargedScreenshot.data}`}
               alt="Скриншот"
               style={{ display: 'block', maxWidth: '100%', height: 'auto' }}
             />

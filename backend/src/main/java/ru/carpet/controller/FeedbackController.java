@@ -40,8 +40,8 @@ public class FeedbackController {
                 request.topic(),
                 request.body(),
                 request.pagePath(),
-                request.screenshot(),
-                request.screenshotType(),
+                // allScreenshots() сводит новый список и legacy-поле к одному виду.
+                request.allScreenshots(),
                 username
         );
     }
