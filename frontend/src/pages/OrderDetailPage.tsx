@@ -8,6 +8,7 @@ import {
   updateOrderDetails, updateActualDates,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem,
   getItemPhotos, uploadItemPhoto, deleteItemPhoto, getAllOrderPhotos,
+  setPreliminaryPayment,
   type ItemPhoto,
 } from '../api/orders'
 import { getItemServices, getAllOrderServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
@@ -26,7 +27,7 @@ import SkuPicker from '../components/SkuPicker'
 import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
-  PaymentType,
+  PaymentType, PreliminaryPaymentType,
   PriceModifier, OrderModifier, Client, EmployeeRole,
 } from '../types'
 
@@ -36,6 +37,8 @@ import {
   ITEM_STATUS_LABELS,
   SERVICE_STATUS_LABELS,
   PAYMENT_LABELS,
+  PRELIMINARY_PAYMENT_LABELS,
+  ALL_PRELIMINARY_PAYMENTS,
 } from '../constants/statuses'
 
 // Ручные переходы статусов заказа.
@@ -60,6 +63,8 @@ function Badge({ status, labels }: { status: string; labels: Record<string, stri
 
 // formatOrderNumber теперь общая — см. utils/format.ts
 import { formatOrderNumber } from '../utils/format'
+import { useEscapeClose } from '../hooks/useEscapeClose'
+import StyledSelect from '../components/StyledSelect'
 import { useAuth } from '../auth/AuthContext'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
@@ -482,21 +487,22 @@ function ServicesPanel({
                         {/* Селект показываем всегда. Если размеры не заполнены — попытка перевести
                             в IN_PROGRESS/DONE откроет модалку «Заполните размеры», а не молча
                             заблокирует. Селект подсвечен оранжевым, чтобы оператор понимал почему. */}
-                        <select
+                        {/* StyledSelect вместо нативного: раскрытый список у <select>
+                            рисует ОС, на macOS он тёмно-серый и выбивается из стиля. */}
+                        <StyledSelect<string>
                           value={s.status}
-                          onChange={e => changeStatus(s.id, e.target.value as ServiceStatus)}
-                          style={{
-                            width: 115,
-                            fontSize: '0.9em',
-                            ...(blocked ? { borderColor: '#e67e22', background: '#fff3cd' } : {}),
-                          }}
-                          title={blocked ? 'Размеры позиции не заполнены — попытка перевести в работу откроет окно подсказки' : undefined}
-                        >
-                          <option value="CREATED">Создана</option>
-                          {!showAssignHint && <option value="IN_PROGRESS">В работе</option>}
-                          {!showAssignHint && <option value="DONE">Готова</option>}
-                          <option value="CANCELLED">Отменена</option>
-                        </select>
+                          width={130}
+                          ariaLabel="Статус услуги"
+                          options={[
+                            { value: 'CREATED', label: 'Создана' },
+                            ...(showAssignHint ? [] : [
+                              { value: 'IN_PROGRESS', label: 'В работе' },
+                              { value: 'DONE', label: 'Готова' },
+                            ]),
+                            { value: 'CANCELLED', label: 'Отменена' },
+                          ]}
+                          onChange={v => changeStatus(s.id, v as ServiceStatus)}
+                        />
                         <button className="btn-secondary btn-sm" onClick={() => openAssign(s.id, s.assignees ?? [])}>
                           Исполнители
                         </button>
@@ -630,7 +636,7 @@ function ServicesPanel({
 // ---- Item Row ----
 function ItemRow({
   item, index, orderId, employees, roles, onRefresh, isEditable, initialPhotos, isDefaultType,
-  freshlyAdded, onCancelItem,
+  freshlyAdded, onCancelItem, services, onQuickAssign, onQuickStatus,
 }: {
   item: OrderItem
   index: number
@@ -644,8 +650,24 @@ function ItemRow({
   freshlyAdded?: boolean
   /** V19: открыть модалку отмены позиции в родителе (используется единая CancelReasonModal). */
   onCancelItem: (item: OrderItem) => void
+  /** Правка №5: услуги позиции — чтобы показать быстрые действия в строке. */
+  services: OrderItemService[]
+  onQuickAssign: (item: OrderItem) => void
+  onQuickStatus: (item: OrderItem) => void
 }) {
   const { showToast } = useToast()
+  // Правка №5: сводка по услугам позиции для кнопок быстрых действий.
+  const activeServices = services.filter(s => s.status !== 'CANCELLED')
+  const needsAssignee = activeServices.some(s => (s.assignees?.length ?? 0) === 0)
+  const assigneeSummary = [...new Set(
+    activeServices.flatMap(s => (s.assignees ?? []).map(a => a.name))
+  )].join(', ') || 'не назначены'
+  // Подпись следующего шага показываем только когда услуга одна — иначе
+  // «следующий статус» у разных услуг может отличаться.
+  const nextStatusLabel = activeServices.length === 1
+    ? (activeServices[0].status === 'CREATED' ? 'В работу'
+      : activeServices[0].status === 'IN_PROGRESS' ? 'Готово' : null)
+    : null
   const [expanded, setExpanded] = useState(!!freshlyAdded)
   const [editDimensions, setEditDimensions] = useState(!!freshlyAdded && isEditable)
   const [editDesc, setEditDesc] = useState(!!freshlyAdded && isEditable)
@@ -920,9 +942,45 @@ function ItemRow({
         </td>
         {isEditable && (
           <td style={{ textAlign: 'right' }}>
-            <div style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end' }}>
+            {/* Правка №5: быстрые действия прямо из списка позиций — оператору
+                больше не нужно раскрывать каждую позицию, чтобы назначить
+                исполнителя или сдвинуть статус. «Дубль»/«Отменить» ужаты до
+                иконок, чтобы освободить место. */}
+            {/* Фиксированные ширины: без них «Назначить» и «Исполнители» разной
+                длины, и кнопки соседних строк не попадали в одну колонку. */}
+            <div style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center', whiteSpace: 'nowrap' }}>
+              {item.status !== 'CANCELLED' && activeServices.length > 0 && (
+                <>
+                  <button
+                    className="btn-secondary btn-sm"
+                    title={needsAssignee ? 'Назначить исполнителя' : `Исполнители: ${assigneeSummary}`}
+                    // Пока исполнителя нет — подсвечиваем оранжевым контуром: это
+                    // блокирует смену статуса, оператор должен начать отсюда.
+                    style={{
+                      width: 100, textAlign: 'center',
+                      ...(needsAssignee
+                        ? { borderColor: 'var(--c-warning-strong)', color: 'var(--c-warning-strong)' }
+                        : {}),
+                    }}
+                    onClick={() => onQuickAssign(item)}
+                  >{needsAssignee ? 'Назначить' : 'Исполнители'}</button>
+                  {/* Статус недоступен без исполнителя — бэк всё равно откажет
+                      («Невозможно сменить статус: не назначен исполнитель»),
+                      поэтому кнопку гасим, а не даём напороться на ошибку. */}
+                  <button
+                    className="btn-secondary btn-sm"
+                    disabled={needsAssignee}
+                    style={{ width: 74, textAlign: 'center' }}
+                    title={needsAssignee
+                      ? 'Сначала назначьте исполнителя'
+                      : (nextStatusLabel ? `Перевести услугу: ${nextStatusLabel}` : 'Сменить статус услуги')}
+                    onClick={() => onQuickStatus(item)}
+                  >Статус ▾</button>
+                </>
+              )}
               <button
                 className="btn-secondary btn-sm"
+                style={{ width: 34, textAlign: 'center' }}
                 onClick={async () => {
                   try {
                     await duplicateItem(orderId, item.id)
@@ -930,15 +988,20 @@ function ItemRow({
                   } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка дублирования позиции'; showToast(msg, 'error') }
                 }}
                 title="Дублировать позицию"
-              >Дубль</button>
+              >⧉</button>
               {/* V19 (#11): кнопка отмены позиции — работает даже если на позиции нет услуг.
                   Раньше оператор не мог отменить «пустую» позицию (некого было отменять). */}
-              {item.status !== 'CANCELLED' && (
+              {item.status !== 'CANCELLED' ? (
                 <button
                   className="btn-danger btn-sm"
+                  style={{ width: 34, textAlign: 'center' }}
                   title="Отменить позицию"
                   onClick={() => onCancelItem(item)}
-                >× Отменить</button>
+                >×</button>
+              ) : (
+                // Заглушка вместо отсутствующей кнопки — иначе у отменённой
+                // позиции остальные кнопки съезжают вправо.
+                <span style={{ width: 34, display: 'inline-block' }} />
               )}
             </div>
           </td>
@@ -1052,6 +1115,170 @@ function ItemRow({
   )
 }
 
+/**
+ * Правка №5: попап быстрых действий по позиции — назначить исполнителя и
+ * сменить статус, не раскрывая строку позиции и не заходя в карточку.
+ *
+ * Открывается, когда у позиции несколько услуг (нужно выбрать, к какой относится
+ * действие) либо когда оператор жмёт «Назначить». Для позиции с одной услугой
+ * смена статуса выполняется сразу, без этого окна.
+ */
+function QuickItemActionsModal({
+  orderId, item, mode, services, employees, roles, onClose, onDone,
+}: {
+  orderId: number
+  item: OrderItem
+  /** С чего открылось окно: 'assign' — назначение, 'status' — смена статуса. */
+  mode: 'assign' | 'status'
+  services: OrderItemService[]
+  employees: Employee[]
+  roles: EmployeeRole[]
+  onClose: () => void
+  onDone: () => void | Promise<void>
+}) {
+  const { showToast } = useToast()
+  // Если услуга одна, промежуточный выбор услуги не нужен: сразу раскрываем
+  // список исполнителей. Оператор жал «Назначить» — он и должен его увидеть.
+  const [assignFor, setAssignFor] = useState<number | null>(
+    mode === 'assign' && services.length === 1 ? services[0].id : null
+  )
+  const [picked, setPicked] = useState<number[]>(
+    mode === 'assign' && services.length === 1
+      ? (services[0].assignees ?? []).map(a => a.id)
+      : []
+  )
+  const [busy, setBusy] = useState(false)
+  useEscapeClose(true, onClose)
+
+  // Те же правила подбора исполнителей, что в развёрнутой панели услуг:
+  // сотрудник без роли — универсал, иначе роль должна включать тип позиции.
+  const suitable = employees.filter(e => {
+    if (e.role_id == null) return true
+    const role = roles.find(r => r.id === e.role_id)
+    return !role || role.item_type_ids.includes(item.item_type_id)
+  })
+
+  const changeStatus = async (svc: OrderItemService, next: ServiceStatus) => {
+    setBusy(true)
+    try {
+      await updateServiceStatus(orderId, item.id, svc.id, { status: next })
+      await onDone()
+      onClose()
+    } catch (e: unknown) {
+      showToast((e as any)?.response?.data?.message || 'Ошибка смены статуса', 'error')
+    } finally { setBusy(false) }
+  }
+
+  const saveAssignees = async (svcId: number) => {
+    setBusy(true)
+    try {
+      await assignServiceEmployees(orderId, item.id, svcId, { employee_ids: picked })
+      await onDone()
+      setAssignFor(null)
+    } catch (e: unknown) {
+      showToast((e as any)?.response?.data?.message || 'Ошибка назначения', 'error')
+    } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 620 }}>
+        <h2 style={{ marginTop: 0 }}>
+          {item.item_type_name || `Позиция #${item.id}`}
+        </h2>
+        <div style={{ color: '#7f8c8d', fontSize: '0.9em', marginTop: -8, marginBottom: 14 }}>
+          {item.description || 'без описания'}
+        </div>
+
+        {services.length === 0 ? (
+          <div style={{ color: '#999', padding: '12px 0' }}>У позиции нет активных услуг.</div>
+        ) : services.map(svc => {
+          const assignees = svc.assignees ?? []
+          const noAssignee = assignees.length === 0
+          // Куда можно перевести услугу. CREATED ↔ IN_PROGRESS ↔ DONE в обе
+          // стороны: оператор должен уметь и откатить ошибочный переход.
+          const targets: ServiceStatus[] =
+            (['CREATED', 'IN_PROGRESS', 'DONE'] as ServiceStatus[]).filter(s => s !== svc.status)
+          return (
+            <div key={svc.id} style={{
+              border: '1px solid #e6e9ea', borderRadius: 6, padding: 10, marginBottom: 10,
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <div style={{ minWidth: 0 }}>
+                  <strong>{svc.sku_name || `Услуга #${svc.id}`}</strong>
+                  <div style={{ fontSize: '0.85em', color: '#7f8c8d', marginTop: 2 }}>
+                    Исполнители: {assignees.length > 0 ? assignees.map(a => a.name).join(', ') : 'не назначены'}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <Badge status={svc.status} labels={SERVICE_STATUS_LABELS} />
+                  {/* В режиме смены статуса кнопка «Исполнители» не нужна —
+                      оператор пришёл сюда за статусом, лишний выбор мешает. */}
+                  {mode === 'assign' && (
+                    <button
+                      className="btn-secondary btn-sm"
+                      disabled={busy}
+                      onClick={() => {
+                        setAssignFor(assignFor === svc.id ? null : svc.id)
+                        setPicked(assignees.map(a => a.id))
+                      }}
+                    >Исполнители</button>
+                  )}
+                  {mode === 'status' && (
+                    /* Выпадающий выбор целевого статуса вместо одной кнопки
+                       «следующий шаг» — оператор видит все доступные переходы. */
+                    <StyledSelect<string>
+                      value=""
+                      width={170}
+                      disabled={busy || noAssignee}
+                      ariaLabel="Перевести услугу в статус"
+                      placeholder={noAssignee ? 'Нужен исполнитель' : 'Перевести в…'}
+                      options={targets.map(s => ({ value: s, label: SERVICE_STATUS_LABELS[s] ?? s }))}
+                      onChange={v => void changeStatus(svc, v as ServiceStatus)}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {assignFor === svc.id && (
+                <div style={{ marginTop: 10, borderTop: '1px solid #eee', paddingTop: 10 }}>
+                  <div style={{ maxHeight: 190, overflowY: 'auto', marginBottom: 8 }}>
+                    {suitable.length === 0 ? (
+                      <div style={{ color: '#999', fontSize: '0.9em' }}>Нет подходящих сотрудников</div>
+                    ) : suitable.map(emp => (
+                      <label key={emp.id} style={{
+                        display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px', cursor: 'pointer',
+                      }}>
+                        <input
+                          type="checkbox"
+                          checked={picked.includes(emp.id)}
+                          onChange={() => setPicked(p =>
+                            p.includes(emp.id) ? p.filter(x => x !== emp.id) : [...p, emp.id])}
+                          style={{ width: 'auto' }}
+                        />
+                        <span>{emp.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                  {/* Только «Применить»: передумал — есть «Закрыть» у всего окна,
+                      отдельная «Отмена» рядом только запутывает. */}
+                  <button className="btn-primary btn-sm" disabled={busy} onClick={() => void saveAssignees(svc.id)}>
+                    Применить
+                  </button>
+                </div>
+              )}
+            </div>
+          )
+        })}
+
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Закрыть</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---- Main Page ----
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
@@ -1095,6 +1322,17 @@ export default function OrderDetailPage() {
   // алерт «Проблемный клиент» прямо на странице заказа, а не только в модалке
   // карточки клиента.
   const [clientIsProblem, setClientIsProblem] = useState<boolean>(false)
+  /** Правка №5: услуги по позициям — для быстрых действий из списка позиций. */
+  const [servicesByItem, setServicesByItem] = useState<Map<number, OrderItemService[]>>(new Map())
+  /**
+   * Правка №5: попап быстрых действий по позиции.
+   * mode задаёт, с чего он открывается — с назначения исполнителей или со смены
+   * статуса. Если услуга у позиции одна, промежуточный выбор услуги пропускается.
+   */
+  const [quickItem, setQuickItem] = useState<{ item: OrderItem; mode: 'assign' | 'status' } | null>(null)
+
+  const handleQuickAssign = (item: OrderItem) => setQuickItem({ item, mode: 'assign' })
+  const handleQuickStatus = (item: OrderItem) => setQuickItem({ item, mode: 'status' })
   const [showClientCard, setShowClientCard] = useState<Client | null>(null)
   const [clientCardMods, setClientCardMods] = useState<PriceModifier[]>([])
   const [clientEvents, setClientEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
@@ -1125,15 +1363,25 @@ export default function OrderDetailPage() {
 
   const loadOrder = async () => {
     try {
-      const [o, its, hist, allPhotos] = await Promise.all([
+      const [o, its, hist, allPhotos, allSvc] = await Promise.all([
         getOrder(orderId),
         getOrderItems(orderId),
         getOrderHistory(orderId),
         getAllOrderPhotos(orderId).catch(() => [] as ItemPhoto[]),
+        // Правка №5: услуги всех позиций одним запросом — нужны для быстрых
+        // действий прямо в строке позиции (сколько услуг, назначен ли исполнитель).
+        getAllOrderServices(orderId).catch(() => []),
       ])
       setOrder(o)
       setItems(its)
       setHistory(hist)
+      const svcMap = new Map<number, OrderItemService[]>()
+      allSvc.forEach(s => {
+        const arr = svcMap.get(s.order_item_id) || []
+        arr.push(s as unknown as OrderItemService)
+        svcMap.set(s.order_item_id, arr)
+      })
+      setServicesByItem(svcMap)
       // Раскладываем фото по позициям в Map<itemId, photos[]> — один проход вместо N fetch.
       const grouped = new Map<number, ItemPhoto[]>()
       allPhotos.forEach(p => {
@@ -1186,6 +1434,42 @@ export default function OrderDetailPage() {
       getEmployeeRoles().then(setRoles).catch(() => {}),
       getPriceModifiers().then(setAllModifiers).catch(() => {}),
     ]).finally(() => setLoading(false))
+  }, [orderId])
+
+  /**
+   * Правка №3: подтягиваем статусы, пока страница открыта.
+   *
+   * Типичная жалоба «услуга Готова, а позиция Создана» возникала не из-за бэка
+   * (там пересчёт корректный), а из-за того, что оператор держал заказ открытым
+   * на компьютере, пока стирщик менял статус с телефона. Страница показывала
+   * снимок на момент загрузки.
+   *
+   * Обновляем только order/items/history — НЕ трогаем состояние форм
+   * (details, commentValue), иначе фоновое обновление затрёт то, что оператор
+   * прямо сейчас печатает в полях адреса или комментария.
+   */
+  useEffect(() => {
+    if (!orderId) return
+    let cancelled = false
+    const refreshStatuses = async () => {
+      if (document.hidden) return
+      try {
+        const [o, its] = await Promise.all([getOrder(orderId), getOrderItems(orderId)])
+        if (cancelled) return
+        setOrder(o)
+        setItems(its)
+      } catch { /* сеть моргнула — попробуем на следующем тике */ }
+    }
+    const timer = setInterval(refreshStatuses, 20000)
+    // Возврат на вкладку — самый частый момент, когда данные уже устарели.
+    document.addEventListener('visibilitychange', refreshStatuses)
+    window.addEventListener('focus', refreshStatuses)
+    return () => {
+      cancelled = true
+      clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshStatuses)
+      window.removeEventListener('focus', refreshStatuses)
+    }
   }, [orderId])
 
   // V17 presence: пока страница открыта — пингуем бэк раз в 15 сек. Бэк не шлёт нам
@@ -1297,7 +1581,31 @@ export default function OrderDetailPage() {
     }
   }
 
-  const saveDetails = async () => {
+  /**
+   * Автосохранение блока «Логистика и детали».
+   *
+   * Оператору неудобно жать «Сохранить» после каждой правки, поэтому сохраняем
+   * сами, когда фокус уходит с поля (onBlur) и данные реально изменились.
+   * Форма при этом НЕ закрывается (silent=true) — иначе она схлопывалась бы
+   * посреди редактирования. Кнопка «Сохранить» остаётся как явное завершение.
+   */
+  const savedDetailsRef = useRef<string>('')
+  useEffect(() => {
+    // Запоминаем состояние на момент открытия формы — с ним сравниваем на blur.
+    if (editDetails) savedDetailsRef.current = JSON.stringify(details)
+    // details намеренно не в зависимостях: нужен снимок ровно при открытии.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editDetails])
+
+  const autoSaveDetails = () => {
+    if (!editDetails) return
+    const now = JSON.stringify(details)
+    if (now === savedDetailsRef.current) return   // ничего не меняли — не дёргаем бэк
+    savedDetailsRef.current = now
+    void saveDetails(true)
+  }
+
+  const saveDetails = async (silent = false) => {
     // Валидация дат: забор не в прошлом, доставка >= забора.
     const today = new Date().toISOString().slice(0, 10)
     if (details.pickup_date && details.pickup_date < today) {
@@ -1327,7 +1635,8 @@ export default function OrderDetailPage() {
         delivery_lon: details.delivery_lon,
       })
       setOrder(updated)
-      setEditDetails(false)
+      // При автосохранении форму не закрываем — оператор продолжает править.
+      if (!silent) setEditDetails(false)
     } catch {
       setError('Ошибка сохранения деталей')
     }
@@ -1380,12 +1689,22 @@ export default function OrderDetailPage() {
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки клиента'; showToast(msg, 'error') }
   }
 
-  const handlePrintPdf = async () => {
+  /**
+   * Печать накладной. Два вида документа:
+   *   'delivery' — отвоз готовых ковров клиенту: позиции, размеры, услуги, итог;
+   *   'pickup'   — забор ковров у клиента: только ковровые изделия (без служебных
+   *                позиций Приём/Доставка/Оформление), размеры и стоимость помечены
+   *                как предварительные, доставка вынесена отдельной строкой.
+   *
+   * Лист горизонтальный, на нём два одинаковых экземпляра (клиенту и организации),
+   * оба с местом под подпись — режется по пунктиру посередине.
+   */
+  const handlePrintPdf = async (mode: 'delivery' | 'pickup' = 'delivery') => {
     if (!order) return
     const modRows = orderModifiers.map(m => {
       const amount = Number(order.base_amount) * m.percent / 100
       const sign = amount >= 0 ? '+' : ''
-      return `<tr><td style="padding:4px 8px">${m.modifier_name} (${m.percent > 0 ? '+' : ''}${m.percent}%)</td><td style="padding:4px 8px;text-align:right">${sign}${amount.toFixed(2)} руб.</td></tr>`
+      return `<tr><td style="padding:3px 6px">${m.modifier_name} (${m.percent > 0 ? '+' : ''}${m.percent}%)</td><td style="padding:3px 6px;text-align:right">${sign}${amount.toFixed(2)} руб.</td></tr>`
     }).join('')
 
     // Загружаем услуги для всех позиций ОДНИМ батч-запросом (раньше было N запросов).
@@ -1397,120 +1716,182 @@ export default function OrderDetailPage() {
       servicesByItem.set(s.order_item_id, arr)
     })
 
-    // V10: «авто-добавленные» позиции теперь определяются на уровне SKU (is_auto_add),
-    // а не типа позиции. Здесь для печати считаем, что все позиции одинаково значимы.
     // Отменённые позиции из печатной формы исключаем всегда — клиенту они не нужны.
-    const visibleItems = items.filter(i => i.status !== 'CANCELLED')
+    const activeItems = items.filter(i => i.status !== 'CANCELLED')
+    // Служебные позиции (V22): «Приём», «Доставка», «Оформление» — это не изделия,
+    // а этапы работы. В накладной на забор их не показываем: клиенту важен список
+    // сданных ковров, а доставка идёт отдельной строкой в итогах.
+    const SERVICE_ITEM_TYPES = new Set(['Приём', 'Доставка', 'Оформление'])
+    const isServiceItem = (it: typeof activeItems[number]) =>
+      SERVICE_ITEM_TYPES.has((it.item_type_name || '').trim())
+    const goodsItems = activeItems.filter(it => !isServiceItem(it))
+    const serviceItems = activeItems.filter(isServiceItem)
+    const deliveryAmount = serviceItems.reduce((sum, it) => sum + Number(it.price), 0)
+
+    const visibleItems = mode === 'pickup' ? goodsItems : activeItems
+    const dims = (it: typeof activeItems[number]) =>
+      `${it.length ? it.length + '×' + (it.width || 0) : '—'}${it.weight ? ' (' + it.weight + 'кг)' : ''}${it.area ? ' S=' + it.area : ''}${it.running_meters ? ' ' + it.running_meters + 'п.м.' : ''}`
+
     const itemRows = visibleItems.map((it, idx) => {
-      const isDefault = false
-      // Отменённые услуги тоже не показываем в печатке.
-      const svcList = (servicesByItem.get(it.id) || []).filter(s => s.status !== 'CANCELLED')
-      const svcRows = svcList.map(s =>
-        `<tr style="background:#fafafa;font-size:11px">
-          <td style="padding:2px 8px 2px 24px" colspan="3">— ${s.sku_name || 'Услуга #' + s.sku_id}
-            <span style="color:#888;margin-left:8px">(${SERVICE_STATUS_LABELS[s.status] || s.status})</span>
-          </td>
-          <td style="padding:2px 8px"></td>
-          <td style="padding:2px 8px;text-align:right">${Number(s.price).toFixed(2)} руб.</td>
-        </tr>`
-      ).join('')
-      return `<tr${isDefault ? ' style="color:#888"' : ''}>
-        <td style="padding:4px 8px">${idx + 1}</td>
-        <td style="padding:4px 8px">${it.item_type_name || 'Тип #' + it.item_type_id}</td>
-        <td style="padding:4px 8px">${it.description || '—'}${it.defects ? '<br><span style="color:#e67e22;font-size:0.9em">Дефекты: ' + it.defects + '</span>' : ''}</td>
-        <td style="padding:4px 8px">${it.length ? it.length + '×' + (it.width || 0) : '—'}${it.weight ? ' (' + it.weight + 'кг)' : ''}${it.area ? ' S=' + it.area : ''}${it.running_meters ? ' ' + it.running_meters + 'п.м.' : ''}</td>
-        <td style="padding:4px 8px;text-align:right;font-weight:bold">${Number(it.price).toFixed(2)} руб.</td>
+      // В накладной на забор услуги не расписываем: на этом этапе состав работ
+      // ещё уточняется, показываем только принятые изделия.
+      const svcRows = mode === 'pickup' ? '' : (servicesByItem.get(it.id) || [])
+        .filter(s => s.status !== 'CANCELLED')
+        .map(s =>
+          `<tr style="background:#fafafa;font-size:9px">
+            <td style="padding:1px 6px 1px 16px" colspan="3">— ${s.sku_name || 'Услуга #' + s.sku_id}
+              <span style="color:#888;margin-left:6px">(${SERVICE_STATUS_LABELS[s.status] || s.status})</span>
+            </td>
+            <td style="padding:1px 6px"></td>
+            <td style="padding:1px 6px;text-align:right">${Number(s.price).toFixed(2)} руб.</td>
+          </tr>`
+        ).join('')
+      return `<tr>
+        <td style="padding:3px 6px">${idx + 1}</td>
+        <td style="padding:3px 6px">${it.item_type_name || 'Тип #' + it.item_type_id}</td>
+        <td style="padding:3px 6px">${it.description || '—'}${it.defects ? '<br><span style="color:#e67e22;font-size:0.9em">Дефекты: ' + it.defects + '</span>' : ''}</td>
+        <td style="padding:3px 6px">${dims(it)}</td>
+        <td style="padding:3px 6px;text-align:right;font-weight:bold">${Number(it.price).toFixed(2)} руб.</td>
       </tr>${svcRows}`
     }).join('')
 
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Заказ ${formatOrderNumber(order.id, order.created_at)}</title>
-<style>
-  body { font-family: Arial, sans-serif; font-size: 13px; margin: 30px; color: #333; }
-  h1 { font-size: 18px; margin: 0 0 4px; }
-  h2 { font-size: 14px; margin: 16px 0 8px; border-bottom: 1px solid #999; padding-bottom: 4px; }
-  table { width: 100%; border-collapse: collapse; margin-bottom: 12px; }
-  th { background: #f0f0f0; text-align: left; padding: 4px 8px; border: 1px solid #ccc; font-size: 12px; }
-  td { border: 1px solid #ccc; font-size: 12px; vertical-align: top; }
-  .header { text-align: center; margin-bottom: 20px; border-bottom: 2px solid #333; padding-bottom: 10px; }
-  .company { font-size: 20px; font-weight: bold; letter-spacing: 2px; }
-  .info-grid { display: flex; gap: 30px; margin-bottom: 12px; }
-  .info-col { flex: 1; }
-  .info-row { margin-bottom: 4px; }
-  .label { font-weight: bold; }
-  .total-row { font-size: 15px; font-weight: bold; }
-  .signatures { display: flex; justify-content: space-between; margin-top: 50px; }
-  .sig-block { width: 45%; }
-  .sig-line { border-bottom: 1px solid #333; margin-top: 40px; margin-bottom: 4px; }
-  .sig-label { font-size: 11px; color: #666; }
-  /* Запрещаем разрывы страницы внутри строк таблицы и подписных блоков —
-     иначе строка позиции/услуги может разломиться пополам между листами. */
-  tr, .sig-block, .info-row, .total-row { page-break-inside: avoid; break-inside: avoid; }
-  table thead { display: table-header-group; }
-  h2 { page-break-after: avoid; break-after: avoid; }
-  @media print {
-    body { margin: 15px; }
-    @page { margin: 12mm; }
-  }
-</style></head><body>
-<div class="header">
-  <div class="company">КОВРОВОЕ ПРОИЗВОДСТВО</div>
-  <div style="font-size:11px;color:#666">Система учёта заказов</div>
-</div>
+    const docTitle = mode === 'pickup'
+      ? 'НАКЛАДНАЯ НА ПРИЁМ КОВРОВ'
+      : 'НАКЛАДНАЯ НА ВЫДАЧУ КОВРОВ'
 
-<h1>Заказ ${formatOrderNumber(order.id, order.created_at)}</h1>
-${order.legacy_id ? '<div style="margin-bottom:8px;color:#666">ID из старой системы: ' + order.legacy_id + '</div>' : ''}
-
-<div class="info-grid">
-  <div class="info-col">
-    <div class="info-row"><span class="label">Клиент:</span> ${order.client_name}</div>
-    ${order.client_address ? '<div class="info-row"><span class="label">Адрес клиента:</span> ' + order.client_address + '</div>' : ''}
-    <div class="info-row"><span class="label">Статус:</span> ${ORDER_STATUS_LABELS[order.status]}</div>
-    ${order.is_warranty ? '<div class="info-row"><span class="label">Гарантийный заказ</span>' + (order.parent_order_id ? ' (от заказа #' + String(order.parent_order_id).padStart(5, '0') + ')' : '') + '</div>' : ''}
-  </div>
-  <div class="info-col">
-    ${order.pickup_address ? '<div class="info-row"><span class="label">Адрес забора:</span> ' + order.pickup_address + (order.pickup_district ? ' (' + order.pickup_district + ')' : '') + '</div>' : ''}
-    ${order.delivery_address ? '<div class="info-row"><span class="label">Адрес доставки:</span> ' + order.delivery_address + (order.delivery_district ? ' (' + order.delivery_district + ')' : '') + '</div>' : ''}
-    ${order.pickup_date ? '<div class="info-row"><span class="label">Дата забора:</span> ' + order.pickup_date + (order.pickup_time_slot ? ' (' + order.pickup_time_slot + ')' : '') + '</div>' : ''}
-    ${order.delivery_date ? '<div class="info-row"><span class="label">Дата доставки:</span> ' + order.delivery_date + (order.delivery_time_slot ? ' (' + order.delivery_time_slot + ')' : '') + '</div>' : ''}
-  </div>
-</div>
-
-${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комментарий:</span> ' + order.comment + '</div>' : ''}
-
-<h2>Позиции заказа</h2>
-<table>
-  <thead><tr><th>#</th><th>Тип</th><th>Описание</th><th>Размеры</th><th style="text-align:right">Стоимость</th></tr></thead>
-  <tbody>${itemRows}</tbody>
-</table>
-
-<h2>Расчёт стоимости</h2>
+    // Итоги. Для забора всё помечено как предварительное: размеры уточняются на
+    // производстве, от них зависит цена.
+    const totalsBlock = mode === 'pickup' ? `
 <table>
   <tbody>
-    <tr><td style="padding:4px 8px;font-weight:bold">Сумма позиций (базовая)</td><td style="padding:4px 8px;text-align:right;font-weight:bold">${Number(order.base_amount).toFixed(2)} руб.</td></tr>
+    <tr><td style="padding:2px 5px">Предварительная стоимость ковров</td><td style="padding:2px 5px;text-align:right">${goodsItems.reduce((s, it) => s + Number(it.price), 0).toFixed(2)} руб.</td></tr>
+    <tr><td style="padding:2px 5px">Доставка</td><td style="padding:2px 5px;text-align:right">${deliveryAmount > 0 ? deliveryAmount.toFixed(2) + ' руб.' : 'включена в стоимость'}</td></tr>
     ${modRows}
-    <tr class="total-row"><td style="padding:8px;border-top:2px solid #333">ИТОГО</td><td style="padding:8px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
+    <tr class="total-row"><td style="padding:4px 5px;border-top:2px solid #333">ПРЕДВАРИТЕЛЬНО К ОПЛАТЕ</td><td style="padding:4px 5px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
   </tbody>
 </table>
-
-<div style="margin-top:8px">
+<div class="notice">
+  <div>• Ковровые изделия приняты у клиента для дальнейшей обработки на производстве.</div>
+  <div>• Размеры предварительные и будут уточнены после поступления ковров на производство.</div>
+  <div>• Стоимость предварительная и может быть изменена после уточнения размеров и фактической обработки ковров.</div>
+  <div>• ${deliveryAmount > 0 ? 'Доставка рассчитывается отдельно согласно условиям заказа.' : 'Доставка включена в стоимость заказа.'}</div>
+</div>` : `
+<table>
+  <tbody>
+    <tr><td style="padding:2px 5px;font-weight:bold">Сумма позиций</td><td style="padding:2px 5px;text-align:right;font-weight:bold">${Number(order.base_amount).toFixed(2)} руб.</td></tr>
+    ${modRows}
+    <tr class="total-row"><td style="padding:4px 5px;border-top:2px solid #333">ИТОГО</td><td style="padding:4px 5px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
+  </tbody>
+</table>
+<div style="margin-top:6px">
   <span class="label">Оплата:</span> ${order.paid ? 'Оплачен (' + (order.payment_type ? PAYMENT_LABELS[order.payment_type] : '') + ')' : 'Не оплачен'}
-</div>
+</div>`
 
-<div class="signatures">
-  <div class="sig-block">
-    <div class="sig-line"></div>
-    <div class="sig-label">Подпись клиента / ФИО</div>
+    /**
+     * Один экземпляр накладной. copyLabel различает клиентский и наш.
+     *
+     * Верстаем «в ширину»: экземпляр занимает всю ширину листа и половину его
+     * высоты, поэтому шапка и реквизиты идут строками, а итоги с примечаниями —
+     * двумя колонками рядом с таблицей, а не под ней.
+     */
+    const renderCopy = (copyLabel: string) => `
+<div class="copy">
+  <div class="head-row">
+    <div>
+      <span class="company">СТИРКА КОВРОВ</span>
+      <span style="font-size:8px;color:#666;margin-left:6px">Система учёта заказов</span>
+    </div>
+    <div class="doc-title">${docTitle}</div>
+    <div class="copy-label">${copyLabel}</div>
   </div>
-  <div class="sig-block">
-    <div class="sig-line"></div>
-    <div class="sig-label">Подпись представителя компании / ФИО</div>
-  </div>
-</div>
 
-<div style="text-align:center;margin-top:30px;font-size:10px;color:#999">
-  Документ сформирован ${new Date().toLocaleString('ru')}
-</div>
+  <div class="meta-row">
+    <span><span class="label">Заказ:</span> ${formatOrderNumber(order.id, order.created_at)}</span>
+    <span><span class="label">Клиент:</span> ${order.client_name}</span>
+    ${order.client_address ? '<span><span class="label">Адрес:</span> ' + order.client_address + '</span>' : ''}
+    ${mode === 'pickup'
+      ? (order.pickup_date ? '<span><span class="label">Забор:</span> ' + order.pickup_date + (order.pickup_time_slot ? ' (' + order.pickup_time_slot + ')' : '') + '</span>' : '')
+      : (order.delivery_date ? '<span><span class="label">Доставка:</span> ' + order.delivery_date + (order.delivery_time_slot ? ' (' + order.delivery_time_slot + ')' : '') + '</span>' : '')}
+    ${order.legacy_id ? '<span style="color:#666">ID старой системы: ' + order.legacy_id + '</span>' : ''}
+    ${order.is_warranty ? '<span class="label">Гарантийный заказ</span>' : ''}
+    ${order.comment ? '<span><span class="label">Комментарий:</span> ' + order.comment + '</span>' : ''}
+  </div>
+
+  <div class="body-row">
+    <div class="col-items">
+      <table>
+        <thead><tr><th style="width:22px">#</th><th style="width:22%">Вид</th><th>Описание</th><th style="width:20%">${mode === 'pickup' ? 'Размеры (предв.)' : 'Размеры'}</th><th style="width:18%;text-align:right">${mode === 'pickup' ? 'Стоимость (предв.)' : 'Стоимость'}</th></tr></thead>
+        <tbody>${itemRows || '<tr><td colspan="5" style="padding:8px;text-align:center;color:#999">Изделий нет</td></tr>'}</tbody>
+      </table>
+    </div>
+    <div class="col-total">
+      ${totalsBlock}
+    </div>
+  </div>
+
+  <div class="foot-row">
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div class="sig-label">Подпись клиента / ФИО</div>
+    </div>
+    <div class="sig-block">
+      <div class="sig-line"></div>
+      <div class="sig-label">Подпись представителя / ФИО</div>
+    </div>
+    <div class="footer">Сформирован ${new Date().toLocaleString('ru')}</div>
+  </div>
+</div>`
+
+    const html = `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${docTitle} ${formatOrderNumber(order.id, order.created_at)}</title>
+<style>
+  /* Вертикальный лист, на нём два одинаковых экземпляра друг под другом.
+     Каждый занимает половину высоты и всю ширину — то есть сам «горизонтальный».
+     Рвётся пополам по высоте листа: линия отреза посередине. */
+  @page { size: A4 portrait; margin: 8mm; }
+  body { font-family: Arial, sans-serif; font-size: 10px; margin: 0; color: #333;
+         display: flex; flex-direction: column;
+         /* A4 297mm минус поля 8mm сверху и снизу. */
+         height: 281mm; }
+  .copy { height: 50%; box-sizing: border-box; overflow: hidden; padding-bottom: 4mm;
+          display: flex; flex-direction: column; }
+  .copy + .copy { border-top: 1px dashed #999; padding-top: 4mm; padding-bottom: 0; }
+
+  /* Шапка одной строкой: название, тип документа, чей экземпляр. */
+  .head-row { display: flex; align-items: baseline; justify-content: space-between;
+              gap: 10px; border-bottom: 2px solid #333; padding-bottom: 3px; margin-bottom: 4px; }
+  .company { font-size: 13px; font-weight: bold; letter-spacing: 1.2px; }
+  .doc-title { font-size: 11px; font-weight: bold; }
+  .copy-label { font-size: 9px; color: #666; }
+
+  /* Реквизиты — в строку с переносом, чтобы не съедать высоту. */
+  .meta-row { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 9px; margin-bottom: 4px; }
+  .label { font-weight: bold; }
+
+  /* Таблица и итоги рядом: половина листа по высоте, места вниз нет. */
+  .body-row { display: flex; gap: 6mm; flex: 1; min-height: 0; overflow: hidden; }
+  .col-items { flex: 1 1 68%; min-width: 0; overflow: hidden; }
+  .col-total { flex: 0 0 30%; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { background: #f0f0f0; text-align: left; padding: 2px 5px; border: 1px solid #ccc; font-size: 8px; }
+  td { border: 1px solid #ccc; font-size: 8px; vertical-align: top; }
+  .total-row { font-size: 10px; font-weight: bold; }
+  .notice { margin-top: 4px; font-size: 7px; color: #555; line-height: 1.45; }
+
+  /* Подписи и штамп времени — прижаты к низу экземпляра. */
+  .foot-row { display: flex; align-items: flex-end; justify-content: space-between;
+              gap: 10px; margin-top: 3mm; }
+  .sig-block { flex: 1 1 0; max-width: 38%; }
+  .sig-line { border-bottom: 1px solid #333; margin-bottom: 2px; height: 14px; }
+  .sig-label { font-size: 7px; color: #666; }
+  .footer { font-size: 7px; color: #999; white-space: nowrap; }
+
+  tr, .sig-block { page-break-inside: avoid; break-inside: avoid; }
+  table thead { display: table-header-group; }
+</style></head><body>
+${renderCopy('Экземпляр клиента')}
+${renderCopy('Экземпляр организации')}
 </body></html>`
 
     const iframe = document.createElement('iframe')
@@ -1574,6 +1955,31 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               <div style={{ marginBottom: 8 }}><strong>Скидка:</strong> {order.discount_percent}%</div>
             )}
             <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${order.payment_type ? PAYMENT_LABELS[order.payment_type] : ''})` : 'Нет'}</div>
+            {/* V30: предварительный тип оплаты. Оператор ставит заранее — водитель
+                видит его в маршрутном листе. Это намерение, не факт оплаты. */}
+            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <strong>Оплата (предв.):</strong>
+              <StyledSelect<string>
+                value={order.preliminary_payment_type ?? ''}
+                width={210}
+                disabled={order.status === 'CANCELLED'}
+                ariaLabel="Предварительный тип оплаты"
+                placeholder="— не указан —"
+                options={[
+                  { value: '', label: '— не указан —' },
+                  ...ALL_PRELIMINARY_PAYMENTS.map(v => ({ value: v as string, label: PRELIMINARY_PAYMENT_LABELS[v] })),
+                ]}
+                onChange={async raw => {
+                  const v = raw ? (raw as PreliminaryPaymentType) : null
+                  try {
+                    await setPreliminaryPayment(orderId, v)
+                    await loadOrder()
+                  } catch (err: unknown) {
+                    showToast((err as any)?.response?.data?.message || 'Ошибка сохранения', 'error')
+                  }
+                }}
+              />
+            </div>
             <div style={{ marginBottom: 8, display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
               <strong>Клиент:</strong>{' '}
               <button className="btn-secondary btn-sm" onClick={openClientCard} style={{ marginLeft: 4 }}>
@@ -1717,7 +2123,12 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             </div>
           )}
           {editDetails ? (
-            <div>
+            /* onBlur всплывает от вложенных полей — ловим уход фокуса с любого
+               из них и сохраняем, если что-то поменялось. relatedTarget внутри
+               этого же блока означает переход между полями формы: там сохранять
+               на каждый шаг незачем, но и вреда нет — autoSaveDetails сам
+               сравнивает с последним сохранённым снимком. */
+            <div onBlur={autoSaveDetails}>
               <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
                 <div className="form-group" style={{ flex: '1 1 250px', marginBottom: 4 }}>
                   <label>Адрес забора</label>
@@ -1818,8 +2229,8 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" onClick={saveDetails}>Сохранить</button>
-                <button className="btn-secondary btn-sm" onClick={() => setEditDetails(false)}>Отмена</button>
+                <button className="btn-success btn-sm" onClick={() => void saveDetails()}>Готово</button>
+                <button className="btn-secondary btn-sm" onClick={() => setEditDetails(false)}>Закрыть</button>
               </div>
             </div>
           ) : (
@@ -1997,7 +2408,18 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               }
             })
           }}>Дублировать заказ</button>
-          <button className="btn-secondary" onClick={handlePrintPdf}>Печать PDF</button>
+          {/* Две накладные под разные этапы: забор ковров у клиента и выдача готовых.
+              Каждая печатается на горизонтальном листе в двух экземплярах. */}
+          <button
+            className="btn-secondary"
+            onClick={() => void handlePrintPdf('pickup')}
+            title="Накладная на приём ковров у клиента (размеры и стоимость предварительные)"
+          >Накладная: забор</button>
+          <button
+            className="btn-secondary"
+            onClick={() => void handlePrintPdf('delivery')}
+            title="Накладная на выдачу готовых ковров клиенту"
+          >Накладная: отвоз</button>
           {/* V17: проблемный заказ. Поднятый флаг шлёт уведомление админам и виден в UI. */}
           {!isReadonly && (
             order.is_problem ? (
@@ -2067,7 +2489,10 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             )}
           </div>
         </div>
-        <table className="items-table">
+        {/* Горизонтальный скролл: в «Действиях» до четырёх кнопок, на узких
+            экранах колонка иначе обрезалась по краю карточки. */}
+        <div style={{ overflowX: 'auto' }}>
+        <table className="items-table" style={{ minWidth: 1080 }}>
           <thead>
             <tr>
               <th style={{ width: 100 }}>#</th>
@@ -2076,7 +2501,7 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
               <th style={{ width: 160 }}>Размеры</th>
               <th style={{ width: 120 }}>Статус</th>
               <th style={{ width: 120, textAlign: 'right' }}>Стоимость</th>
-              {isEditable && <th style={{ width: 160, textAlign: 'right' }}>Действия</th>}
+              {isEditable && <th style={{ width: 300, textAlign: 'right' }}>Действия</th>}
             </tr>
           </thead>
           <tbody>
@@ -2101,12 +2526,16 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
                     isDefaultType={false}
                     freshlyAdded={freshlyAddedIds.has(item.id)}
                     onCancelItem={(it) => setCancelItem(it)}
+                    services={servicesByItem.get(item.id) || []}
+                    onQuickAssign={handleQuickAssign}
+                    onQuickStatus={handleQuickStatus}
                   />
                 ))
               })()
             }
           </tbody>
         </table>
+        </div>
       </div>
 
       {/* Расчёт стоимости */}
@@ -2169,16 +2598,19 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
             const available = allModifiers.filter(m => !usedIds.includes(m.id))
             if (available.length === 0) return null
             return (
-              <select
-                value=""
-                onChange={e => { const v = Number(e.target.value); if (v) void handleAddModifier(v) }}
-                style={{ width: 'auto', marginTop: 4 }}
-              >
-                <option value="">+ Добавить модификатор...</option>
-                {available.map(m => (
-                  <option key={m.id} value={m.id}>{m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)</option>
-                ))}
-              </select>
+              <div style={{ marginTop: 4 }}>
+                <StyledSelect<string>
+                  value=""
+                  width={280}
+                  ariaLabel="Добавить модификатор"
+                  placeholder="+ Добавить модификатор…"
+                  options={available.map(m => ({
+                    value: String(m.id),
+                    label: `${m.name} (${m.percent > 0 ? '+' : ''}${m.percent}%)`,
+                  }))}
+                  onChange={v => { const id = Number(v); if (id) void handleAddModifier(id) }}
+                />
+              </div>
             )
           })()}
 
@@ -2284,6 +2716,19 @@ ${order.comment ? '<div style="margin-bottom:12px"><span class="label">Комм�
           placeholder="Например: ошибочно нажал «Доставлен», клиент ещё не получил заказ"
           onCancel={() => setShowRollbackModal(false)}
           onConfirm={confirmRollbackStatus}
+        />
+      )}
+      {/* Правка №5: быстрые действия по позиции без раскрытия строки. */}
+      {quickItem && (
+        <QuickItemActionsModal
+          orderId={orderId}
+          item={quickItem.item}
+          mode={quickItem.mode}
+          services={(servicesByItem.get(quickItem.item.id) || []).filter(s => s.status !== 'CANCELLED')}
+          employees={employees}
+          roles={roles}
+          onClose={() => setQuickItem(null)}
+          onDone={async () => { await loadOrder() }}
         />
       )}
       {/* V19 (#3): модалка отмены позиции — та же CancelReasonModal что у услуг. */}

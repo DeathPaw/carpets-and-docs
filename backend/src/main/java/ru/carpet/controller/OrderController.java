@@ -60,6 +60,10 @@ public class OrderController {
             @RequestParam(required = false) Boolean overdueActual,
             // true = пора забирать/доставлять, но адрес пуст (виджет «Без адреса»)
             @RequestParam(required = false) Boolean badAddress,
+            @RequestParam(required = false) Boolean stuck,
+            // Единый поиск: имя / телефон / legacy ID / номер заказа.
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) List<String> districts,
             // V19: только гарантийные (клик из аналитики).
             @RequestParam(required = false) Boolean onlyWarranty,
             @RequestParam(defaultValue = "0") int page,
@@ -74,7 +78,7 @@ public class OrderController {
                 .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
                 .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
                 .sortBy(sortBy).sortDir(sortDir)
-                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress)
+                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress).stuck(stuck).search(search).districts(districts)
                 .onlyWarranty(onlyWarranty).build();
 
         List<Order> content = service.findAll(query, page, size);
@@ -112,6 +116,15 @@ public class OrderController {
     @PatchMapping("/{id}/comment")
     public Order updateComment(@PathVariable Long id, @RequestBody Map<String, String> body) {
         return service.updateComment(id, body.get("comment"));
+    }
+
+    /**
+     * V30: предварительный тип оплаты. body: {"preliminary_payment_type": "CASH"} либо null для сброса.
+     * Это намерение, а не факт оплаты — фактическая фиксируется через /pay.
+     */
+    @PatchMapping("/{id}/preliminary-payment")
+    public Order setPreliminaryPayment(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return service.setPreliminaryPaymentType(id, body.get("preliminary_payment_type"));
     }
 
     /** V17: пометить заказ проблемным. body: {"is_problem": true/false, "reason": "..."} */

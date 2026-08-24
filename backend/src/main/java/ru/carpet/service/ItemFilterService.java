@@ -52,7 +52,7 @@ public class ItemFilterService {
             Long employeeId, int page, int size
     ) {
         return findItems(statuses, itemTypeIds, orderId, positionInOrder, employeeId,
-                null, null, null, page, size);
+                null, null, null, null, null, page, size);
     }
 
     /**
@@ -64,14 +64,17 @@ public class ItemFilterService {
             Long orderId, Integer positionInOrder,
             Long employeeId,
             String clientName, String clientPhone, Long legacyId,
+            String search, List<String> districts,
             int page, int size
     ) {
         var params = new MapSqlParameterSource();
+        boolean hasSearch = search != null && !search.isBlank();
+        boolean hasDistricts = districts != null && !districts.isEmpty();
         boolean needOrders = (clientName != null && !clientName.isBlank())
                 || (clientPhone != null && !clientPhone.isBlank())
-                || legacyId != null;
+                || legacyId != null || hasSearch || hasDistricts;
         boolean needClients = (clientName != null && !clientName.isBlank())
-                || (clientPhone != null && !clientPhone.isBlank());
+                || (clientPhone != null && !clientPhone.isBlank()) || hasSearch;
 
         // Подзапрос с window-функцией позиции в заказе.
         var sql = new StringBuilder(
@@ -112,6 +115,28 @@ public class ItemFilterService {
             sql.append("  AND (REGEXP_REPLACE(COALESCE(c.phone,''),'\\D','','g') LIKE :clientPhone " +
                     "OR REGEXP_REPLACE(COALESCE(c.extra_phone,''),'\\D','','g') LIKE :clientPhone) ");
             params.addValue("clientPhone", "%" + suffix);
+        }
+        // Единый поиск: одно поле вместо трёх. Условия через OR — оператор вводит
+        // что помнит (имя, телефон, legacy ID или номер заказа), не выбирая колонку.
+        if (hasSearch) {
+            String raw = search.trim();
+            String digits = raw.replaceAll("\\D", "");
+            sql.append("  AND (LOWER(COALESCE(c.name,'')) LIKE :searchLike ")
+               .append("    OR LOWER(o.client_name) LIKE :searchLike ");
+            if (!digits.isEmpty()) {
+                sql.append("    OR REGEXP_REPLACE(COALESCE(c.phone,''),'\\D','','g') LIKE :searchDigits ")
+                   .append("    OR REGEXP_REPLACE(COALESCE(c.extra_phone,''),'\\D','','g') LIKE :searchDigits ")
+                   .append("    OR CAST(o.legacy_id AS text) LIKE :searchDigits ")
+                   .append("    OR CAST(o.id AS text) LIKE :searchDigits ");
+                params.addValue("searchDigits", "%" + digits + "%");
+            }
+            sql.append("  ) ");
+            params.addValue("searchLike", "%" + raw.toLowerCase() + "%");
+        }
+        // Район забора/доставки заказа, к которому относится позиция.
+        if (hasDistricts) {
+            sql.append("  AND (o.pickup_district IN (:districts) OR o.delivery_district IN (:districts)) ");
+            params.addValue("districts", districts);
         }
         sql.append(") sub WHERE 1=1 ");
 

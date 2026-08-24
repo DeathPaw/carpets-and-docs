@@ -2,7 +2,7 @@ import client from './client'
 import type {
   Order, OrderItem, OrderStatusHistory,
   CreateOrderRequest, AddOrderItemRequest, UpdateOrderItemDimensionsRequest,
-  UpdateStatusRequest, PayOrderRequest
+  UpdateStatusRequest, PayOrderRequest, PreliminaryPaymentType
 } from '../types'
 
 // Orders
@@ -31,6 +31,12 @@ export interface OrdersQuery {
   overdueActual?: boolean
   /** true = пора забирать/доставлять, но адрес не заполнен. */
   badAddress?: boolean
+  /** «Висящие»: лид/созданный >7 дней без назначенного забора. */
+  stuck?: boolean
+  /** Единый поиск: имя / телефон / legacy ID / номер заказа. */
+  search?: string
+  /** Район забора или доставки. */
+  districts?: string[]
   /** V19: только гарантийные заказы (для аналитики). */
   onlyWarranty?: boolean
 }
@@ -56,6 +62,9 @@ export const getOrdersQuery = (q: OrdersQuery = {}) => {
   if (q.noCoords) params.append('noCoords', 'true')
   if (q.overdueActual) params.append('overdueActual', 'true')
   if (q.badAddress) params.append('badAddress', 'true')
+  if (q.stuck) params.append('stuck', 'true')
+  if (q.search) params.append('search', q.search)
+  if (q.districts && q.districts.length > 0) q.districts.forEach(d => params.append('districts', d))
   if (q.onlyWarranty) params.append('onlyWarranty', 'true')
   params.append('page', String(q.page ?? 0))
   params.append('size', String(q.size ?? 20))
@@ -87,6 +96,13 @@ export const rollbackOrderStatus = (id: number, reason: string) =>
 /** V17: пометить заказ проблемным (или снять флаг). При TRUE reason обязателен (≥10 симв). */
 export const setOrderProblem = (id: number, isProblem: boolean, reason?: string) =>
   client.patch<Order>(`/api/orders/${id}/problem`, { is_problem: isProblem, reason: reason ?? null }).then(r => r.data)
+
+/**
+ * V30: предварительный тип оплаты (намерение клиента). null — сбросить.
+ * Факт оплаты фиксируется отдельно через payOrder.
+ */
+export const setPreliminaryPayment = (id: number, value: PreliminaryPaymentType | null) =>
+  client.patch<Order>(`/api/orders/${id}/preliminary-payment`, { preliminary_payment_type: value }).then(r => r.data)
 
 export const payOrder = (id: number, data: PayOrderRequest) =>
   client.post<Order>(`/api/orders/${id}/pay`, data).then(r => r.data)

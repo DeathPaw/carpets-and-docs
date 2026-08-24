@@ -26,7 +26,10 @@ const TODAY_WIDGETS: Widget[] = [
 
 const STATUS_WIDGETS: Widget[] = [
   // «Новых сегодня (47 всего)» — формат собирается ниже специально для этого виджета.
-  { key: 'today_leads',        label: 'Новые лиды',      link: '/orders?statuses=LEAD' },
+  // Плитка считает лидов, созданных СЕГОДНЯ, — ссылка тоже с фильтром по сегодня,
+  // иначе в списке оказывались все лиды за всё время (0 на плитке → 6 в списке).
+  { key: 'today_leads',        label: 'Новые лиды',
+    link: `/orders?statuses=LEAD&dateField=created_at&dateFrom=${new Date().toISOString().slice(0, 10)}&dateTo=${new Date().toISOString().slice(0, 10)}` },
   { key: 'in_progress',        label: 'В работе',        link: '/orders?statuses=IN_PROGRESS,PARTIALLY_DONE' },
   { key: 'ready_for_delivery', label: 'Готовы к доставке', link: '/orders?statuses=DONE' },
   { key: 'total_active',       label: 'Активных всего',  link: `/orders?statuses=${ACTIVE_STATUSES}` },
@@ -34,7 +37,9 @@ const STATUS_WIDGETS: Widget[] = [
     emphasizeColor: '#c0392b', hideIfZero: true },
   // «Висящие» — заказы старше 7 дней без даты забора. Подсвечиваем оранжевым.
   { key: 'stuck',              label: 'Висят (>7 дней без даты)',
-    link: `/orders?statuses=LEAD,CREATED`,
+    // stuck=true — тот же критерий, что у counter'а на бэке. Без него ссылка
+    // показывала вообще все LEAD/CREATED: на плитке 2, в списке 6.
+    link: `/orders?stuck=true`,
     emphasizeColor: '#d35400', hideIfZero: true },
   // «Без координат» — есть адрес, но lat/lon = NULL: оператор не видит точку на карте,
   // заказ может «потеряться». Красная подсветка, чтобы заметили и поправили адрес.

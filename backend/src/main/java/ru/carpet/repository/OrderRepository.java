@@ -35,6 +35,14 @@ public class OrderRepository {
         // client_address может отсутствовать в некоторых запросах
         String clientAddress = null;
         try { clientAddress = rs.getString("client_address"); } catch (Exception ignored) {}
+        // Телефон клиента — для маршрутного листа и режима «День» в логистике,
+        // чтобы водителю не приходилось открывать карточку клиента.
+        String clientPhone = null;
+        try { clientPhone = rs.getString("client_phone"); } catch (Exception ignored) {}
+        // V30: предварительный тип оплаты. try/catch — колонки может не быть в
+        // выборках, которые тянут не весь o.*.
+        String preliminaryPaymentType = null;
+        try { preliminaryPaymentType = rs.getString("preliminary_payment_type"); } catch (Exception ignored) {}
 
         Long legacyId = rs.getObject("legacy_id", Long.class);
 
@@ -77,6 +85,7 @@ public class OrderRepository {
                 clientId,
                 rs.getString("client_name"),
                 clientAddress,
+                clientPhone,
                 rs.getString("comment"),
                 OrderStatus.valueOf(rs.getString("status")),
                 rs.getBoolean("is_warranty"),
@@ -85,6 +94,7 @@ public class OrderRepository {
                 rs.getBoolean("paid"),
                 paymentType,
                 paymentDate,
+                preliminaryPaymentType,
                 rs.getString("pickup_address"),
                 rs.getString("delivery_address"),
                 rs.getString("pickup_apartment"),
@@ -133,7 +143,7 @@ public class OrderRepository {
         params.put("offset", (long) page * size);
 
         StringBuilder sql = new StringBuilder(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
 
         appendWhereClause(sql, params, query);
 
@@ -266,6 +276,24 @@ public class OrderRepository {
             sql.append("AND (c.phone LIKE :clientPhone OR c.extra_phone LIKE :clientPhone) ");
             params.put("clientPhone", "%" + q.clientPhone() + "%");
         }
+        // Единый поиск: одно поле вместо трёх (имя / телефон / legacy ID).
+        // Условия объединены через OR — оператор вводит что знает, не выбирая колонку.
+        // Цифры сравниваем с телефоном и legacy_id, текст — с именем и контактным лицом.
+        if (q.search() != null && !q.search().isBlank()) {
+            String raw = q.search().trim();
+            String digits = raw.replaceAll("\\D", "");
+            sql.append("AND (LOWER(o.client_name) LIKE :searchLike ")
+               .append("  OR LOWER(COALESCE(c.contact_person,'')) LIKE :searchLike ");
+            if (!digits.isEmpty()) {
+                sql.append("  OR REGEXP_REPLACE(COALESCE(c.phone,''), '\\D', '', 'g') LIKE :searchDigits ")
+                   .append("  OR REGEXP_REPLACE(COALESCE(c.extra_phone,''), '\\D', '', 'g') LIKE :searchDigits ")
+                   .append("  OR CAST(o.legacy_id AS text) LIKE :searchDigits ")
+                   .append("  OR CAST(o.id AS text) LIKE :searchDigits ");
+                params.put("searchDigits", "%" + digits + "%");
+            }
+            sql.append(") ");
+            params.put("searchLike", "%" + raw.toLowerCase() + "%");
+        }
         if (q.clientName() != null && !q.clientName().isEmpty()) {
             sql.append("AND (LOWER(o.client_name) LIKE :clientNameLike OR LOWER(COALESCE(c.contact_person,'')) LIKE :clientNameLike) ");
             params.put("clientNameLike", "%" + q.clientName().toLowerCase() + "%");
@@ -289,11 +317,25 @@ public class OrderRepository {
         if (Boolean.TRUE.equals(q.onlyWarranty())) {
             sql.append("AND o.is_warranty = TRUE ");
         }
+        // Район: заказ подходит, если совпал район забора ИЛИ доставки —
+        // оператор ищет «что у нас в Красносельском», не разделяя направления.
+        if (q.districts() != null && !q.districts().isEmpty()) {
+            sql.append("AND (o.pickup_district IN (:districts) OR o.delivery_district IN (:districts)) ");
+            params.put("districts", q.districts());
+        }
+        // «Висящие» — лид/созданный старше 7 дней, которому так и не назначили забор.
+        // Условие ДОЛЖНО совпадать с counter'ом stuck в DashboardRepository, иначе
+        // на плитке одно число, а после клика в списке другое.
+        if (Boolean.TRUE.equals(q.stuck())) {
+            sql.append("AND o.status IN ('LEAD','CREATED','FOR_PICKUP') " +
+                       "AND o.actual_pickup_date IS NULL AND o.pickup_date IS NULL " +
+                       "AND o.created_at < NOW() - INTERVAL '7 days' ");
+        }
     }
 
     public Optional<Order> findById(Long id) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.id = :id",
                 Map.of("id", id),
                 ROW_MAPPER
@@ -303,7 +345,7 @@ public class OrderRepository {
 
     public Optional<Order> findByLegacyId(Long legacyId) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.legacy_id = :legacyId",
                 Map.of("legacyId", legacyId),
                 ROW_MAPPER
@@ -349,6 +391,17 @@ public class OrderRepository {
         jdbc.update(
                 "UPDATE orders SET comment = :comment, version = version + 1, updated_at = NOW() WHERE id = :id",
                 Map.of("comment", comment, "id", id)
+        );
+    }
+
+    /** V30: предварительный тип оплаты. value = null сбрасывает значение. */
+    public void updatePreliminaryPaymentType(Long id, String value) {
+        var params = new MapSqlParameterSource()
+                .addValue("v", value)   // null → SQL NULL
+                .addValue("id", id);
+        jdbc.update(
+                "UPDATE orders SET preliminary_payment_type = :v, version = version + 1, updated_at = NOW() WHERE id = :id",
+                params
         );
     }
 
@@ -467,7 +520,7 @@ public class OrderRepository {
 
     public List<Order> findWarrantyOrders(Long parentOrderId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.parent_order_id = :parentOrderId AND o.is_warranty = true ORDER BY o.id",
                 Map.of("parentOrderId", parentOrderId),
                 ROW_MAPPER
@@ -476,7 +529,7 @@ public class OrderRepository {
 
     public List<Order> findByClientName(String clientName) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_name = :clientName ORDER BY o.id DESC",
                 Map.of("clientName", clientName),
                 ROW_MAPPER
@@ -501,7 +554,7 @@ public class OrderRepository {
 
     public List<Order> findByClientId(Long clientId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_id = :clientId ORDER BY o.id DESC",
                 Map.of("clientId", clientId),
                 ROW_MAPPER

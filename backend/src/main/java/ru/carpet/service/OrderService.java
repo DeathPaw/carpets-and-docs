@@ -775,6 +775,28 @@ public class OrderService {
         return repository.findById(orderId).orElseThrow();
     }
 
+    /**
+     * V30: предварительный тип оплаты — намерение клиента, которое видит водитель
+     * в маршрутном листе. Меняется в любом статусе кроме отменённого: оператор
+     * может уточнить способ расчёта уже после завершения работ. Факт оплаты
+     * (paid/payment_type) этим не затрагивается.
+     */
+    @Transactional
+    public Order setPreliminaryPaymentType(Long orderId, String value) {
+        Order order = findById(orderId);
+        if (order.status() == OrderStatus.CANCELLED) {
+            throw new BusinessRuleException("Нельзя менять параметры отменённого заказа");
+        }
+        String normalized = value == null || value.isBlank() ? null : value.trim().toUpperCase();
+        if (normalized != null && !java.util.List.of("CASH", "CARD", "TRANSFER", "PAID", "FREE").contains(normalized)) {
+            throw new BusinessRuleException("Недопустимый предварительный тип оплаты: " + value);
+        }
+        repository.updatePreliminaryPaymentType(orderId, normalized);
+        auditLogService.log("ORDER", orderId, "UPDATE",
+                "Предварительный тип оплаты заказа #" + orderId + ": " + (normalized == null ? "не указан" : normalized));
+        return repository.findById(orderId).orElseThrow();
+    }
+
     /** Обновление деталей заказа (адреса, квартиры, даты, legacy_id, координаты) */
     public Order updateDetails(Long orderId, String pickupAddress, String deliveryAddress,
                                String pickupApartment, String deliveryApartment, Long legacyId,

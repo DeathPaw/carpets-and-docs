@@ -8,6 +8,7 @@ import { updateServiceStatus, assignServiceEmployees } from '../api/services'
 import { getEmployees, getEmployeesSuitableFor, getItemTypes } from '../api/references'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
+import PageFilterBar from '../components/PageFilterBar'
 import { hashColor } from '../components/Tiles'
 import type { Employee, ItemType, ServiceStatus } from '../types'
 
@@ -122,11 +123,15 @@ export default function ProductionPage() {
     services.forEach(s => set.add(s.service_name))
     return Array.from(set).sort()
   }, [services])
+  // Районы собираем из всех трёх наборов: фильтр теперь общий для режимов,
+  // и в «По заказам» список не должен быть пустым только потому, что услуги не загружены.
   const allDistricts = useMemo(() => {
     const set = new Set<string>()
     services.forEach(s => { if (s.pickup_district) set.add(s.pickup_district) })
+    items.forEach(i => { if (i.pickup_district) set.add(i.pickup_district) })
+    orders.forEach(o => { if (o.pickup_district) set.add(o.pickup_district) })
     return Array.from(set).sort()
-  }, [services])
+  }, [services, items, orders])
 
   /**
    * V13: универсальный текстовый поиск по клиенту/legacy ID. Используется во всех 3 режимах.
@@ -171,13 +176,33 @@ export default function ProductionPage() {
     })
   }, [services, employeeFilters, itemTypeFilters, serviceNameFilter, districtFilter, orderIdFilter, onlyUnassigned, searchText])
 
+  /** № заказа из фильтра, без ведущих нулей: оператор вводит и «7», и «00007». */
+  const orderIdTarget = orderIdFilter.replace(/^0+/, '')
+
   const filteredOrders = useMemo(() =>
-    orders.filter(o => matchesSearch(o.client_name, (o as any).client_phone, (o as any).legacy_id)),
-  [orders, searchText])
+    orders.filter(o => {
+      if (!matchesSearch(o.client_name, (o as any).client_phone, (o as any).legacy_id)) return false
+      if (orderIdTarget && String(o.order_id) !== orderIdTarget) return false
+      // У заказа район забора лежит в pickup_district.
+      if (districtFilter.length > 0 && !districtFilter.includes(o.pickup_district || '')) return false
+      return true
+    }),
+  [orders, searchText, orderIdTarget, districtFilter])
 
   const filteredItems = useMemo(() =>
-    items.filter(it => matchesSearch(it.client_name, (it as any).client_phone, (it as any).legacy_id)),
-  [items, searchText])
+    items.filter(it => {
+      if (!matchesSearch(it.client_name, (it as any).client_phone, (it as any).legacy_id)) return false
+      if (orderIdTarget && String(it.order_id) !== orderIdTarget) return false
+      if (districtFilter.length > 0 && !districtFilter.includes(it.pickup_district || '')) return false
+      // У позиции из очереди производства есть только имя типа, не id —
+      // сопоставляем выбранные типы по имени через справочник itemTypes.
+      if (itemTypeFilters.length > 0) {
+        const names = itemTypes.filter(t => itemTypeFilters.includes(t.id)).map(t => t.name)
+        if (!names.includes(it.item_type_name || '')) return false
+      }
+      return true
+    }),
+  [items, searchText, orderIdTarget, districtFilter, itemTypeFilters, itemTypes])
 
   /** Drag-n-drop статуса услуги. Бэк сам валидирует переход; мы показываем причину если он отклонил.
    *  Особый случай: drop в IN_PROGRESS на услуге без assignee — открываем модалку
@@ -240,26 +265,24 @@ export default function ProductionPage() {
     }
   }
 
-  /** Активны ли какие-нибудь фильтры услуг. */
-  const hasServiceFilters =
+  /** Активен ли хоть один фильтр — от этого зависит показ кнопки «Сбросить». */
+  const hasAnyFilters =
     employeeFilters.length > 0 || itemTypeFilters.length > 0
     || serviceNameFilter.length > 0 || districtFilter.length > 0 || orderIdFilter !== ''
-    || onlyUnassigned
+    || onlyUnassigned || searchText.trim() !== ''
 
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
-        <h1>Производство</h1>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          {/* V13: поиск работает во всех 3 режимах. По имени клиента (подстрока),
-              по последним цифрам телефона, по legacy ID (числу). */}
-          <input
-            value={searchText}
-            onChange={e => setSearchText(e.target.value)}
-            placeholder="Имя клиента / телефон / legacy ID"
-            style={{ width: 280 }}
-            title="Поиск по имени клиента, телефону или legacy ID — работает во всех режимах"
-          />
+      <PageFilterBar
+        title="Производство"
+        districts={allDistricts}
+        districtValue={districtFilter}
+        onDistrictChange={setDistrictFilter}
+        orderNo={orderIdFilter}
+        onOrderNoChange={setOrderIdFilter}
+        search={searchText}
+        onSearchChange={setSearchText}
+        right={
           <div data-tour="production-modes" style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
             {([
               { v: 'orders' as Mode,   label: 'По заказам' },
@@ -277,12 +300,14 @@ export default function ProductionPage() {
               >{m.label}</button>
             ))}
           </div>
-        </div>
-      </div>
-
-      {/* Фильтры — только в режиме услуг. По заказам/позициям пока без фильтров (стандартное поведение). */}
-      {mode === 'services' && (
-        <div className="filters" style={{ marginBottom: 12 }}>
+        }
+        // Фильтры во всех режимах. Часть групп имеет смысл не везде: исполнитель
+        // и услуга есть только у услуг, тип позиции — у позиций и услуг.
+        // Район и № заказа общие и живут в центральной панели выше.
+        extra={
+        <div className="filters" style={{ marginBottom: 0 }}>
+          {mode === 'services' && (
+          <>
           <div className="form-group">
             <label>Сотрудник</label>
             <MultiSelectFilter
@@ -313,6 +338,9 @@ export default function ProductionPage() {
               {onlyUnassigned ? '✓ Только без исполнителя' : 'Только без исполнителя'}
             </button>
           </div>
+          </>
+          )}
+          {mode !== 'orders' && (
           <div className="form-group" style={{ flex: '1 1 100%' }}>
             <label>Тип позиции</label>
             {/* Спринт D: плашки вместо MultiSelectFilter — не нужно открывать
@@ -339,6 +367,8 @@ export default function ProductionPage() {
               })}
             </div>
           </div>
+          )}
+          {mode === 'services' && (
           <div className="form-group" style={{ flex: '1 1 100%' }}>
             <label>Услуга</label>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
@@ -363,41 +393,22 @@ export default function ProductionPage() {
               })}
             </div>
           </div>
-          <div className="form-group">
-            <label>Район</label>
-            <MultiSelectFilter
-              options={allDistricts.map(d => ({ value: d, label: d }))}
-              searchable
-              value={districtFilter}
-              onChange={setDistrictFilter}
-              placeholder="Все"
-              width={180}
-            />
-          </div>
-          <div className="form-group">
-            <label>№ заказа</label>
-            <input
-              type="number"
-              value={orderIdFilter}
-              onChange={e => setOrderIdFilter(e.target.value)}
-              placeholder="Номер"
-              style={{ width: 110 }}
-            />
-          </div>
-          {hasServiceFilters && (
+          )}
+          {hasAnyFilters && (
             <button
               className="btn-secondary"
               style={{ alignSelf: 'flex-end' }}
               onClick={() => {
                 setEmployeeFilters([]); setItemTypeFilters([])
                 setServiceNameFilter([]); setDistrictFilter([]); setOrderIdFilter('')
+                setOnlyUnassigned(false); setSearchText('')
               }}
             >
               Сбросить
             </button>
           )}
-        </div>
-      )}
+        </div>}
+      />
 
       {/* Подсказка про drag-n-drop статуса услуг — единственный режим где это активно. */}
       {mode === 'services' && (

@@ -1,18 +1,22 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { getOrdersQuery } from '../api/orders'
+import { getFilteredItems } from '../api/services'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
+import PageFilterBar from '../components/PageFilterBar'
+import { getDistricts } from '../api/districts'
 import CreateOrderModal from '../components/orders/CreateOrderModal'
 import { useAuth } from '../auth/AuthContext'
-import type { Order, OrderStatus } from '../types'
+import type { Order, OrderStatus, OrderItemPositioned } from '../types'
 
 // Подписи и список статусов теперь общие — см. constants/statuses.ts
 import {
   ORDER_STATUS_LABELS as STATUS_LABELS,
   ALL_ORDER_STATUSES as ALL_STATUSES,
   PAYMENT_LABELS,
+  ITEM_STATUS_LABELS,
 } from '../constants/statuses'
 import { formatOrderNumber } from '../utils/format'
 
@@ -70,11 +74,23 @@ export default function OrdersPage() {
   const [onlyWarrantyFilter, setOnlyWarrantyFilter] = useState<boolean>(
     searchParams.get('onlyWarranty') === 'true'
   )
+  // «Висящие» — переход с плитки на Главной. Критерий считает бэк, чтобы число
+  // на плитке и число в списке совпадали.
+  const [stuckFilter, setStuckFilter] = useState<boolean>(
+    searchParams.get('stuck') === 'true'
+  )
   const [paymentFilters, setPaymentFilters] = useState<string[]>([])
   const [orderIdSearch, setOrderIdSearch] = useState('')
-  const [legacyIdSearch, setLegacyIdSearch] = useState('')
-  const [clientPhoneSearch, setClientPhoneSearch] = useState('')
-  const [clientNameSearch, setClientNameSearch] = useState('')
+  // Единый поиск по клиенту / телефону / legacy ID — одно поле вместо трёх,
+  // частичное совпадение считает бэк (параметр search).
+  const [searchText, setSearchText] = useState('')
+  // Район — из справочника, а не из выборки: список не должен зависеть от того,
+  // какие заказы сейчас на странице.
+  const [districtFilter, setDistrictFilter] = useState<string[]>([])
+  const [districtNames, setDistrictNames] = useState<string[]>([])
+  useEffect(() => {
+    getDistricts(true).then(ds => setDistrictNames(ds.map(d => d.name))).catch(() => setDistrictNames([]))
+  }, [])
   // Поле даты для фильтра — операторам часто нужно искать «доставки на этой неделе»,
   // не «созданные на этой неделе». Через select оператор выбирает по какому полю фильтровать.
   const [dateField, setDateField] = useState<'created_at' | 'pickup_date' | 'delivery_date'>('created_at')
@@ -107,6 +123,7 @@ export default function OrdersPage() {
     setOverdueActualFilter(searchParams.get('overdueActual') === 'true')
     setBadAddressFilter(searchParams.get('badAddress') === 'true')
     setOnlyWarrantyFilter(searchParams.get('onlyWarranty') === 'true')
+    setStuckFilter(searchParams.get('stuck') === 'true')
     // V6: переход из аналитики «клик по месяцу» — заполнение диапазона дат.
     const df = searchParams.get('dateFrom')
     const dt = searchParams.get('dateTo')
@@ -158,9 +175,25 @@ export default function OrdersPage() {
     return 'replace'
   }
 
-  const exportXLSX = () => {
+  const [exporting, setExporting] = useState(false)
+
+  const exportXLSX = async () => {
+    setExporting(true)
+    try {
+    // Выгружаем ВСЕ страницы под текущими фильтрами, а не только видимую.
+    // Раньше в файл попадали только 20 строк текущей страницы, и оператору
+    // приходилось экспортировать каждую страницу отдельно.
+    const CHUNK = 500
+    const all: Order[] = []
+    for (let p = 0; ; p++) {
+      const chunk = await getOrdersQuery(buildQuery(p, CHUNK))
+      all.push(...chunk.content)
+      if (chunk.content.length < CHUNK) break
+      if (all.length >= 50000) break  // предохранитель от бесконечного цикла
+    }
+
     const headers = ['Номер', 'Клиент', 'Статус', 'Сумма, ₽', 'Оплачен', 'Тип оплаты', 'Гарантийный', 'Создан']
-    const rows = orders.map(o => [
+    const rows = all.map(o => [
       o.id,
       o.client_name,
       STATUS_LABELS[o.status] || o.status,
@@ -170,7 +203,10 @@ export default function OrdersPage() {
       o.is_warranty ? 'Да' : '',
       new Date(o.created_at),
     ])
-    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows])
+    // cellDates: без него aoa_to_sheet кладёт Date как строку, а последующее
+    // проставление t='d' заставляло Excel читать её как серийный номер 0 —
+    // отсюда одинаковая дата 01.01.1900 во всех строках выгрузки.
+    const ws = XLSX.utils.aoa_to_sheet([headers, ...rows], { cellDates: true })
 
     // \u0428\u0438\u0440\u0438\u043D\u044B \u043A\u043E\u043B\u043E\u043D\u043E\u043A (\u0432 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u0445)
     ws['!cols'] = [
@@ -184,56 +220,128 @@ export default function OrdersPage() {
       { wch: 12 },  // \u0421\u043E\u0437\u0434\u0430\u043D
     ]
 
-    // \u0424\u043E\u0440\u043C\u0430\u0442 \u0434\u0435\u043D\u0435\u0436\u043D\u043E\u0439 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \u0438 \u0434\u0430\u0442\u044B
+    // \u0424\u043E\u0440\u043C\u0430\u0442 \u0434\u0435\u043D\u0435\u0436\u043D\u043E\u0439 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \u0438 \u0434\u0430\u0442\u044B. \u0422\u0438\u043F \u044F\u0447\u0435\u0439\u043A\u0438 \u043D\u0435 \u043F\u0435\u0440\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u044F\u0435\u043C \u2014 \u043E\u043D \u0443\u0436\u0435
+    // \u0432\u044B\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u043E \u0441\u0430\u043C\u0438\u043C aoa_to_sheet, \u0437\u0430\u0434\u0430\u0451\u043C \u0442\u043E\u043B\u044C\u043A\u043E \u0444\u043E\u0440\u043C\u0430\u0442 \u043E\u0442\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u044F.
     for (let i = 0; i < rows.length; i++) {
       const r = i + 1 // \u0441\u0442\u0440\u043E\u043A\u0430 \u0441 \u0434\u0430\u043D\u043D\u044B\u043C\u0438 (\u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A \u2014 0)
       const sumCell = ws[XLSX.utils.encode_cell({ r, c: 3 })]
-      if (sumCell) { sumCell.t = 'n'; sumCell.z = '#,##0.00' }
+      if (sumCell) { sumCell.z = '#,##0.00' }
       const dateCell = ws[XLSX.utils.encode_cell({ r, c: 7 })]
-      if (dateCell) { dateCell.t = 'd'; dateCell.z = 'dd.mm.yyyy' }
+      if (dateCell) { dateCell.z = 'dd.mm.yyyy' }
     }
 
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, '\u0417\u0430\u043A\u0430\u0437\u044B')
+
+    // \u0412\u0442\u043E\u0440\u043E\u0439 \u043B\u0438\u0441\u0442 \u2014 \u043F\u043E\u0437\u0438\u0446\u0438\u0438 \u0432\u044B\u0433\u0440\u0443\u0436\u0435\u043D\u043D\u044B\u0445 \u0437\u0430\u043A\u0430\u0437\u043E\u0432. \u041E\u043F\u0435\u0440\u0430\u0442\u043E\u0440 \u043E\u0436\u0438\u0434\u0430\u043B \u0443\u0432\u0438\u0434\u0435\u0442\u044C \u0438\u0445
+    // \u0437\u0434\u0435\u0441\u044C \u0436\u0435, \u0440\u044F\u0434\u043E\u043C \u0441 \u0437\u0430\u043A\u0430\u0437\u0430\u043C\u0438, \u0430 \u043D\u0435 \u0432\u044B\u0433\u0440\u0443\u0436\u0430\u0442\u044C \u043E\u0442\u0434\u0435\u043B\u044C\u043D\u043E \u0441\u043E \u0441\u0442\u0440\u0430\u043D\u0438\u0446\u044B \u00AB\u041F\u043E\u0437\u0438\u0446\u0438\u0438\u00BB.
+    const orderIds = new Set(all.map(o => o.id))
+    const CHUNK_ITEMS = 500
+    const allItems: OrderItemPositioned[] = []
+    for (let p = 0; ; p++) {
+      const chunk = await getFilteredItems({ statuses: [], itemTypeIds: [], page: p, size: CHUNK_ITEMS })
+      allItems.push(...chunk.filter(it => orderIds.has(it.order_id)))
+      if (chunk.length < CHUNK_ITEMS) break
+      if (p > 100) break  // \u043F\u0440\u0435\u0434\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u0435\u043B\u044C
+    }
+    const orderById = new Map(all.map(o => [o.id, o]))
+    const itemHeaders = [
+      '\u0417\u0430\u043A\u0430\u0437', '\u041A\u043B\u0438\u0435\u043D\u0442', '\u2116 \u0432 \u0437\u0430\u043A\u0430\u0437\u0435', '\u0422\u0438\u043F', '\u041E\u043F\u0438\u0441\u0430\u043D\u0438\u0435', '\u0414\u0435\u0444\u0435\u043A\u0442\u044B',
+      '\u0414\u043B\u0438\u043D\u0430, \u043C', '\u0428\u0438\u0440\u0438\u043D\u0430, \u043C', '\u041F\u043B\u043E\u0449\u0430\u0434\u044C, \u043C\u00B2', '\u0412\u0435\u0441, \u043A\u0433', '\u0421\u0442\u0430\u0442\u0443\u0441', '\u0421\u0442\u043E\u0438\u043C\u043E\u0441\u0442\u044C, \u20BD',
+    ]
+    const itemRows = allItems
+      .sort((a, b) => (a.order_id - b.order_id) || (a.position_in_order - b.position_in_order))
+      .map(it => [
+        it.order_id,
+        orderById.get(it.order_id)?.client_name ?? '',
+        it.position_in_order,
+        it.item_type_name ?? `\u0422\u0438\u043F #${it.item_type_id}`,
+        it.description || '',
+        it.defects || '',
+        it.length == null ? '' : Number(it.length),
+        it.width == null ? '' : Number(it.width),
+        it.area == null ? '' : Number(it.area),
+        it.weight == null ? '' : Number(it.weight),
+        ITEM_STATUS_LABELS[it.status] ?? it.status,
+        Number(it.price),
+      ])
+    const wsItems = XLSX.utils.aoa_to_sheet([itemHeaders, ...itemRows], { cellDates: true })
+    wsItems['!cols'] = [
+      { wch: 9 }, { wch: 28 }, { wch: 10 }, { wch: 22 }, { wch: 28 }, { wch: 22 },
+      { wch: 10 }, { wch: 10 }, { wch: 11 }, { wch: 9 }, { wch: 14 }, { wch: 13 },
+    ]
+    for (let i = 0; i < itemRows.length; i++) {
+      const cell = wsItems[XLSX.utils.encode_cell({ r: i + 1, c: 11 })]
+      if (cell) cell.z = '#,##0.00'
+    }
+    XLSX.utils.book_append_sheet(wb, wsItems, '\u041F\u043E\u0437\u0438\u0446\u0438\u0438')
+
     XLSX.writeFile(wb, `orders_${new Date().toISOString().slice(0, 10)}.xlsx`)
+    showToast(`\u0412\u044B\u0433\u0440\u0443\u0436\u0435\u043D\u043E: \u0437\u0430\u043A\u0430\u0437\u043E\u0432 ${all.length}, \u043F\u043E\u0437\u0438\u0446\u0438\u0439 ${allItems.length}`, 'success')
+    } catch (e: unknown) {
+      showToast((e as any)?.response?.data?.message || '\u041E\u0448\u0438\u0431\u043A\u0430 \u044D\u043A\u0441\u043F\u043E\u0440\u0442\u0430', 'error')
+    } finally {
+      setExporting(false)
+    }
   }
 
+  /**
+   * Параметры выборки заказов — общие для постраничного показа и для экспорта.
+   * Вынесены отдельно, чтобы экспорт гарантированно уходил с теми же фильтрами,
+   * что видит оператор на экране, и не разъезжался при правках фильтров.
+   */
+  const buildQuery = (pageArg: number, sizeArg: number) => ({
+    statuses: statusFilters.length > 0 ? statusFilters : undefined,
+    page: pageArg,
+    size: sizeArg,
+    dateFrom: dateFrom || undefined,
+    dateField: dateField,
+    dateTo: dateTo || undefined,
+
+    // Бэк принимает paymentType как одно значение или CSV ("CARD,CASH").
+    paymentType: paymentFilters.length > 0 ? paymentFilters.join(',') : undefined,
+    orderId: orderIdSearch ? Number(orderIdSearch) : undefined,
+    search: searchText.trim() || undefined,
+    districts: districtFilter.length > 0 ? districtFilter : undefined,
+    clientId: clientIdFilter || undefined,
+    sortBy: sortKeys.map(k => k.field),
+    sortDir: sortKeys.map(k => k.dir),
+    noCoords: noCoordsFilter || undefined,
+    overdueActual: overdueActualFilter || undefined,
+    badAddress: badAddressFilter || undefined,
+    onlyWarranty: onlyWarrantyFilter || undefined,
+    stuck: stuckFilter || undefined,
+  })
+
+  /**
+   * Счётчик запросов: применяем ответ, только если он от последнего запроса.
+   *
+   * При переходе с Главной (например «Новые лиды») страница успевает сходить
+   * за данными дважды: сразу с пустыми фильтрами, а следом — с датами,
+   * прочитанными из URL. Ответ первого запроса возвращался позже и затирал
+   * отфильтрованный результат: плитка показывала 1, а список — все 6.
+   */
+  const reqSeq = useRef(0)
+
   const load = async () => {
+    const seq = ++reqSeq.current
     setLoading(true)
     try {
-      const data = await getOrdersQuery({
-        statuses: statusFilters.length > 0 ? statusFilters : undefined,
-        page,
-        size: PAGE_SIZE,
-        dateFrom: dateFrom || undefined,
-        dateField: dateField,
-        dateTo: dateTo || undefined,
-        legacyId: legacyIdSearch ? Number(legacyIdSearch) : undefined,
-        // Бэк принимает paymentType как одно значение или CSV ("CARD,CASH").
-        paymentType: paymentFilters.length > 0 ? paymentFilters.join(',') : undefined,
-        orderId: orderIdSearch ? Number(orderIdSearch) : undefined,
-        clientPhone: clientPhoneSearch || undefined,
-        clientName: clientNameSearch || undefined,
-        clientId: clientIdFilter || undefined,
-        sortBy: sortKeys.map(k => k.field),
-        sortDir: sortKeys.map(k => k.dir),
-        noCoords: noCoordsFilter || undefined,
-        overdueActual: overdueActualFilter || undefined,
-        badAddress: badAddressFilter || undefined,
-        onlyWarranty: onlyWarrantyFilter || undefined,
-      })
+      const data = await getOrdersQuery(buildQuery(page, PAGE_SIZE))
+      if (seq !== reqSeq.current) return   // пришёл ответ на устаревший запрос
       setOrders(data.content)
       setTotalElements(data.total_elements)
       setHasMore(data.content.length === PAGE_SIZE)
     } catch (e: unknown) {
+      if (seq !== reqSeq.current) return
       const msg = (e as any)?.response?.data?.message || 'Ошибка загрузки заказов'
       showToast(msg, 'error')
     } finally {
-      setLoading(false)
+      if (seq === reqSeq.current) setLoading(false)
     }
   }
 
-  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, legacyIdSearch, clientPhoneSearch, clientNameSearch, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter, onlyWarrantyFilter])
+  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, searchText, districtFilter, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter, onlyWarrantyFilter, stuckFilter])
 
   const handleCreated = (order: Order) => {
     setShowCreate(false)
@@ -242,17 +350,6 @@ export default function OrdersPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Заказы</h1>
-        <div style={{ display: 'flex', gap: 8 }}>
-          <button className="btn-secondary" onClick={exportXLSX}>Экспорт Excel</button>
-          {/* В viewer-mode (моноблок) скрываем мутирующие кнопки. */}
-          {!isReadonly && (
-            <button className="btn-primary" onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
-          )}
-        </div>
-      </div>
-
       {/* Чипы-индикаторы активных «дашбордных» фильтров. Снимаются кнопкой,
           query-param чистится в URL. Описание подсказывает оператору, почему
           список такой короткий. */}
@@ -290,9 +387,30 @@ export default function OrdersPage() {
       {/* Статусы — отдельная полоса плашек над основными фильтрами (Спринт-фидбэк
           11 мая). Плашки используют те же CSS-классы badge-*, что и в таблице —
           оператор сразу видит цветовую кодировку. Неактивные — приглушённые. */}
-      <div className="filters" data-tour="orders-filters" style={{ alignItems: 'center', flexWrap: 'wrap' }}>
-        <div className="form-group" style={{ flex: '1 1 100%' }}>
-          <label>Статус</label>
+      <PageFilterBar
+        title="Заказы"
+        districts={districtNames}
+        districtValue={districtFilter}
+        onDistrictChange={v => { setDistrictFilter(v); setPage(0) }}
+        orderNo={orderIdSearch}
+        onOrderNoChange={v => { setOrderIdSearch(v); setPage(0) }}
+        search={searchText}
+        onSearchChange={v => { setSearchText(v); setPage(0) }}
+        right={<>
+          <button
+            className="btn-secondary"
+            onClick={() => void exportXLSX()}
+            disabled={exporting}
+            title="Выгрузить все заказы под текущими фильтрами (не только эту страницу)"
+          >{exporting ? 'Выгрузка…' : 'Экспорт Excel'}</button>
+          {/* В viewer-mode (моноблок) скрываем мутирующие кнопки. */}
+          {!isReadonly && (
+            <button className="btn-primary" onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
+          )}
+        </>}
+        extra={<div data-tour="orders-filters">
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Статус</label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {ALL_STATUSES.map(s => {
               const on = statusFilters.includes(s)
@@ -328,9 +446,10 @@ export default function OrdersPage() {
             )}
           </div>
         </div>
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         {clientIdFilter && (
-          <div className="form-group">
-            <label>Клиент</label>
+          <div>
+            <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Клиент</label>
             <button
               type="button"
               onClick={() => { setClientIdFilter(null); setClientFilterLabel(''); setPage(0) }}
@@ -341,18 +460,8 @@ export default function OrdersPage() {
             </button>
           </div>
         )}
-        <div className="form-group">
-          <label>Номер заказа</label>
-          <input
-            type="number"
-            value={orderIdSearch}
-            onChange={e => { setOrderIdSearch(e.target.value); setPage(0) }}
-            placeholder="Поиск по номеру"
-            style={{ minWidth: 130 }}
-          />
-        </div>
-        <div className="form-group">
-          <label>Тип оплаты</label>
+        <div style={{ width: 180 }}>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Тип оплаты</label>
           <MultiSelectFilter
             options={[
               { value: 'CARD',     label: 'Карта' },
@@ -363,35 +472,7 @@ export default function OrdersPage() {
             value={paymentFilters}
             onChange={vals => { setPaymentFilters(vals); setPage(0) }}
             placeholder="Все"
-            width={170}
-          />
-        </div>
-        <div className="form-group">
-          <label>Legacy ID</label>
-          <input
-            type="number"
-            value={legacyIdSearch}
-            onChange={e => { setLegacyIdSearch(e.target.value); setPage(0) }}
-            placeholder="Поиск по legacy ID"
-            style={{ minWidth: 140 }}
-          />
-        </div>
-        <div className="form-group">
-          <label>Телефон клиента</label>
-          <input
-            value={clientPhoneSearch}
-            onChange={e => { setClientPhoneSearch(e.target.value); setPage(0) }}
-            placeholder="Поиск по телефону"
-            style={{ minWidth: 140 }}
-          />
-        </div>
-        <div className="form-group">
-          <label>Имя клиента</label>
-          <input
-            value={clientNameSearch}
-            onChange={e => { setClientNameSearch(e.target.value); setPage(0) }}
-            placeholder="Поиск по имени"
-            style={{ minWidth: 140 }}
+            width={180}
           />
         </div>
         {/* Блок «Период»: поле даты + диапазон. «Поле даты» раньше жило отдельным
@@ -399,9 +480,9 @@ export default function OrdersPage() {
             сюда (фидбэк 11 мая), и оператор сразу видит: фильтруем по диапазону
             ВОТ ЭТОЙ даты. Поле даты сделано плашками — три варианта, дроп-даун
             был лишним. */}
-        <div className="form-group">
-          <label>Период</label>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <div>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Период</label>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             <div style={{ display: 'inline-flex', border: '1px solid #bdc3c7', borderRadius: 6, overflow: 'hidden' }}>
               {[
                 { v: 'created_at',   label: 'Создан' },
@@ -422,12 +503,16 @@ export default function OrdersPage() {
               ))}
             </div>
             <span style={{ fontSize: 12, color: '#7f8c8d' }}>с</span>
-            <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
+            <input type="date" value={dateFrom} style={{ width: 150 }}
+              onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
             <span style={{ fontSize: 12, color: '#7f8c8d' }}>по</span>
-            <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setPage(0) }} />
+            <input type="date" value={dateTo} style={{ width: 150 }}
+              onChange={e => { setDateTo(e.target.value); setPage(0) }} />
           </div>
         </div>
-      </div>
+        </div>
+        </div>}
+      />
 
       {loading ? (
         <div className="loading">Загрузка...</div>

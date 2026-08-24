@@ -171,7 +171,7 @@ export default function WorkerLoginPage() {
                         onClick={() => { setSelected(null); setPin(''); setPinConfirm(''); setError('') }}
                         style={{
                             marginTop: 14, width: '100%', padding: '10px',
-                            background: 'transparent', border: '1px solid #bdc3c7',
+                            background: 'transparent', border: '1px solid #3498db',
                             borderRadius: 8, fontSize: 14, color: '#7f8c8d', cursor: 'pointer',
                         }}
                     >{t('login.other')}</button>

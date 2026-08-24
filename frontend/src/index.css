@@ -86,7 +86,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-success { background: var(--c-success); color: white; }
 .btn-danger { background: #e74c3c; color: white; }
 .btn-warning { background: var(--c-warning); color: white; }
-.btn-secondary { background: var(--c-text-muted); color: white; }
+/* Вторичная кнопка — контурная бело-голубая, а не серая заливка.
+   Серый читался как «выключено» и разъезжался с общим стилем. */
+.btn-secondary {
+  background: #fff;
+  color: var(--c-primary-dark);
+  border: 1px solid var(--c-primary);
+}
+.btn-secondary:hover:not(:disabled) { background: var(--c-primary-light); opacity: 1; }
+.btn-secondary:disabled {
+  background: #fff;
+  color: var(--c-text-muted);
+  border-color: var(--c-border);
+}
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 
 input, select, textarea {
@@ -103,6 +115,24 @@ input, select, textarea {
 input:focus, select:focus, textarea:focus {
   border-color: var(--c-primary);
 }
+
+/* Свой вид у select: браузерный контрол на macOS серый и выбивается из стиля.
+   Рисуем белое поле с голубой стрелкой; список раскрытия остаётся системным,
+   поэтому там, где важен и он, используется компонент StyledSelect. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-color: #fff;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 8'%3E%3Cpath fill='%233498db' d='M1 1.5 6 6.5l5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 9px center;
+  background-size: 10px;
+  padding-right: 28px;
+  color: var(--c-text);
+  cursor: pointer;
+}
+select:hover:not(:disabled) { border-color: var(--c-primary); }
+select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted); cursor: not-allowed; }
 
 .form-group {
   margin-bottom: 14px;

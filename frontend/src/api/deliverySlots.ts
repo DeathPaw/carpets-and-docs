@@ -11,6 +11,12 @@ export interface DeliverySlot {
   label: string | null
   is_active: boolean
   sort_order: number
+  /**
+   * V31: разовый слот. null — обычный шаблон дня недели (повторяется еженедельно).
+   * Дата (YYYY-MM-DD) — слот действует только в неё и в другие такие же дни
+   * недели не попадает.
+   */
+  specific_date?: string | null
 }
 
 /**

@@ -3,6 +3,12 @@ export type OrderStatus = 'LEAD' | 'CREATED' | 'FOR_PICKUP' | 'IN_PROGRESS' | 'P
 export type OrderItemStatus = 'CREATED' | 'IN_PROGRESS' | 'PARTIALLY_DONE' | 'DONE' | 'CANCELLED'
 export type ServiceStatus = 'CREATED' | 'IN_PROGRESS' | 'DONE' | 'CANCELLED'
 export type PaymentType = 'TRANSFER' | 'CARD' | 'CASH'
+
+/**
+ * V30: предварительный способ расчёта. Шире, чем PaymentType — кроме способов
+ * оплаты нужны «уже оплачено» и «бесплатно / гарантия».
+ */
+export type PreliminaryPaymentType = 'CASH' | 'CARD' | 'TRANSFER' | 'PAID' | 'FREE'
 export type PricingType = 'FIXED' | 'BY_WEIGHT' | 'BY_AREA' | 'BY_PERIMETER'
 
 // Domain models (snake_case from API)
@@ -36,6 +42,14 @@ export interface Order {
   client_id: number | null
   client_name: string
   client_address: string | null
+  /** Телефон клиента (JOIN из clients) — маршрутный лист, режим «День» в логистике. */
+  client_phone: string | null
+  /**
+   * V30: предполагаемый способ расчёта, который оператор ставит заранее — водитель
+   * видит его в маршрутном листе. Не то же самое, что `payment_type`: тот
+   * заполняется только по факту оплаты.
+   */
+  preliminary_payment_type: PreliminaryPaymentType | null
   comment: string | null
   status: OrderStatus
   is_warranty: boolean

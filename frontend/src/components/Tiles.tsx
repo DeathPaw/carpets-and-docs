@@ -123,7 +123,9 @@ function tileStyle(active: boolean, activeColor: string, width: number | undefin
         padding: '8px 14px',
         minWidth: width ?? 'auto',
         borderRadius: 6,
-        border: active ? `2px solid ${activeColor}` : '1px solid #bdc3c7',
+        // Неактивная плитка — светло-голубой контур вместо серого: серый читался
+        // как «выключено» и выбивался из общего бело-голубого стиля.
+        border: active ? `2px solid ${activeColor}` : '1px solid #cfe4f5',
         background: active ? activeColor : '#fff',
         color: active ? '#fff' : '#2c3e50',
         cursor: 'pointer',

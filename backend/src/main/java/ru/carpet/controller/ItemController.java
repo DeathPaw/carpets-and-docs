@@ -30,11 +30,14 @@ public class ItemController {
             @RequestParam(required = false) String clientName,
             @RequestParam(required = false) String clientPhone,
             @RequestParam(required = false) Long legacyId,
+            // Единый поиск: имя / телефон / legacy ID / номер заказа.
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) List<String> districts,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
         return service.findItems(statuses, itemTypeIds, orderId, positionInOrder, employeeId,
-                clientName, clientPhone, legacyId, page, size);
+                clientName, clientPhone, legacyId, search, districts, page, size);
     }
 
     /**

@@ -101,9 +101,11 @@ export default function MultiSelectFilter({
       </button>
       {open && (
         <div style={{
-          position: 'absolute', top: '100%', left: 0, marginTop: 2, zIndex: 30,
-          background: '#fff', border: '1px solid #ddd', borderRadius: 4,
-          minWidth: '100%', boxShadow: '0 4px 12px rgba(0,0,0,0.15)', padding: 8,
+          // z-index с запасом: список раскрывается поверх таблиц и карты Leaflet
+          // (её панели используют 400+). На 30 содержимое страницы просвечивало.
+          position: 'absolute', top: '100%', left: 0, marginTop: 2, zIndex: 2000,
+          background: '#ffffff', border: '1px solid #ddd', borderRadius: 4,
+          minWidth: '100%', boxShadow: '0 6px 18px rgba(0,0,0,0.18)', padding: 8,
           maxHeight: 320, overflowY: 'auto',
         }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -142,17 +144,30 @@ export default function MultiSelectFilter({
               Ничего не найдено
             </div>
           )}
-          {filteredOptions.map(o => (
-            <label key={o.value} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', cursor: 'pointer' }}>
-              <input
-                type="checkbox"
-                checked={value.includes(o.value)}
-                onChange={() => toggle(o.value)}
-                style={{ width: 'auto' }}
-              />
-              <span style={{ whiteSpace: 'nowrap' }}>{o.label}</span>
-            </label>
-          ))}
+          {filteredOptions.map(o => {
+            const checked = value.includes(o.value)
+            return (
+              <label
+                key={o.value}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer',
+                  padding: '5px 6px', borderRadius: 3,
+                  background: checked ? 'var(--c-primary-light)' : 'transparent',
+                  fontWeight: checked ? 600 : 400,
+                }}
+                onMouseEnter={e => { if (!checked) e.currentTarget.style.background = 'var(--c-bg-hover)' }}
+                onMouseLeave={e => { if (!checked) e.currentTarget.style.background = 'transparent' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggle(o.value)}
+                  style={{ width: 'auto' }}
+                />
+                <span style={{ whiteSpace: 'nowrap' }}>{o.label}</span>
+              </label>
+            )
+          })}
         </div>
       )}
     </div>

@@ -9,6 +9,8 @@ public record Order(
         Long clientId,
         String clientName,
         String clientAddress,
+        /** Телефон клиента (JOIN из clients) — нужен маршрутному листу и логистике. */
+        String clientPhone,
         String comment,
         OrderStatus status,
         boolean isWarranty,
@@ -17,6 +19,13 @@ public record Order(
         boolean paid,
         PaymentType paymentType,
         LocalDateTime paymentDate,
+        /**
+         * V30: предполагаемый способ расчёта, который оператор проставляет заранее —
+         * водитель видит его в маршрутном листе. Фактическая оплата фиксируется
+         * отдельно ({@code paid} + {@code paymentType}) и это поле не заменяет.
+         * Значения: CASH | CARD | TRANSFER | PAID | FREE, либо null.
+         */
+        String preliminaryPaymentType,
         String pickupAddress,
         String deliveryAddress,
         /** V18: номер квартиры (отдельно от адреса, не геокодится). */

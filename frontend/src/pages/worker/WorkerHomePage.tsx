@@ -2,12 +2,47 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     myServices, myRoute, changeServiceStatus, updateItemDimensions, updateItemDescription, uploadItemPhoto,
-    type WorkerService,
+    listWorkers,
+    type WorkerService, type WorkerListItem,
 } from '../../api/worker'
 import { t } from '../../i18n'
 
 /** Вкладки списка услуг работника (правка №6). */
 type TabKey = 'new' | 'progress' | 'done'
+
+/**
+ * Сообщение об ошибке от бэка. Все наши ошибки приходят как {message: "..."},
+ * и для работника они куда полезнее, чем «проверьте интернет»: бизнес-правила
+ * (не заполнены размеры, услуга не ваша) объясняют, что именно делать.
+ * Возвращает null, если это действительно сетевая ошибка без тела ответа.
+ */
+function serverMessage(e: unknown): string | null {
+    const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+    return typeof msg === 'string' && msg.trim() ? msg : null
+}
+
+/**
+ * Служебная позиция (V22): «Приём», «Доставка», «Оформление» — это этапы работы,
+ * а не изделия. У них нет размеров, и работает по ним водитель/оператор.
+ */
+function isServicePosition(s: WorkerService): boolean {
+    return ['Приём', 'Прием', 'Доставка', 'Оформление'].includes((s.item_type_name || '').trim())
+}
+
+/**
+ * Какого размера не хватает, чтобы завершить услугу. Повторяет серверную
+ * проверку PricingHelper.checkDimensions — нужна, чтобы сказать работнику
+ * о проблеме ДО того, как он снимет фото, а не после отказа сервера.
+ * null — всё заполнено (или тип расчёта размеров не требует).
+ */
+function missingDimension(s: WorkerService): string | null {
+    switch (s.pricing_type) {
+        case 'BY_WEIGHT': return s.item_weight == null ? 'вес' : null
+        case 'BY_AREA': return s.item_area == null ? 'площадь' : null
+        case 'BY_PERIMETER': return (s.item_length == null || s.item_width == null) ? 'длина и ширина' : null
+        default: return null
+    }
+}
 
 /**
  * Главный экран работника после входа — список услуг, назначенных мне.
@@ -29,6 +64,8 @@ export default function WorkerHomePage() {
     const [error, setError] = useState('')
     const [photoFor, setPhotoFor] = useState<{ item: WorkerService; afterStatus: 'IN_PROGRESS' | 'DONE' } | null>(null)
     const [editing, setEditing] = useState<WorkerService | null>(null)
+    /** Правка №4: услуга, которую берём/к которой присоединяемся — открывает модалку выбора коллег. */
+    const [takeFor, setTakeFor] = useState<any | null>(null)
     // Есть ли у работника точки маршрута на сегодня? Кнопка «Маршрут»
     // показывается только если да — иначе у Анны-чистильщицы она была лишней
     // (фидбэк пользователя). Для логиста/водителя — будет показана автоматически.
@@ -76,11 +113,27 @@ export default function WorkerHomePage() {
         }
     }
 
-    const takeService = async (serviceId: number) => {
+    /**
+     * Взять услугу. Правка №4: если её уже кто-то взял — присоединяемся вторым
+     * исполнителем (бэк это разрешает). withIds — коллеги, которые работают
+     * вместе со мной: записываем их сразу, чтобы работа засчиталась каждому.
+     */
+    const takeService = async (serviceId: number, withIds: number[] = []) => {
         try {
-            await fetch(`/api/worker/${employeeId}/take/${serviceId}`, { method: 'POST' })
+            const res = await fetch(`/api/worker/${employeeId}/take/${serviceId}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ with_employee_ids: withIds }),
+            })
+            if (!res.ok) {
+                const j = await res.json().catch(() => null)
+                alert(j?.error || 'Не удалось взять услугу.')
+                return
+            }
             await reload()
-        } catch {}
+        } catch {
+            alert('Не удалось взять услугу — проверьте интернет.')
+        }
     }
 
     const pickupOrder = async (orderId: number) => {
@@ -114,6 +167,14 @@ export default function WorkerHomePage() {
             s.service_status === 'CREATED' ? 'IN_PROGRESS' :
             s.service_status === 'IN_PROGRESS' ? 'DONE' : null
         if (!next) return
+        // Правка №6: не даём уйти в фото-модалку, если размеры не заполнены —
+        // бэк всё равно откажет, но работник узнает об этом только после съёмки
+        // фото, и увидит невнятную ошибку. Говорим сразу и по делу.
+        const missing = missingDimension(s)
+        if (missing) {
+            alert(`Не заполнено: ${missing}. Укажите размеры ковра через «Размеры и описание» и повторите.`)
+            return
+        }
         setPhotoFor({ item: s, afterStatus: next })
     }
 
@@ -131,8 +192,8 @@ export default function WorkerHomePage() {
         try {
             await changeServiceStatus(employeeId, s.service_id, back)
             await reload()
-        } catch {
-            alert('Не удалось откатить статус.')
+        } catch (e: unknown) {
+            alert(serverMessage(e) || 'Не удалось откатить статус.')
         }
     }
 
@@ -150,8 +211,11 @@ export default function WorkerHomePage() {
             await changeServiceStatus(employeeId, item.service_id, afterStatus)
             setPhotoFor(null)
             await reload()
-        } catch {
-            alert('Не удалось сохранить — проверьте интернет и попробуйте ещё раз.')
+        } catch (e: unknown) {
+            // Раньше здесь безусловно писали «проверьте интернет», и настоящая
+            // причина (не заполнены размеры) до работника не доходила — он думал,
+            // что проблема со связью, и жал кнопку повторно.
+            alert(serverMessage(e) || 'Не удалось сохранить — проверьте интернет и попробуйте ещё раз.')
         }
     }
 
@@ -296,22 +360,32 @@ export default function WorkerHomePage() {
                         <EmptyState text={search ? 'По запросу ничего не найдено' : 'Нет доступных услуг'} />
                     ) : (
                         <>
+                            {/* Правка №4: занятые коллегами услуги теперь тоже видны —
+                                к ним можно присоединиться (совместная стирка одного ковра).
+                                Свободные оранжевые, занятые серые с именами исполнителей. */}
                             {availableFiltered.map((a: any) => (
                                 <div key={`avail-${a.service_id}`} style={{
                                     background: '#fff', borderRadius: 10, padding: '12px 14px', marginBottom: 8,
-                                    border: '1px dashed #f39c12', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                    border: `1px dashed ${a.is_taken ? '#bdc3c7' : '#f39c12'}`,
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10,
                                 }}>
-                                    <div>
+                                    <div style={{ minWidth: 0 }}>
                                         <div style={{ fontWeight: 600 }}>{a.service_name}</div>
                                         <div style={{ fontSize: 12, color: '#7f8c8d' }}>
                                             {a.item_type_name} · Заказ #{String(a.order_id).padStart(5, '0')} · {a.client_name}
                                         </div>
+                                        {a.is_taken && (
+                                            <div style={{ fontSize: 12, color: '#e67e22', marginTop: 2 }}>
+                                                Уже в работе: {a.assignee_names || '—'}
+                                            </div>
+                                        )}
                                     </div>
                                     <button
-                                        onClick={() => void takeService(a.service_id)}
-                                        style={{ padding: '8px 16px', borderRadius: 6, border: 'none',
-                                                 background: '#f39c12', color: '#fff', fontWeight: 600, cursor: 'pointer' }}
-                                    >Взять</button>
+                                        onClick={() => setTakeFor(a)}
+                                        style={{ padding: '8px 14px', borderRadius: 6, border: 'none', whiteSpace: 'nowrap',
+                                                 background: a.is_taken ? '#7f8c8d' : '#f39c12',
+                                                 color: '#fff', fontWeight: 600, cursor: 'pointer' }}
+                                    >{a.is_taken ? 'Присоединиться' : 'Взять'}</button>
                                 </div>
                             ))}
                             {notStarted.map(s => (
@@ -375,6 +449,15 @@ export default function WorkerHomePage() {
                     employeeId={employeeId}
                     onClose={() => setEditing(null)}
                     onSaved={() => { setEditing(null); void reload() }}
+                />
+            )}
+
+            {takeFor && (
+                <TakeServiceModal
+                    a={takeFor}
+                    myId={employeeId}
+                    onClose={() => setTakeFor(null)}
+                    onTake={async ids => { setTakeFor(null); await takeService(takeFor.service_id, ids) }}
                 />
             )}
         </div>
@@ -459,14 +542,20 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
                             {advLabel[s.service_status]}
                         </button>
                     )}
-                    <button onClick={onEdit} style={{
-                        flex: 1, padding: '10px',
-                        background: '#fff', color: '#2c3e50',
-                        border: '1px solid #d6dbdf', borderRadius: 6, fontSize: 13,
-                        cursor: 'pointer',
-                    }}>
-                        {t('home.dimensions')}
-                    </button>
+                    {/* Правка №7: на служебных позициях (Приём/Доставка/Оформление)
+                        размеров нет, а правит их водитель на этапе развозки — можно
+                        случайно затереть данные, уже уточнённые на производстве.
+                        Кнопку там не показываем; водителю остаются фото и завершение. */}
+                    {!isServicePosition(s) && (
+                        <button onClick={onEdit} style={{
+                            flex: 1, padding: '10px',
+                            background: '#fff', color: '#2c3e50',
+                            border: '1px solid #d6dbdf', borderRadius: 6, fontSize: 13,
+                            cursor: 'pointer',
+                        }}>
+                            {t('home.dimensions')}
+                        </button>
+                    )}
                     {/* Откат — серая иконка ↶, только когда есть куда откатывать
                         (IN_PROGRESS → CREATED). Решение пользователя 11 мая:
                         «можно только завершить, нельзя отменить» — поправили. */}
@@ -543,6 +632,94 @@ function PhotoModal({ title, onClose, onSubmit }: {
 }
 
 /** Модалка редактирования размеров/описания/дефектов позиции. */
+/**
+ * Правка №4: взятие услуги в работу с возможностью указать коллег.
+ *
+ * Если услугу уже кто-то взял — модалка показывает, кто именно, и предлагает
+ * присоединиться. Плюс можно отметить тех, кто моет ковёр вместе с тобой:
+ * без этого вторым исполнителем мог назначить только оператор из веба.
+ */
+function TakeServiceModal({ a, myId, onClose, onTake }: {
+    a: any
+    myId: number
+    onClose: () => void
+    onTake: (withIds: number[]) => void | Promise<void>
+}) {
+    const [workers, setWorkers] = useState<WorkerListItem[]>([])
+    const [picked, setPicked] = useState<number[]>([])
+    const [busy, setBusy] = useState(false)
+
+    useEffect(() => {
+        listWorkers().then(setWorkers).catch(() => setWorkers([]))
+    }, [])
+
+    // Себя не показываем (мы и так становимся исполнителем) и тех, кто уже взял.
+    const alreadyNames = (a.assignee_names || '').split(',').map((x: string) => x.trim()).filter(Boolean)
+    const candidates = workers.filter(w => w.id !== myId && !alreadyNames.includes(w.name))
+
+    return (
+        <div style={modalOverlayStyle} onClick={onClose}>
+            <div style={modalContentStyle} onClick={e => e.stopPropagation()}>
+                <h3 style={{ marginTop: 0 }}>{a.is_taken ? 'Присоединиться к работе' : 'Взять в работу'}</h3>
+                <div style={{ fontSize: 13, marginBottom: 4 }}>{a.service_name}</div>
+                <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 12 }}>
+                    {a.item_type_name} · Заказ #{String(a.order_id).padStart(5, '0')} · {a.client_name}
+                </div>
+                {a.is_taken && (
+                    <div style={{
+                        background: '#fef5e7', border: '1px solid #f5cba7', borderRadius: 6,
+                        padding: '8px 10px', fontSize: 13, marginBottom: 12, color: '#7d6608',
+                    }}>
+                        Уже работает: {a.assignee_names || '—'}. Вы добавитесь как ещё один исполнитель.
+                    </div>
+                )}
+
+                <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 6 }}>
+                    Кто работает вместе с вами? (необязательно)
+                </div>
+                <div style={{ maxHeight: 220, overflowY: 'auto', marginBottom: 14 }}>
+                    {candidates.length === 0 ? (
+                        <div style={{ fontSize: 13, color: '#95a5a6' }}>Других сотрудников нет</div>
+                    ) : candidates.map(w => {
+                        const on = picked.includes(w.id)
+                        return (
+                            <label key={w.id} style={{
+                                display: 'flex', alignItems: 'center', gap: 10, padding: '10px 8px',
+                                border: `1px solid ${on ? '#3498db' : '#e6e9ea'}`, borderRadius: 6,
+                                marginBottom: 6, background: on ? '#eaf4fc' : '#fff', cursor: 'pointer',
+                            }}>
+                                <input
+                                    type="checkbox"
+                                    checked={on}
+                                    onChange={() => setPicked(p => on ? p.filter(x => x !== w.id) : [...p, w.id])}
+                                    style={{ width: 18, height: 18 }}
+                                />
+                                <span style={{ fontSize: 14 }}>{w.name}</span>
+                                {w.role_name && <span style={{ fontSize: 11, color: '#95a5a6' }}>{w.role_name}</span>}
+                            </label>
+                        )
+                    })}
+                </div>
+
+                <div style={{ display: 'flex', gap: 8 }}>
+                    <button onClick={onClose} style={{
+                        flex: 1, padding: 12, background: '#fff', border: '1px solid #3498db', color: '#2980b9',
+                        borderRadius: 6, cursor: 'pointer',
+                    }}>Отмена</button>
+                    <button
+                        disabled={busy}
+                        onClick={async () => { setBusy(true); await onTake(picked) }}
+                        style={{
+                            flex: 2, padding: 12, background: '#27ae60', color: '#fff',
+                            border: 'none', borderRadius: 6, cursor: 'pointer', fontWeight: 600,
+                        }}
+                    >{busy ? '...' : (a.is_taken ? 'Присоединиться' : 'Взять в работу')}</button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
 function EditItemModal({ s, employeeId, onClose, onSaved }: {
     s: WorkerService
     employeeId: number
@@ -590,8 +767,8 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
             })
             await updateItemDescription(employeeId, s.item_id, { description, defects })
             onSaved()
-        } catch {
-            alert('Не удалось сохранить — проверьте интернет.')
+        } catch (e: unknown) {
+            alert(serverMessage(e) || 'Не удалось сохранить — проверьте интернет.')
             setSaving(false)
         }
     }
@@ -618,7 +795,7 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
                     <textarea rows={2} value={defects} onChange={e => setDefects(e.target.value)} style={textareaStyle} />
                 </div>
                 <div style={{ display: 'flex', gap: 8, marginTop: 14 }}>
-                    <button onClick={onClose} style={{ flex: 1, padding: 12, background: '#fff', border: '1px solid #bdc3c7', borderRadius: 6, cursor: 'pointer' }}>Отмена</button>
+                    <button onClick={onClose} style={{ flex: 1, padding: 12, background: '#fff', border: '1px solid #3498db', color: '#2980b9', borderRadius: 6, cursor: 'pointer' }}>Отмена</button>
                     <button onClick={save} disabled={saving} style={{ flex: 1, padding: 12, background: '#27ae60', color: '#fff', border: 'none', borderRadius: 6, cursor: 'pointer' }}>
                         {saving ? '...' : 'Сохранить'}
                     </button>

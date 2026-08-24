@@ -45,6 +45,12 @@ public record OrderQuery(
          * Используется виджетом «Без адреса» на главной.
          */
         Boolean badAddress,
+        /** «Висящие»: лид/созданный старше 7 дней без назначенного забора. */
+        Boolean stuck,
+        /** Единый поиск: имя клиента / телефон / legacy ID / номер заказа (частичное совпадение). */
+        String search,
+        /** Район забора или доставки. */
+        List<String> districts,
         /** V19: фильтр только по гарантийным заказам (из аналитики, клик по «Гарантийных»). */
         Boolean onlyWarranty
 ) {
@@ -68,6 +74,9 @@ public record OrderQuery(
         private Boolean noCoords;
         private Boolean overdueActual;
         private Boolean badAddress;
+        private Boolean stuck;
+        private String search;
+        private List<String> districts;
         private Boolean onlyWarranty;
 
         public Builder statuses(List<OrderStatus> v) { this.statuses = v; return this; }
@@ -86,12 +95,15 @@ public record OrderQuery(
         public Builder noCoords(Boolean v) { this.noCoords = v; return this; }
         public Builder overdueActual(Boolean v) { this.overdueActual = v; return this; }
         public Builder badAddress(Boolean v) { this.badAddress = v; return this; }
+        public Builder stuck(Boolean v) { this.stuck = v; return this; }
+        public Builder search(String v) { this.search = v; return this; }
+        public Builder districts(List<String> v) { this.districts = v; return this; }
         public Builder onlyWarranty(Boolean v) { this.onlyWarranty = v; return this; }
 
         public OrderQuery build() {
             return new OrderQuery(statuses, dateFrom, dateTo, dateField, legacyId, orderId,
                     paymentType, clientPhone, clientName, clientId, sortBy, sortDir,
-                    noCoords, overdueActual, badAddress, onlyWarranty);
+                    noCoords, overdueActual, badAddress, stuck, search, districts, onlyWarranty);
         }
     }
 }

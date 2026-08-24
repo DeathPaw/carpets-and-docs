@@ -1,7 +1,7 @@
 // Единые подписи и порядок статусов для всего фронта.
 // Раньше дублировались в OrdersPage / OrderDetailPage / ItemsPage / ProductionPage —
 // при добавлении нового статуса (COMPLETED) приходилось править в 4 местах.
-import type { OrderStatus, OrderItemStatus, ServiceStatus, PaymentType } from '../types'
+import type { OrderStatus, OrderItemStatus, ServiceStatus, PaymentType, PreliminaryPaymentType } from '../types'
 
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   LEAD: 'Лид',
@@ -55,3 +55,16 @@ export const PAYMENT_LABELS: Record<PaymentType, string> = {
   CASH: 'Наличные',
   TRANSFER: 'Перевод',
 }
+
+/** V30: предварительный способ расчёта — то, что видит водитель в маршрутном листе. */
+export const PRELIMINARY_PAYMENT_LABELS: Record<PreliminaryPaymentType, string> = {
+  CASH: 'Наличные',
+  CARD: 'Карта',
+  TRANSFER: 'Перевод',
+  PAID: 'Оплачено',
+  FREE: 'Бесплатно / гарантия',
+}
+
+export const ALL_PRELIMINARY_PAYMENTS: PreliminaryPaymentType[] = [
+  'CASH', 'CARD', 'TRANSFER', 'PAID', 'FREE',
+]

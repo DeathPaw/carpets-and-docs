@@ -78,6 +78,8 @@ export interface ItemFilterParams {
   clientName?: string
   clientPhone?: string
   legacyId?: number
+  /** Единый поиск: имя / телефон / legacy ID / номер заказа (частичное совпадение). */
+  search?: string
   page?: number
   size?: number
 }
@@ -99,6 +101,7 @@ export const getFilteredItems = (params: ItemFilterParams) => {
   if (params.clientName) sp.append('clientName', params.clientName)
   if (params.clientPhone) sp.append('clientPhone', params.clientPhone)
   if (params.legacyId) sp.append('legacyId', String(params.legacyId))
+  if (params.search) sp.append('search', params.search)
   if (params.page != null) sp.append('page', String(params.page))
   if (params.size != null) sp.append('size', String(params.size))
   return client.get<OrderItemPositioned[]>(`/api/items?${sp.toString()}`).then(r => r.data)

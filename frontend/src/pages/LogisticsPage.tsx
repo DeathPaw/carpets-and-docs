@@ -5,10 +5,17 @@ import { getDrivers } from '../api/references'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import CompleteDeliveriesModal from '../components/logistics/CompleteDeliveriesModal'
-import { getDeliverySlots, slotValue, slotLabel, type DeliverySlot } from '../api/deliverySlots'
+import AddOneOffSlotModal from '../components/logistics/AddOneOffSlotModal'
+import StyledSelect from '../components/StyledSelect'
+import MissingAddressModal from '../components/logistics/MissingAddressModal'
+import {
+  getDeliverySlots, createDeliverySlot, deleteDeliverySlot,
+  slotValue, slotLabel, type DeliverySlot,
+} from '../api/deliverySlots'
 import { hashColor } from '../components/Tiles'
 import { formatOrderNumber } from '../utils/format'
-import { PAYMENT_LABELS } from '../constants/statuses'
+import { PAYMENT_LABELS, PRELIMINARY_PAYMENT_LABELS } from '../constants/statuses'
+import { formatPhone } from '../components/PhoneInput'
 import { useAuth } from '../auth/AuthContext'
 import type { Order, Employee } from '../types'
 
@@ -36,6 +43,8 @@ interface SlotDef {
   value: string
   label: string
   color: string  // цветовая полоска слева на карточке
+  /** V31: id разового слота (заведён на одну дату) — по нему даём кнопку удаления. */
+  oneOffId?: number
 }
 
 /**
@@ -50,15 +59,23 @@ const SLOT_PALETTE = ['#74b9ff', '#fdcb6e', '#a29bfe', '#55efc4', '#fab1a0', '#8
  * чего настройки рабочего времени в Справочниках на логистику не влияли и
  * выходные не отличались от будней (правка №4).
  */
+/**
+ * Слоты конкретной даты: шаблоны её дня недели + разовые, заведённые именно
+ * на эту дату (V31, specific_date). Разовый слот, добавленный в среду 26.08,
+ * в другие среды не попадает.
+ */
 function slotDefsForDate(dateStr: string, slots: DeliverySlot[]): SlotDef[] {
   const dow = new Date(dateStr).getDay()
   return slots
-    .filter(s => s.day_of_week === dow && s.is_active)
+    .filter(s => s.is_active && s.day_of_week === dow
+      && (!s.specific_date || s.specific_date === dateStr))
     .sort((a, b) => (a.sort_order - b.sort_order) || a.start_time.localeCompare(b.start_time))
     .map((s, i) => ({
       value: slotValue(s),
       label: s.label ? `${s.label} · ${slotLabel(s)}` : slotLabel(s),
       color: SLOT_PALETTE[i % SLOT_PALETTE.length],
+      // Разовый слот помечаем, чтобы в дне была кнопка «убрать» именно у него.
+      oneOffId: s.specific_date ? s.id : undefined,
     }))
 }
 
@@ -108,10 +125,16 @@ function daysSince(createdAt: string): number {
 }
 
 /**
- * V19 (#6): печать маршрутного листа на конкретный день.
- * Поля: №, отвоз/забор, ФИ клиента, адрес (+ кв.), телефон, сумма, комментарий, время.
+ * Печать маршрутного листа на конкретный день.
+ *
+ * Лист горизонтальный: под адрес нужно много места, в книжной ориентации он
+ * переносился на 4-5 строк. Колонку «ФИ клиента» убрали — водителю она не нужна,
+ * а место занимала. Оплата берётся из предварительного типа (оператор ставит
+ * заранее), при его отсутствии — из фактической оплаты.
+ *
+ * driverName — если задан, лист печатается для одного водителя (его имя в шапке).
  */
-function printRouteSheet(date: string, cards: OrderCard[]): void {
+function printRouteSheet(date: string, cards: OrderCard[], driverName?: string): void {
   const dayCards = cards.filter(c => c.date === date)
     .sort((a, b) => (a.timeSlot || '').localeCompare(b.timeSlot || ''))
   const formattedDate = new Date(date).toLocaleDateString('ru', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -119,56 +142,68 @@ function printRouteSheet(date: string, cards: OrderCard[]): void {
   const rows = dayCards.map((c, idx) => {
     const apartment = c.type === 'pickup' ? c.order.pickup_apartment : c.order.delivery_apartment
     const addr = (c.address || '—') + (apartment ? `, кв. ${apartment}` : '')
-    // Раньше в fallback шёл client_address — из-за этого в колонке «Телефон» рисовался
-    // адрес клиента. Теперь при отсутствии телефона показываем прочерк.
-    const phone = (c.order as { client_phone?: string }).client_phone || '—'
-    // Тип оплаты в маршрутный лист: до выдачи (paid=false) показываем «не выбран»,
-    // чтобы водитель заранее знал, чем клиент собирается расплачиваться.
-    const payment = c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—'
+    // client_phone приезжает JOIN'ом из clients. Раньше поля не было вовсе,
+    // и в колонке «Телефон» рисовался адрес из fallback'а.
+    const phone = c.order.client_phone ? formatPhone(c.order.client_phone) : '—'
+    // Оплата: сначала предварительный тип (намерение, ставит оператор заранее),
+    // если его нет — фактический. Так водитель знает, чего ждать от клиента.
+    const payment = c.order.preliminary_payment_type
+      ? PRELIMINARY_PAYMENT_LABELS[c.order.preliminary_payment_type]
+      : (c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—')
     // Архивный маршрутный лист: выполненные точки помечаем галкой и глушим цвет,
     // чтобы при перепечатке прошедшей развозки было видно, что уже отработано.
     const rowStyle = c.archived ? ' style="color:#7f8c8d"' : ''
     const mark = c.archived ? ' ✓' : ''
     return `<tr${rowStyle}>
-      <td style="padding:6px 8px;text-align:center">${idx + 1}</td>
-      <td style="padding:6px 8px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}${mark}</td>
-      <td style="padding:6px 8px">#${String(c.order.id).padStart(5, '0')}</td>
-      <td style="padding:6px 8px">${c.order.client_name}</td>
-      <td style="padding:6px 8px">${addr}</td>
-      <td style="padding:6px 8px;white-space:nowrap">${phone}</td>
-      <td style="padding:6px 8px;text-align:right;white-space:nowrap">${Number(c.order.total_amount).toFixed(0)} ₽</td>
-      <td style="padding:6px 8px;white-space:nowrap">${payment}</td>
-      <td style="padding:6px 8px;font-size:0.85em">${c.timeSlot || '—'}</td>
-      <td style="padding:6px 8px;font-size:0.85em;color:#555">${c.order.comment || ''}</td>
+      <td style="padding:5px 6px;text-align:center">${idx + 1}</td>
+      <td style="padding:5px 6px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}${mark}</td>
+      <td style="padding:5px 6px;white-space:nowrap">#${String(c.order.id).padStart(5, '0')}</td>
+      <td style="padding:5px 6px">${addr}</td>
+      <td style="padding:5px 6px;white-space:nowrap">${phone}</td>
+      <td style="padding:5px 6px;text-align:right;white-space:nowrap">${Number(c.order.total_amount).toFixed(0)} ₽</td>
+      <td style="padding:5px 6px;white-space:nowrap">${payment}</td>
+      <td style="padding:5px 6px;white-space:nowrap">${c.timeSlot || '—'}</td>
+      <td style="padding:5px 6px;color:#555">${c.order.comment || ''}</td>
+      <td style="padding:5px 6px"></td>
     </tr>`
   }).join('')
 
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
     <title>Маршрутный лист ${date}</title>
     <style>
-      body{font-family:Arial,sans-serif;font-size:12px;margin:24px;color:#222}
-      h1{font-size:18px;margin:0 0 6px}
-      .sub{color:#666;margin-bottom:14px}
-      table{width:100%;border-collapse:collapse}
-      th{background:#ecf0f1;text-align:left;padding:6px 8px;border:1px solid #bdc3c7;font-size:11px}
-      td{border:1px solid #d6dbdf;font-size:12px;vertical-align:top}
+      /* Горизонтальный лист: адрес получает достаточную ширину и не ломается
+         на много строк, как это было в книжной ориентации. */
+      @page{ size: A4 landscape; margin: 8mm }
+      body{font-family:Arial,sans-serif;font-size:11px;margin:0;color:#222}
+      h1{font-size:16px;margin:0 0 4px}
+      .sub{color:#666;margin-bottom:10px}
+      table{width:100%;border-collapse:collapse;table-layout:fixed}
+      th{background:#ecf0f1;text-align:left;padding:5px 6px;border:1px solid #bdc3c7;font-size:10px}
+      td{border:1px solid #d6dbdf;font-size:11px;vertical-align:top;word-wrap:break-word}
       tr:nth-child(even) td{background:#fafafa}
-      @media print{ body{margin:10mm} @page{margin:10mm} }
+      tr{page-break-inside:avoid;break-inside:avoid}
+      thead{display:table-header-group}
     </style></head><body>
-    <h1>Маршрутный лист</h1>
+    <h1>Маршрутный лист${driverName ? ' — ' + driverName : ''}</h1>
     <div class="sub">${formattedDate} · всего ${dayCards.length} ${dayCards.length === 1 ? 'выезд' : 'выездов'}</div>
     <table>
+      <colgroup>
+        <col style="width:3%"><col style="width:6%"><col style="width:7%">
+        <col style="width:30%"><col style="width:11%"><col style="width:7%">
+        <col style="width:8%"><col style="width:8%"><col style="width:14%">
+        <col style="width:6%">
+      </colgroup>
       <thead><tr>
-        <th style="width:32px">#</th>
-        <th style="width:60px">Тип</th>
-        <th style="width:90px">Заказ</th>
-        <th>ФИ клиента</th>
+        <th>#</th>
+        <th>Тип</th>
+        <th>Заказ</th>
         <th>Адрес</th>
         <th>Телефон</th>
         <th>Сумма</th>
         <th>Оплата</th>
         <th>Время</th>
         <th>Комментарий</th>
+        <th>Отметка</th>
       </tr></thead>
       <tbody>${rows || '<tr><td colspan=10 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
     </table>
@@ -215,10 +250,79 @@ export default function LogisticsPage() {
   const [mapExpanded, setMapExpanded] = useState(false)
   // День для маршрутного листа и массового завершения развозки.
   const [routeDay, setRouteDay] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  /**
+   * Правка №1 (21.08): режим отображения логистики.
+   *   'week' — прежняя недельная доска с drag&drop (по умолчанию, не менялась);
+   *   'day'  — развёрнутый список заказов выбранной даты со всеми полями.
+   */
+  const [viewMode, setViewMode] = useState<'week' | 'day'>('week')
+  /**
+   * Правка №3 (21.08): фильтр по водителю в режиме «День».
+   * null — все, 0 — без водителя, N — конкретный водитель.
+   * Позволяет разделить развозку дня между несколькими водителями и напечатать
+   * каждому свой маршрутный лист.
+   */
+  const [routeDriverId, setRouteDriverId] = useState<number | null>(null)
+  /** V31: дата, для которой открыта модалка «добавить разовый слот». */
+  const [addSlotFor, setAddSlotFor] = useState<string | null>(null)
+  /** Заказ, которому не хватает адреса — окно ввода после назначения на слот. */
+  const [addressFor, setAddressFor] = useState<{ order: Order; type: CardType } | null>(null)
+  /** Справочник слотов под картой свёрнут по умолчанию — он нужен изредка. */
+  const [slotsPanelOpen, setSlotsPanelOpen] = useState(false)
+  /**
+   * Правка №12: какой день показывает карта. '' — вся неделя.
+   *
+   * По умолчанию показываем неделю целиком: при старте с конкретного дня карта
+   * часто оказывалась пустой (в этот день просто нет развозки), и выглядело это
+   * как «карта не работает». День оператор выбирает панелькой над картой либо
+   * через «Маршрутный лист на».
+   */
+  const [mapDay, setMapDay] = useState<string>('')
+  /**
+   * Фильтр карты по водителю. null — все, 0 — без водителя, N — конкретный.
+   * Тот же смысл, что у фильтра маршрутного листа: посмотреть маршрут одного
+   * водителя отдельно от остальных.
+   */
+  const [mapDriverId, setMapDriverId] = useState<number | null>(null)
+  /**
+   * Подсветка типа точек на карте: null — все одинаково, 'pickup'/'delivery' —
+   * выбранный тип сохраняет цвет дня, остальные гаснут в серый. Именно гаснут,
+   * а не исчезают: маршрут надо видеть целиком, но понимать, где что.
+   */
+  const [mapKindFocus, setMapKindFocus] = useState<CardType | null>(null)
   const [showComplete, setShowComplete] = useState(false)
   // Слоты доставки из справочника — у каждого дня недели свой набор (правка №4).
   const [slots, setSlots] = useState<DeliverySlot[]>([])
-  useEffect(() => { void getDeliverySlots().then(setSlots).catch(() => setSlots([])) }, [])
+  const reloadSlots = useCallback(
+    () => getDeliverySlots().then(setSlots).catch(() => setSlots([])), [])
+  useEffect(() => { void reloadSlots() }, [reloadSlots])
+
+  /**
+   * V31: разовый слот — только на выбранную дату.
+   *
+   * day_of_week выставляем по самой дате (этого требует CHECK в БД), а
+   * specific_date отсекает слот от других таких же дней недели: добавленный
+   * в среду 26.08 в другие среды не появится.
+   */
+  const addOneOffSlot = async (dateStr: string, start: string, end: string, label: string) => {
+    await createDeliverySlot({
+      day_of_week: new Date(dateStr).getDay(),
+      start_time: start,
+      end_time: end || null,
+      label: label.trim() || null,
+      is_active: true,
+      // Разовые показываем после обычных слотов дня.
+      sort_order: 100,
+      specific_date: dateStr,
+    })
+    await reloadSlots()
+  }
+
+  const removeOneOffSlot = async (slotId: number) => {
+    if (!window.confirm('Убрать этот разовый слот? Обычное расписание дня не изменится.')) return
+    await deleteDeliverySlot(slotId)
+    await reloadSlots()
+  }
 
   /** Цвет полоски слота на карточке. Ищем слот по его строковому значению во всех днях. */
   const slotColor = useCallback((slot: string | null): string => {
@@ -244,6 +348,14 @@ export default function LogisticsPage() {
     const days = getWeekDays(weekStart)
     if (!days.includes(routeDay)) setRouteDay(days[0])
   }, [weekStart, routeDay])
+
+  // Карта не должна остаться на дате из прошлой недели после переключения.
+  // Сбрасываем на «всю неделю», а не на её первый день: так после смены недели
+  // сразу видно всю развозку, а не случайно выбранный понедельник.
+  useEffect(() => {
+    const days = getWeekDays(weekStart)
+    if (mapDay && !days.includes(mapDay)) setMapDay('')
+  }, [weekStart, mapDay])
 
   /** Toggle района в фильтре: добавляет если нет, убирает если есть. */
   const toggleDistrict = (d: string) => {
@@ -574,6 +686,15 @@ export default function LogisticsPage() {
           ...((slot !== undefined || isUnassign) ? { actual_delivery_time_slot: slotValue } : {}),
         }
       }))
+
+      // Заказ без адреса развозить некуда: водитель получит точку без адреса,
+      // и на карте её тоже не будет. Сразу после назначения на слот поднимаем
+      // окно ввода адреса — его можно закрыть, но проблема уже на виду.
+      if (!isUnassign) {
+        const o = allOrders.find(x => x.id === orderId)
+        const addr = type === 'pickup' ? o?.pickup_address : o?.delivery_address
+        if (o && !(addr && addr.trim())) setAddressFor({ order: o, type })
+      }
     } catch { /* ignore */ }
   }
 
@@ -881,16 +1002,47 @@ export default function LogisticsPage() {
             {label}
             {isToday && <span style={{ marginLeft: 4, fontSize: '0.75em', color: '#f9a825' }}>·</span>}
           </strong>
-          <span style={{ fontSize: '0.78em', color: '#888' }}>
-            {cards.length}
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+            {/* V31: добавить слот ТОЛЬКО в этот день. Заводится с specific_date,
+                поэтому в другие такие же дни недели и в другие недели не попадёт. */}
+            {!isReadonly && (
+              <button
+                type="button"
+                onClick={() => setAddSlotFor(dateStr)}
+                title="Добавить временной слот только на этот день"
+                style={{
+                  border: '1px solid #ddd', background: '#fff', borderRadius: 4,
+                  cursor: 'pointer', fontSize: '0.72em', padding: '1px 5px', color: '#3498db',
+                }}
+              >+ слот</button>
+            )}
+            <span style={{ fontSize: '0.78em', color: '#888' }}>
+              {cards.length}
+            </span>
           </span>
         </div>
         {/* Слоты постоянно видны, вертикально сверху вниз. Набор берётся из
             справочника под день недели этой даты (у выходных он другой) плюс
-            «вне графика» — слоты из старых заказов, которых в справочнике нет. */}
-        {zones.map(s =>
-          renderSlotZone(dateStr, { value: s.value, label: s.label, color: s.color }, grouped[s.value] || [])
-        )}
+            разовые слоты этой даты и «вне графика» — слоты из старых заказов,
+            которых в справочнике нет. */}
+        {zones.map(s => (
+          <div key={s.value} style={{ position: 'relative' }}>
+            {renderSlotZone(dateStr, { value: s.value, label: s.label, color: s.color }, grouped[s.value] || [])}
+            {/* Разовый слот можно убрать здесь же — он существует только для этой
+                даты, отдельная страница справочников для этого избыточна. */}
+            {s.oneOffId != null && !isReadonly && (grouped[s.value] || []).length === 0 && (
+              <button
+                type="button"
+                title="Убрать разовый слот этого дня"
+                onClick={() => void removeOneOffSlot(s.oneOffId!)}
+                style={{
+                  position: 'absolute', top: 2, right: 2, border: 'none', background: 'transparent',
+                  cursor: 'pointer', color: '#c0392b', fontSize: '0.85em', lineHeight: 1, padding: 2,
+                }}
+              >×</button>
+            )}
+          </div>
+        ))}
         {/* «Без слота» — показываем только если в нём что-то есть или идёт перетаскивание.
             Иначе зону скрываем чтобы не зашумлять день. Drop в неё снимет слот. */}
         {(grouped['none'].length > 0 || isDragging) && (
@@ -900,8 +1052,170 @@ export default function LogisticsPage() {
     )
   }
 
-  // Карта недели
-  const visibleMapCards = filteredCards.filter(c => c.date && weekDays.includes(c.date))
+  /**
+   * Правка №3 (21.08): карточки выбранного дня с учётом фильтра по водителю.
+   * Используются и в режиме «День», и при печати маршрутного листа — так лист
+   * гарантированно совпадает с тем, что оператор видит на экране.
+   */
+  const routeCards = useMemo(() => filteredCards.filter(c => {
+    if (c.date !== routeDay) return false
+    if (routeDriverId === null) return true
+    if (routeDriverId === 0) return !c.order.assigned_driver_id
+    return c.order.assigned_driver_id === routeDriverId
+  }), [filteredCards, routeDay, routeDriverId])
+
+  const routeDriverName = routeDriverId
+    ? (employees.find(d => d.id === routeDriverId)?.name ?? undefined)
+    : (routeDriverId === 0 ? 'без водителя' : undefined)
+
+  /** Водители, у которых есть заказы в выбранный день — для вкладок в режиме «День». */
+  const driversOfDay = useMemo(() => {
+    const dayCards = filteredCards.filter(c => c.date === routeDay)
+    const ids = new Set<number>()
+    let unassigned = 0
+    for (const c of dayCards) {
+      if (c.order.assigned_driver_id) ids.add(c.order.assigned_driver_id)
+      else unassigned++
+    }
+    return {
+      list: employees.filter(d => ids.has(d.id)),
+      unassigned,
+      total: dayCards.length,
+    }
+  }, [filteredCards, routeDay, employees])
+
+  /**
+   * Правка №12: панель переключения дня над картой — оператор быстро прокликивает
+   * развозки недели, не трогая выбор даты для печати.
+   *
+   * big=true — вариант для развёрнутой карты: кнопки крупнее и растянуты на всю
+   * ширину, чтобы попадать по ним на большом экране. Панель обязательно
+   * присутствует и в полноэкранном режиме — иначе, развернув карту, оператор
+   * терял возможность переключить день и был вынужден её закрывать.
+   */
+  /**
+   * Легенда карты. Раньше это были статичные точки «Забор синий / Доставка
+   * зелёная», что было неправдой: маркеры красятся по ДНЮ недели, а не по типу.
+   * Теперь это переключатели: клик подсвечивает свой тип, остальные точки на
+   * карте гаснут в серый (не пропадают). Повторный клик снимает подсветку.
+   */
+  const renderMapLegend = (big: boolean) => {
+    const items: { kind: CardType; label: string }[] = [
+      { kind: 'pickup', label: 'Забор' },
+      { kind: 'delivery', label: 'Доставка' },
+    ]
+    return (
+      <div style={{
+        display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
+        marginBottom: 8, fontSize: big ? '0.9em' : '0.78em',
+      }}>
+        {items.map(it => {
+          const count = visibleMapCards.filter(c => c.type === it.kind).length
+          const on = mapKindFocus === it.kind
+          const dim = mapKindFocus !== null && !on
+          return (
+            <button
+              key={it.kind}
+              onClick={() => setMapKindFocus(on ? null : it.kind)}
+              title={on ? 'Снять подсветку' : `Подсветить: ${it.label} (остальные станут серыми)`}
+              style={{
+                padding: big ? '5px 12px' : '3px 8px', borderRadius: 4, cursor: 'pointer',
+                fontSize: 'inherit',
+                border: `1px solid ${on ? 'var(--c-primary)' : '#ddd'}`,
+                background: on ? 'var(--c-primary)' : '#fff',
+                color: on ? '#fff' : (dim ? 'var(--c-text-muted)' : 'var(--c-text)'),
+                fontWeight: on ? 600 : 400,
+              }}
+            >
+              {it.label}{count > 0 && ` · ${count}`}
+            </button>
+          )
+        })}
+        <span style={{ color: 'var(--c-text-muted)' }}>
+          цвет точки — день недели
+        </span>
+      </div>
+    )
+  }
+
+  const renderMapDayStrip = (big: boolean) => {
+    const pad = big ? '8px 4px' : '3px 2px'
+    const font = big ? '0.92em' : '0.72em'
+    return (
+      <div style={{ marginBottom: big ? 12 : 8 }}>
+        {/* Дни — одной строкой без переносов: только «Пн», «Вт» и счётчик.
+            Полная дата уехала в tooltip, иначе панель занимала три строки. */}
+        <div style={{ display: 'flex', gap: big ? 6 : 3, marginBottom: 6 }}>
+          {weekDays.map(d => {
+            const count = mapCandidateCards.filter(c => c.date === d).length
+            const active = mapDay === d
+            return (
+              <button
+                key={d}
+                onClick={() => setMapDay(d)}
+                title={`${formatDayHeader(d)} · точек: ${count}`}
+                style={{
+                  flex: '1 1 0', minWidth: 0,
+                  padding: pad, borderRadius: 4, cursor: 'pointer', fontSize: font,
+                  border: `1px solid ${active ? dayColor(d) : '#ddd'}`,
+                  background: active ? dayColor(d) : '#fff',
+                  color: active ? '#fff' : (count > 0 ? 'var(--c-text)' : 'var(--c-text-muted)'),
+                  fontWeight: active ? 600 : 400,
+                }}
+              >
+                {DAY_NAMES[new Date(d).getDay()]}
+                {count > 0 && <span style={{ marginLeft: 3, opacity: 0.85 }}>{count}</span>}
+              </button>
+            )
+          })}
+        </div>
+        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button
+            onClick={() => setMapDay('')}
+            title="Показать точки всей недели"
+            style={{
+              padding: big ? '6px 12px' : '3px 8px', borderRadius: 4, cursor: 'pointer', fontSize: font,
+              border: `1px solid ${mapDay === '' ? 'var(--c-primary)' : '#ddd'}`,
+              background: mapDay === '' ? 'var(--c-primary)' : '#fff',
+              color: mapDay === '' ? '#fff' : 'var(--c-text)',
+              fontWeight: mapDay === '' ? 600 : 400,
+            }}
+          >Вся неделя</button>
+          {/* Фильтр по водителю — как в маршрутном листе: посмотреть маршрут
+              одного водителя, не отвлекаясь на чужие точки. */}
+          <StyledSelect<string>
+            value={mapDriverId === null ? '' : String(mapDriverId)}
+            width={big ? 220 : 150}
+            ariaLabel="Водитель на карте"
+            options={[
+              { value: '', label: 'Все водители' },
+              { value: '0', label: 'Без водителя' },
+              ...employees.map(d => ({ value: String(d.id), label: d.name })),
+            ]}
+            onChange={v => setMapDriverId(v === '' ? null : Number(v))}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // Карта. Правка №12: по умолчанию показываем точки ОДНОГО дня — того, что выбран
+  // в «Маршрутный лист на». Оператору перед развозкой нужен маршрут конкретной даты,
+  // а не облако точек за всю неделю. Режим «вся неделя» остаётся как опция (mapDay = '').
+  /**
+   * Карточки-кандидаты для карты: неделя + фильтр по водителю, но БЕЗ фильтра
+   * по дню. По ним считаются счётчики в панели дней — иначе, выбрав день,
+   * оператор видел бы нули у всех остальных.
+   */
+  const mapCandidateCards = filteredCards.filter(c => {
+    if (!c.date || !weekDays.includes(c.date)) return false
+    if (c.lat == null || c.lon == null) return false
+    if (mapDriverId === null) return true
+    if (mapDriverId === 0) return !c.order.assigned_driver_id
+    return c.order.assigned_driver_id === mapDriverId
+  })
+
+  const visibleMapCards = mapCandidateCards.filter(c => !mapDay || c.date === mapDay)
   const mapPoints: MapPoint[] = visibleMapCards
     .filter(c => c.lat != null && c.lon != null)
     .map(c => {
@@ -911,7 +1225,11 @@ export default function LogisticsPage() {
         lat: c.lat as number,
         lon: c.lon as number,
         kind: c.type,
-        color: c.date ? dayColor(c.date) : undefined,
+        // Если включена подсветка типа — точки другого типа гасим в серый,
+        // но с карты не убираем: оператор видит весь маршрут и понимает, где что.
+        color: (mapKindFocus && c.type !== mapKindFocus)
+          ? '#c8cdd2'
+          : (c.date ? dayColor(c.date) : undefined),
         // Структурные поля — для красивого тултипа: дата → время → № → адрес → имя.
         date: c.date ?? undefined,
         time: c.timeSlot ?? undefined,
@@ -1094,8 +1412,25 @@ export default function LogisticsPage() {
 
       {/* Навигация недели — только подпись и сводка. Переключение неделей — через полосу обзора. */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
+        {/* Правка №1 (21.08): Неделя / День. Недельный режим оставлен как был. */}
+        <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
+          {([['week', 'Неделя'], ['day', 'День']] as const).map(([v, label]) => (
+            <button
+              key={v}
+              onClick={() => setViewMode(v)}
+              style={{
+                padding: '4px 12px', border: 'none', cursor: 'pointer', fontSize: '0.85em',
+                background: viewMode === v ? '#3498db' : '#fff',
+                color: viewMode === v ? '#fff' : '#555',
+                fontWeight: viewMode === v ? 600 : 400,
+              }}
+            >{label}</button>
+          ))}
+        </div>
         <span style={{ fontWeight: 600, fontSize: '1.05em' }}>
-          {formatDayHeader(weekDays[0])} — {formatDayHeader(weekDays[6])}
+          {viewMode === 'day'
+            ? formatDayHeader(routeDay)
+            : `${formatDayHeader(weekDays[0])} — ${formatDayHeader(weekDays[6])}`}
         </span>
         {(weekSummary.pickups > 0 || weekSummary.deliveries > 0) && (
           <span style={{ fontSize: '0.85em', color: '#7f8c8d' }}>
@@ -1108,18 +1443,26 @@ export default function LogisticsPage() {
         {/* V19 (#6): печать маршрутного листа на конкретный день. */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
           <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Маршрутный лист на:</label>
-          <select
+          <StyledSelect<string>
             value={routeDay}
-            onChange={e => setRouteDay(e.target.value)}
-            style={{ width: 'auto' }}
-          >
-            {weekDays.map(d => (
-              <option key={d} value={d}>{formatDayHeader(d)}</option>
-            ))}
-          </select>
+            onChange={setRouteDay}
+            width={190}
+            ariaLabel="День маршрутного листа"
+            options={weekDays.map(d => ({
+              value: d,
+              label: formatDayHeader(d),
+              hint: (() => {
+                const n = filteredCards.filter(c => c.date === d).length
+                return n > 0 ? String(n) : undefined
+              })(),
+            }))}
+          />
           <button
             className="btn-secondary btn-sm"
-            onClick={() => printRouteSheet(routeDay, filteredCards)}
+            title={routeDriverId
+              ? 'Напечатать маршрутный лист выбранного водителя'
+              : 'Напечатать маршрутный лист на выбранный день'}
+            onClick={() => printRouteSheet(routeDay, routeCards, routeDriverName)}
           >🖨 Печать</button>
           {/* Правка №2: массовое завершение развозки — оператор закрывает все
               доставки дня из одного окна, без захода в каждую карточку. */}
@@ -1135,6 +1478,119 @@ export default function LogisticsPage() {
 
       {loading ? (
         <div className="loading">Загрузка...</div>
+      ) : viewMode === 'day' ? (
+        /* Правка №1 (21.08): развёрнутый список заказов выбранного дня.
+           Оператор видит все данные сразу и не открывает карточки по одной.
+           Правка №3 (21.08): вкладки водителей — развозку дня можно разделить
+           между несколькими и печатать каждому свой лист. */
+        <div className="card" style={{ padding: 12 }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
+            <span style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Водитель:</span>
+            {([
+              { id: null as number | null, label: `Все · ${driversOfDay.total}` },
+              ...driversOfDay.list.map((d: Employee) => ({
+                id: d.id as number | null,
+                label: `${d.name} · ${filteredCards.filter(c => c.date === routeDay && c.order.assigned_driver_id === d.id).length}`,
+              })),
+              ...(driversOfDay.unassigned > 0
+                ? [{ id: 0 as number | null, label: `Без водителя · ${driversOfDay.unassigned}` }]
+                : []),
+            ]).map(tab => {
+              const active = routeDriverId === tab.id
+              return (
+                <button
+                  key={String(tab.id)}
+                  onClick={() => setRouteDriverId(tab.id)}
+                  style={{
+                    padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: '0.82em',
+                    border: `1px solid ${active ? '#3498db' : '#ddd'}`,
+                    background: active ? '#3498db' : '#fff',
+                    color: active ? '#fff' : '#2c3e50',
+                    fontWeight: active ? 600 : 400,
+                  }}
+                >{tab.label}</button>
+              )
+            })}
+          </div>
+
+          {routeCards.length === 0 ? (
+            <div style={{ padding: 24, textAlign: 'center', color: '#999' }}>
+              На эту дату выездов нет.
+            </div>
+          ) : (
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
+                <thead>
+                  <tr>
+                    <th style={{ width: 34 }}>#</th>
+                    <th style={{ width: 70 }}>Тип</th>
+                    <th style={{ width: 90 }}>Заказ</th>
+                    <th>ФИО клиента</th>
+                    <th style={{ width: 140 }}>Телефон</th>
+                    <th>Адрес</th>
+                    <th style={{ width: 110 }}>Слот</th>
+                    <th style={{ width: 120 }}>Оплата (предв.)</th>
+                    <th>Комментарий</th>
+                    <th style={{ width: 160 }}>Водитель</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {routeCards
+                    .slice()
+                    .sort((a, b) => (a.timeSlot || '').localeCompare(b.timeSlot || ''))
+                    .map((c, idx) => {
+                      const apt = c.type === 'pickup' ? c.order.pickup_apartment : c.order.delivery_apartment
+                      return (
+                        <tr
+                          key={`${c.order.id}-${c.type}`}
+                          style={{ cursor: 'pointer', color: c.archived ? '#7f8c8d' : undefined }}
+                          onClick={() => navigate(`/orders/${c.order.id}`)}
+                          title="Открыть заказ"
+                        >
+                          <td>{idx + 1}</td>
+                          <td style={{ fontWeight: 600 }}>
+                            {c.type === 'pickup' ? 'Забор' : 'Отвоз'}{c.archived ? ' ✓' : ''}
+                          </td>
+                          <td>{formatOrderNumber(c.order.id, c.order.created_at)}</td>
+                          <td>{c.order.client_name}</td>
+                          <td>{c.order.client_phone ? formatPhone(c.order.client_phone) : '—'}</td>
+                          <td>{(c.address || '—') + (apt ? `, кв. ${apt}` : '')}</td>
+                          <td>{c.timeSlot || '—'}</td>
+                          <td>
+                            {c.order.preliminary_payment_type
+                              ? PRELIMINARY_PAYMENT_LABELS[c.order.preliminary_payment_type]
+                              : (c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—')}
+                          </td>
+                          <td style={{ color: '#555' }}>{c.order.comment || ''}</td>
+                          {/* Назначение водителя прямо из списка — основной способ
+                              разделить развозку между несколькими водителями. */}
+                          <td onClick={e => e.stopPropagation()}>
+                            <select
+                              value={c.order.assigned_driver_id ?? ''}
+                              disabled={isReadonly}
+                              onChange={async e => {
+                                const v = e.target.value ? Number(e.target.value) : null
+                                try {
+                                  await setOrderDriver(c.order.id, v)
+                                  await reload()
+                                } catch { /* ошибку покажет общий обработчик загрузки */ }
+                              }}
+                              style={{ width: '100%', fontSize: '0.9em', padding: '2px 4px' }}
+                            >
+                              <option value="">— не назначен —</option>
+                              {employees.map(d => (
+                                <option key={d.id} value={d.id}>{d.name}</option>
+                              ))}
+                            </select>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
       ) : (
         <>
           {/* Дни недели — горизонтальная сетка из 7 колонок (Пн..Вс).
@@ -1317,7 +1773,7 @@ export default function LogisticsPage() {
               marginBottom: 8,
             }}>
               <strong style={{ fontSize: '0.85em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                Карта недели {mapPoints.length > 0 && <span style={{ color: '#3498db' }}>· {mapPoints.length}</span>}
+                {mapDay ? 'Карта дня' : 'Карта недели'} {mapPoints.length > 0 && <span style={{ color: '#3498db' }}>· {mapPoints.length}</span>}
               </strong>
               {mapPoints.length > 0 && (
                 <button
@@ -1330,20 +1786,22 @@ export default function LogisticsPage() {
                 </button>
               )}
             </div>
+            {renderMapDayStrip(false)}
             {mapPoints.length === 0 ? (
               <div style={{ fontSize: '0.85em', color: '#888', textAlign: 'center', padding: '12px 0' }}>
-                Нет заказов с координатами на этой неделе.
+                {mapDay
+                  ? 'Нет заказов с координатами на этот день.'
+                  : 'Нет заказов с координатами на этой неделе.'}
               </div>
             ) : (
               <>
-                <div style={{ marginBottom: 6, color: '#666', fontSize: '0.78em' }}>
-                  <span style={{ display: 'inline-block', width: 8, height: 8, background: '#2980b9', borderRadius: 4, marginRight: 4 }} /> Забор
-                  <span style={{ display: 'inline-block', width: 8, height: 8, background: '#27ae60', borderRadius: 4, marginLeft: 12, marginRight: 4 }} /> Доставка
-                </div>
+                {renderMapLegend(false)}
+                {/* Разворачиваем по ДВОЙНОМУ клику: одиночный click срабатывал
+                    и после перетаскивания карты — оператор двигал её вбок, отпускал
+                    мышь и получал полноэкранный режим вместо нужного участка. */}
                 <div
-                  onClick={() => setMapExpanded(true)}
-                  style={{ cursor: 'zoom-in' }}
-                  title="Клик — развернуть карту"
+                  onDoubleClick={() => setMapExpanded(true)}
+                  title="Двойной клик — развернуть карту"
                   data-tour="logistics-map"
                 >
                   <MapMarkers points={mapPoints} height={220} />
@@ -1352,8 +1810,100 @@ export default function LogisticsPage() {
             )}
           </div>
 
-          {/* Модальное окно с большой картой */}
-          {mapExpanded && mapPoints.length > 0 && (
+          {/* Справочник временных слотов — прямо под картой, в свёрнутом и
+              развёрнутом виде страницы. Оператор правит график развозки там же,
+              где на неё смотрит, не уходя в Справочники. */}
+          <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
+            {/* Свёрнут по умолчанию: справочник нужен изредка, а развёрнутый
+                занимал половину колонки и отжимал карту вниз. */}
+            <div style={{
+              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+              gap: 8, flexWrap: 'wrap',
+            }}>
+              <button
+                onClick={() => setSlotsPanelOpen(v => !v)}
+                title={slotsPanelOpen ? 'Свернуть' : 'Показать слоты недели'}
+                style={{
+                  background: 'none', border: 'none', padding: 0, cursor: 'pointer',
+                  fontSize: '0.85em', color: '#7f8c8d', textTransform: 'uppercase',
+                  letterSpacing: 0.6, fontWeight: 700,
+                }}
+              >
+                {slotsPanelOpen ? '▾' : '▸'} Временные слоты
+              </button>
+              {!isReadonly && (
+                <button
+                  className="btn-secondary btn-sm"
+                  onClick={() => setAddSlotFor(routeDay)}
+                  title="Добавить слот на выбранный день"
+                >+ Слот</button>
+              )}
+            </div>
+            {slotsPanelOpen && (
+            <>
+            <div style={{ fontSize: '0.78em', color: 'var(--c-text-secondary)', margin: '8px 0' }}>
+              Постоянные слоты недели и разовые на конкретную дату. Разовый действует
+              только в свой день.
+            </div>
+            {weekDays.map(d => {
+              const zones = slotDefsForDate(d, slots)
+              return (
+                <div key={d} style={{
+                  display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap',
+                  padding: '4px 0', borderBottom: '1px solid var(--c-bg-hover)',
+                }}>
+                  <span style={{
+                    minWidth: 74, fontSize: '0.8em', fontWeight: 600,
+                    color: d === today ? 'var(--c-primary-dark)' : 'var(--c-text)',
+                  }}>
+                    {DAY_NAMES[new Date(d).getDay()]} {formatShortDate(d)}
+                  </span>
+                  {zones.length === 0 ? (
+                    <span style={{ fontSize: '0.78em', color: 'var(--c-text-muted)' }}>выходной</span>
+                  ) : zones.map(z => (
+                    <span key={z.value} style={{
+                      display: 'inline-flex', alignItems: 'center', gap: 4,
+                      padding: '2px 7px', borderRadius: 10, fontSize: '0.76em',
+                      // Разовый слот выделяем оранжевым: видно, что он только на эту дату.
+                      background: z.oneOffId ? '#fdf2e9' : 'var(--c-primary-light)',
+                      color: z.oneOffId ? '#7e5109' : '#1b4f72',
+                      border: `1px solid ${z.oneOffId ? '#f5cba7' : '#aed6f1'}`,
+                    }}>
+                      {z.label}
+                      {z.oneOffId != null && !isReadonly && (
+                        <button
+                          title="Убрать разовый слот"
+                          onClick={() => void removeOneOffSlot(z.oneOffId!)}
+                          style={{
+                            border: 'none', background: 'transparent', cursor: 'pointer',
+                            color: '#c0392b', padding: 0, fontSize: '1em', lineHeight: 1,
+                          }}
+                        >&times;</button>
+                      )}
+                    </span>
+                  ))}
+                  {!isReadonly && (
+                    <button
+                      onClick={() => setAddSlotFor(d)}
+                      title={`Добавить слот только на ${d}`}
+                      style={{
+                        border: '1px solid #ddd', background: '#fff', borderRadius: 4,
+                        cursor: 'pointer', fontSize: '0.72em', padding: '1px 6px',
+                        color: 'var(--c-primary)', marginLeft: 'auto',
+                      }}
+                    >+</button>
+                  )}
+                </div>
+              )
+            })}
+            </>
+            )}
+          </div>
+
+          {/* Модальное окно с большой картой.
+              Условие только на mapExpanded (а не на наличие точек): иначе при
+              переключении на день без координат окно схлопывалось само собой. */}
+          {mapExpanded && (
             <div
               className="modal-overlay"
               onClick={() => setMapExpanded(false)}
@@ -1367,15 +1917,30 @@ export default function LogisticsPage() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <div style={{ color: '#666', fontSize: '0.9em' }}>
-                    <span style={{ display: 'inline-block', width: 10, height: 10, background: '#2980b9', borderRadius: 5, marginRight: 4 }} /> Забор
-                    <span style={{ display: 'inline-block', width: 10, height: 10, background: '#27ae60', borderRadius: 5, marginLeft: 16, marginRight: 4 }} /> Доставка
-                    <span style={{ marginLeft: 24, color: '#888' }}>· Наведите на метку для подсказки</span>
-                  </div>
+                  <strong style={{ fontSize: '1.05em' }}>
+                    {mapDay ? `Карта дня · ${formatDayHeader(mapDay)}` : 'Карта недели'}
+                    <span style={{ color: '#3498db', marginLeft: 8 }}>· {mapPoints.length}</span>
+                  </strong>
                   <button className="btn-secondary" onClick={() => setMapExpanded(false)}>Закрыть</button>
                 </div>
+                {/* Панель дней доступна и на полном экране, крупными кнопками:
+                    развернув карту, оператор должен переключать развозки, не
+                    закрывая её. */}
+                {renderMapDayStrip(true)}
+                {renderMapLegend(true)}
                 <div style={{ flex: 1, minHeight: 0 }}>
-                  <MapMarkers points={mapPoints} height={'78vh'} />
+                  {mapPoints.length === 0 ? (
+                    <div style={{
+                      height: '68vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                      color: '#888', background: '#f8f9fa', borderRadius: 6,
+                    }}>
+                      {mapDay
+                        ? 'Нет заказов с координатами на этот день.'
+                        : 'Нет заказов с координатами на этой неделе.'}
+                    </div>
+                  ) : (
+                    <MapMarkers points={mapPoints} height={'68vh'} />
+                  )}
                 </div>
               </div>
             </div>
@@ -1459,6 +2024,26 @@ export default function LogisticsPage() {
       {/* Правка №2: массовое завершение развозки за выбранный день.
           Берём доставки этого дня с учётом активных фильтров — оператор часто
           закрывает развозку по конкретному району. */}
+      {/* Заказ поставили в слот, а адреса нет — просим ввести сразу. */}
+      {addressFor && (
+        <MissingAddressModal
+          order={addressFor.order}
+          type={addressFor.type}
+          onClose={() => setAddressFor(null)}
+          onSaved={async () => { await reload() }}
+        />
+      )}
+      {/* V31: добавление разового слота на конкретную дату. */}
+      {addSlotFor && (
+        <AddOneOffSlotModal
+          date={addSlotFor}
+          onClose={() => setAddSlotFor(null)}
+          onSave={async (start, end, label) => {
+            await addOneOffSlot(addSlotFor, start, end, label)
+            setAddSlotFor(null)
+          }}
+        />
+      )}
       {showComplete && (
         <CompleteDeliveriesModal
           date={routeDay}

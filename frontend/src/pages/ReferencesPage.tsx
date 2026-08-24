@@ -14,6 +14,9 @@ import {
   getAllDeliverySlots, createDeliverySlot, updateDeliverySlot, deleteDeliverySlot,
   slotLabel, type DeliverySlot,
 } from '../api/deliverySlots'
+import {
+  getAllBanners, createBanner, updateBanner, deleteBanner, type UpdateBanner,
+} from '../api/updateBanners'
 import { invalidateDistrictCache } from '../components/DistrictSelect'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
@@ -65,11 +68,13 @@ export default function ReferencesPage() {
   const [modifiers, setModifiers] = useState<PriceModifier[]>([])
   const [districts, setDistricts] = useState<District[]>([])
   const [slots, setSlots] = useState<DeliverySlot[]>([])
+  const [banners, setBanners] = useState<UpdateBanner[]>([])
 
   const load = async () => {
-    const [ts, sks, gs, ads, mods, dists, slts] = await Promise.all([
+    const [ts, sks, gs, ads, mods, dists, slts, bnrs] = await Promise.all([
       getItemTypes(), getSkus(), getSkuGroups(), getAttributeDefinitions(),
       getPriceModifiers(), getDistricts(false), getAllDeliverySlots(),
+      getAllBanners().catch(() => [] as UpdateBanner[]),
     ])
     setTypes(ts)
     setSkus(sks)
@@ -78,6 +83,7 @@ export default function ReferencesPage() {
     setModifiers(mods)
     setDistricts(dists)
     setSlots(slts)
+    setBanners(bnrs)
   }
   useEffect(() => { void load() }, [])
 
@@ -95,6 +101,7 @@ export default function ReferencesPage() {
       <PriceModifiersCard modifiers={modifiers} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DeliverySlotsCard slots={slots} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DistrictsCard districts={districts} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
+      <UpdateBannersCard banners={banners} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
 
       {confirmAction && (
         <ConfirmModal
@@ -1013,7 +1020,10 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
 
       {DOW_ORDER.map(dow => {
         const daySlots = slots
-          .filter(s => s.day_of_week === dow)
+          // V31: разовые слоты (заведены на конкретную дату из Логистики) в
+          // шаблоне дня недели не показываем — иначе админ решит, что интервал
+          // повторяется еженедельно. Они идут отдельным списком ниже.
+          .filter(s => s.day_of_week === dow && !s.specific_date)
           .sort((a, b) => (a.sort_order - b.sort_order) || a.start_time.localeCompare(b.start_time))
         return (
           <div key={dow} style={{ marginBottom: 10, paddingBottom: 10, borderBottom: '1px solid #f0f0f0' }}>
@@ -1078,6 +1088,43 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
           </div>
         )
       })}
+
+      {/* V31: разовые слоты — заводятся из Логистики кнопкой «+ слот» в дне и
+          действуют только в свою дату. Здесь их видно списком, чтобы можно было
+          подчистить старые, не разыскивая нужную неделю на доске. */}
+      {slots.some(s => s.specific_date) && (
+        <div style={{ marginTop: 14 }}>
+          <strong style={{ fontSize: '0.9em' }}>Разовые слоты (на конкретные даты)</strong>
+          <div style={{ fontSize: '0.82em', color: '#7f8c8d', margin: '4px 0 8px' }}>
+            Добавляются из раздела «Логистика» кнопкой «+ слот» в нужном дне.
+            На еженедельное расписание не влияют.
+          </div>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+            {slots
+              .filter(s => s.specific_date)
+              .sort((a, b) => (a.specific_date || '').localeCompare(b.specific_date || '')
+                || a.start_time.localeCompare(b.start_time))
+              .map(s => (
+                <span
+                  key={s.id}
+                  style={{
+                    display: 'inline-flex', alignItems: 'center', gap: 6,
+                    padding: '3px 8px', borderRadius: 12, fontSize: '0.86em',
+                    background: '#fdf2e9', color: '#7e5109', border: '1px solid #f5cba7',
+                  }}
+                >
+                  {new Date(s.specific_date!).toLocaleDateString('ru')} · {slotLabel(s)}
+                  {s.label ? ` · ${s.label}` : ''}
+                  <button
+                    title="Удалить разовый слот"
+                    onClick={() => void remove(s)}
+                    style={{ border: 'none', background: 'transparent', cursor: 'pointer', color: '#c0392b', padding: 0 }}
+                  >&times;</button>
+                </span>
+              ))}
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1085,4 +1132,178 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
 const chipBtn: React.CSSProperties = {
   background: 'none', border: 'none', cursor: 'pointer',
   padding: 0, fontSize: 13, lineHeight: 1, color: 'inherit',
+}
+
+// ============================================================================
+// V32: баннеры «Обновления» — то, что оператор видит по кнопке «Обновления».
+// Отдельный справочник, чтобы релизные заметки можно было писать без правки кода.
+// ============================================================================
+function UpdateBannersCard({ banners, reload, setConfirm, showToast }: CardProps<{ banners: UpdateBanner[] }>) {
+  const empty = { title: '', body: '', starts_on: '', ends_on: '', sort_order: 0, is_active: true }
+  const [form, setForm] = useState<{
+    id?: number; title: string; body: string
+    starts_on: string; ends_on: string; sort_order: number; is_active: boolean
+  }>(empty)
+  const [editing, setEditing] = useState(false)
+  const [err, setErr] = useState('')
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  /** Виден ли баннер оператору прямо сейчас — по датам и флагу активности. */
+  const isLive = (b: UpdateBanner) =>
+    b.is_active
+    && (!b.starts_on || b.starts_on <= today)
+    && (!b.ends_on || b.ends_on >= today)
+
+  const startEdit = (b: UpdateBanner) => {
+    setForm({
+      id: b.id, title: b.title, body: b.body,
+      starts_on: b.starts_on ?? '', ends_on: b.ends_on ?? '',
+      sort_order: b.sort_order, is_active: b.is_active,
+    })
+    setEditing(true)
+    setErr('')
+  }
+
+  const save = async () => {
+    if (!form.title.trim()) { setErr('Укажите заголовок'); return }
+    if (!form.body.trim()) { setErr('Укажите текст'); return }
+    if (form.starts_on && form.ends_on && form.ends_on < form.starts_on) {
+      setErr('Дата окончания раньше даты начала'); return
+    }
+    const payload = {
+      title: form.title.trim(),
+      body: form.body,
+      starts_on: form.starts_on || null,
+      ends_on: form.ends_on || null,
+      sort_order: Number(form.sort_order) || 0,
+      is_active: form.is_active,
+    }
+    try {
+      if (form.id) await updateBanner(form.id, payload)
+      else await createBanner(payload)
+      setForm(empty); setEditing(false); setErr('')
+      await reload()
+      showToast(form.id ? 'Баннер обновлён' : 'Баннер добавлен', 'success')
+    } catch (e: unknown) {
+      setErr((e as any)?.response?.data?.message || 'Не удалось сохранить')
+    }
+  }
+
+  const remove = (b: UpdateBanner) => setConfirm({
+    title: 'Удалить баннер',
+    message: `Удалить «${b.title}»? Оператор перестанет его видеть в «Обновлениях».`,
+    danger: true,
+    action: async () => {
+      try { await deleteBanner(b.id); await reload() }
+      catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка удаления', 'error') }
+    },
+  })
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h2 style={{ marginTop: 0 }}>Баннеры обновлений</h2>
+      <div style={{ fontSize: '0.85em', color: 'var(--c-text-secondary)', marginBottom: 12 }}>
+        Показываются оператору по кнопке «Обновления» внизу экрана. Баннер виден,
+        если сегодня попадает в интервал дат и он включён. Пустая дата — граница не задана.
+      </div>
+
+      {banners.length === 0 ? (
+        <div style={{ color: 'var(--c-text-muted)', marginBottom: 12 }}>Баннеров пока нет</div>
+      ) : (
+        <div style={{ marginBottom: 12 }}>
+          {banners.map(b => {
+            const live = isLive(b)
+            return (
+              <div key={b.id} style={{
+                border: '1px solid var(--c-border)', borderRadius: 'var(--radius)',
+                padding: '10px 12px', marginBottom: 8,
+                background: live ? '#fff' : 'var(--c-bg-hover)',
+              }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
+                  <div style={{ minWidth: 0 }}>
+                    <strong style={{ color: live ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{b.title}</strong>
+                    <span style={{
+                      marginLeft: 8, fontSize: '0.78em', padding: '2px 7px', borderRadius: 10,
+                      background: live ? 'var(--c-success-light)' : '#eceff1',
+                      color: live ? '#186a3b' : 'var(--c-text-muted)',
+                    }}>{live ? 'показывается' : 'скрыт'}</span>
+                    <div style={{ fontSize: '0.82em', color: 'var(--c-text-secondary)', marginTop: 3 }}>
+                      {b.starts_on ? new Date(b.starts_on).toLocaleDateString('ru') : '—'}
+                      {' … '}
+                      {b.ends_on ? new Date(b.ends_on).toLocaleDateString('ru') : 'бессрочно'}
+                      {` · порядок ${b.sort_order}`}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn-secondary btn-sm" onClick={() => startEdit(b)}>Изменить</button>
+                    <button className="btn-danger btn-sm" onClick={() => remove(b)}>Удалить</button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {editing ? (
+        <div style={{ borderTop: '1px solid var(--c-border)', paddingTop: 12 }}>
+          <div className="form-group">
+            <label>Заголовок *</label>
+            <input
+              value={form.title}
+              onChange={e => setForm(f => ({ ...f, title: e.target.value }))}
+              placeholder="Например: Что нового в этой версии"
+            />
+          </div>
+          <div className="form-group">
+            <label>Текст *</label>
+            <textarea
+              rows={8}
+              value={form.body}
+              onChange={e => setForm(f => ({ ...f, body: e.target.value }))}
+              placeholder={'Переносы строк сохраняются как есть.\nМожно списком через •'}
+            />
+          </div>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <div className="form-group" style={{ flex: '1 1 160px' }}>
+              <label>Показывать с</label>
+              <input type="date" value={form.starts_on}
+                onChange={e => setForm(f => ({ ...f, starts_on: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ flex: '1 1 160px' }}>
+              <label>Показывать по</label>
+              <input type="date" value={form.ends_on}
+                onChange={e => setForm(f => ({ ...f, ends_on: e.target.value }))} />
+            </div>
+            <div className="form-group" style={{ flex: '0 0 110px' }}>
+              <label>Порядок</label>
+              <input type="number" value={form.sort_order}
+                onChange={e => setForm(f => ({ ...f, sort_order: Number(e.target.value) }))} />
+            </div>
+            <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
+              <label style={{ display: 'inline-flex', alignItems: 'center', gap: 8, cursor: 'pointer', marginBottom: 8 }}>
+                <input type="checkbox" checked={form.is_active} style={{ width: 'auto' }}
+                  onChange={e => setForm(f => ({ ...f, is_active: e.target.checked }))} />
+                Включён
+              </label>
+            </div>
+          </div>
+          {err && <div className="error-msg">{err}</div>}
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-primary btn-sm" onClick={() => void save()}>
+              {form.id ? 'Сохранить' : 'Добавить'}
+            </button>
+            <button className="btn-secondary btn-sm" onClick={() => { setForm(empty); setEditing(false); setErr('') }}>
+              Закрыть
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button className="btn-primary btn-sm" onClick={() => { setForm(empty); setEditing(true) }}>
+          + Добавить баннер
+        </button>
+      )}
+    </div>
+  )
 }

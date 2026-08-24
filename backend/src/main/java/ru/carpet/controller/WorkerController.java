@@ -419,8 +419,16 @@ public class WorkerController {
     // ---------- 9. Доступные (нераспределённые) услуги по роли ----------
 
     /**
-     * V11: услуги без исполнителя, подходящие по роли текущего работника.
-     * Работник может «взять» их себе (см. /take).
+     * V11: услуги, подходящие по роли текущего работника, которые он может взять.
+     *
+     * <p>Правка №4 (20.08): раньше отсюда исчезало всё, что уже кто-то взял, и
+     * присоединиться к работе над одним ковром было невозможно — второго
+     * исполнителя мог назначить только оператор из веба. Теперь отдаём и занятые:
+     * поле {@code assignee_names} говорит, кто уже работает, а {@code is_taken}
+     * позволяет мобильному приложению развести «свободные» и «в работе у коллег».
+     *
+     * <p>Услуги, где работник уже исполнитель, не отдаём — они у него в основном
+     * списке (/services), иначе задвоятся.
      */
     @GetMapping("/{employeeId}/available")
     public List<Map<String, Object>> availableServices(@PathVariable Long employeeId) {
@@ -434,16 +442,25 @@ public class WorkerController {
                 oi.description      AS item_description,
                 it.name             AS item_type_name,
                 o.id                AS order_id,
-                o.client_name       AS client_name
+                o.client_name       AS client_name,
+                EXISTS (SELECT 1 FROM service_assignees sa WHERE sa.order_item_service_id = ois.id) AS is_taken,
+                (SELECT string_agg(e2.name, ', ' ORDER BY e2.name)
+                   FROM service_assignees sa2
+                   JOIN employees e2 ON e2.id = sa2.employee_id
+                  WHERE sa2.order_item_service_id = ois.id) AS assignee_names
               FROM order_item_services ois
               JOIN order_items oi ON oi.id = ois.order_item_id
               JOIN orders o ON o.id = oi.order_id
               JOIN item_types it ON it.id = oi.item_type_id
               LEFT JOIN skus s ON s.id = ois.sku_id
               LEFT JOIN sku_versions sv ON sv.id = ois.sku_version_id
-             WHERE ois.status = 'CREATED'
-               AND NOT EXISTS (SELECT 1 FROM service_assignees sa WHERE sa.order_item_service_id = ois.id)
+             WHERE ois.status IN ('CREATED', 'IN_PROGRESS')
                AND s.exclude_from_status_calc = FALSE
+               -- Свои услуги не показываем: они уже в основном списке работника.
+               AND NOT EXISTS (
+                   SELECT 1 FROM service_assignees sa
+                    WHERE sa.order_item_service_id = ois.id AND sa.employee_id = :eid
+               )
                AND (
                    -- Роль сотрудника включает этот item_type, ИЛИ сотрудник без роли
                    EXISTS (SELECT 1 FROM employees e WHERE e.id = :eid AND e.role_id IS NULL)
@@ -453,27 +470,68 @@ public class WorkerController {
                        WHERE e.id = :eid
                    )
                )
-             ORDER BY o.id, oi.id
+             ORDER BY is_taken, o.id, oi.id
         """, Map.of("eid", employeeId));
     }
 
     /**
-     * V11: работник берёт услугу себе — назначает себя исполнителем и ставит IN_PROGRESS.
+     * V11: работник берёт услугу. Правка №4 (20.08): если услугу уже кто-то взял,
+     * это не ошибка — работник присоединяется вторым исполнителем (совместная стирка
+     * одного ковра — обычная ситуация).
+     *
+     * <p>Необязательное тело {@code {"with_employee_ids": [5, 6]}} — сразу записать
+     * коллег, которые работают вместе с ним, чтобы каждому корректно засчиталась работа.
      */
     @PostMapping("/{employeeId}/take/{serviceId}")
-    public ResponseEntity<?> takeService(@PathVariable Long employeeId, @PathVariable Long serviceId) {
-        // Проверяем что услуга ещё не назначена
-        Long cnt = jdbc.queryForObject(
-                "SELECT COUNT(*) FROM service_assignees WHERE order_item_service_id = :s",
-                Map.of("s", serviceId), Long.class);
-        if (cnt != null && cnt > 0) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Услуга уже назначена другому исполнителю"));
+    public ResponseEntity<?> takeService(@PathVariable Long employeeId, @PathVariable Long serviceId,
+                                         @RequestBody(required = false) Map<String, Object> body) {
+        Integer status = jdbc.queryForList(
+                "SELECT 1 FROM order_item_services WHERE id = :s AND status IN ('CREATED','IN_PROGRESS')",
+                Map.of("s", serviceId), Integer.class).stream().findFirst().orElse(null);
+        if (status == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Услуга уже завершена или отменена"));
         }
-        jdbc.update("INSERT INTO service_assignees (order_item_service_id, employee_id) VALUES (:s, :e)",
-                Map.of("s", serviceId, "e", employeeId));
+
+        // Себя + названных коллег. ON CONFLICT — повторное «взять» не падает.
+        java.util.LinkedHashSet<Long> ids = new java.util.LinkedHashSet<>();
+        ids.add(employeeId);
+        if (body != null && body.get("with_employee_ids") instanceof List<?> raw) {
+            for (Object o : raw) {
+                if (o instanceof Number n) ids.add(n.longValue());
+            }
+        }
+        for (Long id : ids) {
+            jdbc.update("""
+                INSERT INTO service_assignees (order_item_service_id, employee_id)
+                VALUES (:s, :e)
+                ON CONFLICT (order_item_service_id, employee_id) DO NOTHING
+            """, Map.of("s", serviceId, "e", id));
+        }
         jdbc.update("UPDATE order_item_services SET status = 'IN_PROGRESS', updated_at = NOW() WHERE id = :s AND status = 'CREATED'",
                 Map.of("s", serviceId));
-        return ResponseEntity.ok(Map.of("ok", true));
+        // Правка №3 (20.08): статус услуги здесь меняется сырым SQL (нам нужно
+        // взятие без проверок сервисного слоя), поэтому пересчёт статуса позиции
+        // надо дёрнуть руками. Без этого услуга уходила «В работе», а позиция
+        // оставалась «Создана» — оператор видел рассинхрон в карточке заказа.
+        recalcItemStatusByService(serviceId);
+        return ResponseEntity.ok(Map.of("ok", true, "assignees", ids.size()));
+    }
+
+    /**
+     * Пересчитать статус позиции по id её услуги.
+     *
+     * <p>Нужен там, где статус услуги меняется прямым SQL мимо
+     * {@link OrderItemServiceInstanceService#updateStatus} — только он сам зовёт
+     * {@link OrderItemService#recalculateItemStatus}. Тихо игнорируем сбой:
+     * действие водителя/стирщика не должно падать из-за пересчёта.
+     */
+    private void recalcItemStatusByService(Long serviceId) {
+        try {
+            Long itemId = jdbc.queryForObject(
+                    "SELECT order_item_id FROM order_item_services WHERE id = :s",
+                    Map.of("s", serviceId), Long.class);
+            if (itemId != null) orderItemService.recalculateItemStatus(itemId);
+        } catch (Exception ignored) {}
     }
 
     // ---------- 10. Установить PIN при первом входе ----------
@@ -560,8 +618,13 @@ public class WorkerController {
         // Поставить DONE
         jdbc.update("UPDATE order_item_services SET status = 'DONE', updated_at = NOW() WHERE id = :id",
                 Map.of("id", serviceId));
-        // Обновить actual_pickup_date если не заполнена
-        jdbc.update("UPDATE orders SET actual_pickup_date = CURRENT_DATE, actual_pickup_time_slot = '08:00-12:00' WHERE id = :oid AND actual_pickup_date IS NULL",
+        recalcItemStatusByService(serviceId);
+        // Обновить actual_pickup_date если не заполнена.
+        // Слот НЕ проставляем: раньше сюда жёстко писалось '08:00-12:00' — слот из
+        // старого захардкоженного набора, которого нет в справочнике. Такой заказ
+        // попадал на доске логистики в зону «вне графика». Пусть остаётся пустым —
+        // оператор назначит слот перетаскиванием.
+        jdbc.update("UPDATE orders SET actual_pickup_date = CURRENT_DATE WHERE id = :oid AND actual_pickup_date IS NULL",
                 Map.of("oid", orderId));
 
         return ResponseEntity.ok(Map.of("ok", true, "message", "Забор зафиксирован"));
@@ -612,8 +675,9 @@ public class WorkerController {
         // DONE
         jdbc.update("UPDATE order_item_services SET status = 'DONE', updated_at = NOW() WHERE id = :id",
                 Map.of("id", serviceId));
-        // Обновить actual_delivery_date
-        jdbc.update("UPDATE orders SET actual_delivery_date = CURRENT_DATE, actual_delivery_time_slot = '12:00-18:00' WHERE id = :oid AND actual_delivery_date IS NULL",
+        recalcItemStatusByService(serviceId);
+        // Обновить actual_delivery_date. Слот не проставляем — см. комментарий в pickup().
+        jdbc.update("UPDATE orders SET actual_delivery_date = CURRENT_DATE WHERE id = :oid AND actual_delivery_date IS NULL",
                 Map.of("oid", orderId));
         // Заказ → DELIVERED
         jdbc.update("UPDATE orders SET status = 'DELIVERED', version = version + 1, updated_at = NOW() WHERE id = :oid",

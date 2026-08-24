@@ -17,6 +17,10 @@ import java.util.Map;
  *
  * <p>V28: {@code end_time} может быть NULL — это слот с фиксированным временем
  * («доставка строго к 15:00»). Пустая строка от фронта = NULL (см. NULLIF).
+ *
+ * <p>V31: {@code specific_date} — разовый слот. NULL означает обычный шаблон дня
+ * недели (повторяется каждую неделю), заполненная дата — слот действует только
+ * в эту календарную дату и в другие такие же дни недели не попадает.
  */
 @RestController
 @RequestMapping("/api/delivery-slots")
@@ -34,7 +38,8 @@ public class DeliverySlotController {
             "SELECT id, day_of_week, " +
             "  TO_CHAR(start_time, 'HH24:MI') AS start_time, " +
             "  TO_CHAR(end_time,   'HH24:MI') AS end_time, " +
-            "  label, is_active, sort_order " +
+            "  label, is_active, sort_order, " +
+            "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots WHERE is_active = TRUE " +
             "ORDER BY day_of_week, sort_order, start_time",
             Map.of()
@@ -48,7 +53,8 @@ public class DeliverySlotController {
             "SELECT id, day_of_week, " +
             "  TO_CHAR(start_time, 'HH24:MI') AS start_time, " +
             "  TO_CHAR(end_time,   'HH24:MI') AS end_time, " +
-            "  label, is_active, sort_order " +
+            "  label, is_active, sort_order, " +
+            "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots ORDER BY day_of_week, sort_order, start_time",
             Map.of()
         );
@@ -62,15 +68,18 @@ public class DeliverySlotController {
             .addValue("et",    body.get("end_time"))
             .addValue("lbl",   body.get("label"))
             .addValue("act",   body.getOrDefault("is_active", true))
-            .addValue("so",    body.getOrDefault("sort_order", 0));
+            .addValue("so",    body.getOrDefault("sort_order", 0))
+            // V31: разовый слот только на эту дату. null/"" — обычный шаблон дня недели.
+            .addValue("sd",    body.get("specific_date"));
         var kh = new GeneratedKeyHolder();
         jdbc.update(
-            "INSERT INTO delivery_time_slots (day_of_week, start_time, end_time, label, is_active, sort_order) " +
-            "VALUES (:dow, :st::time, NULLIF(:et,'')::time, :lbl, :act, :so)",
+            "INSERT INTO delivery_time_slots (day_of_week, start_time, end_time, label, is_active, sort_order, specific_date) " +
+            "VALUES (:dow, :st::time, NULLIF(:et,'')::time, :lbl, :act, :so, NULLIF(:sd,'')::date)",
             p, kh, new String[]{"id"});
         return jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +
-            "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order " +
+            "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order, " +
+            "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots WHERE id = :id",
             Map.of("id", kh.getKey().longValue()));
     }
@@ -84,14 +93,18 @@ public class DeliverySlotController {
             .addValue("et",    body.get("end_time"))
             .addValue("lbl",   body.get("label"))
             .addValue("act",   body.getOrDefault("is_active", true))
-            .addValue("so",    body.getOrDefault("sort_order", 0));
+            .addValue("so",    body.getOrDefault("sort_order", 0))
+            // V31: разовый слот только на эту дату. null/"" — обычный шаблон дня недели.
+            .addValue("sd",    body.get("specific_date"));
         jdbc.update(
             "UPDATE delivery_time_slots SET day_of_week=:dow, start_time=:st::time, " +
             "end_time=NULLIF(:et,'')::time, " +
-            "label=:lbl, is_active=:act, sort_order=:so, updated_at=NOW() WHERE id=:id", p);
+            "label=:lbl, is_active=:act, sort_order=:so, specific_date=NULLIF(:sd,'')::date, " +
+            "updated_at=NOW() WHERE id=:id", p);
         return jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +
-            "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order " +
+            "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order, " +
+            "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots WHERE id = :id", Map.of("id", id));
     }
 
