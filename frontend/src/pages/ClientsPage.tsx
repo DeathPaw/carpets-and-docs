@@ -505,10 +505,12 @@ export default function ClientsPage() {
     <table>
       <thead>
         <tr>
-          <th>#</th>
+          <th style={{ width: 70 }}>#</th>
           <th>Фамилия Имя</th>
-          <th>Телефон</th>
-          <th>Доп. телефон</th>
+          {/* Ширина под «+7 (931) 254-44-18» целиком: без неё номер разрывался
+              между «-44-» и «18», и строка читалась как два разных значения. */}
+          <th style={{ width: 170 }}>Телефон</th>
+          <th style={{ width: 170 }}>Доп. телефон</th>
           <th>Адрес</th>
           {/* Район убрали — у юрлиц его и так нет, для физлиц он в адресе по сути дублируется. */}
         </tr>
@@ -523,8 +525,8 @@ export default function ClientsPage() {
               {c.name}
               {c.comment && <div style={{ fontSize: 'var(--font-sm)', color: '#888' }}>{c.comment}</div>}
             </td>
-            <td>{c.phone || '—'}</td>
-            <td>{c.extra_phone || '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>{c.phone || '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>{c.extra_phone || '—'}</td>
             <td>{c.address || '—'}</td>
           </tr>
         ))}
@@ -536,12 +538,12 @@ export default function ClientsPage() {
     <table>
       <thead>
         <tr>
-          <th>#</th>
+          <th style={{ width: 70 }}>#</th>
           <th>Организация</th>
-          <th>ИНН</th>
+          <th style={{ width: 130 }}>ИНН</th>
           <th>Контактное лицо</th>
-          <th>Тел. контакта</th>
-          <th>Телефон</th>
+          <th style={{ width: 170 }}>Тел. контакта</th>
+          <th style={{ width: 170 }}>Телефон</th>
           <th>Адрес</th>
         </tr>
       </thead>
@@ -557,8 +559,8 @@ export default function ClientsPage() {
             </td>
             <td>{c.inn || '—'}</td>
             <td>{c.contact_person || '—'}</td>
-            <td>{c.contact_person_phone || '—'}</td>
-            <td>{c.phone || '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>{c.contact_person_phone || '—'}</td>
+            <td style={{ whiteSpace: 'nowrap' }}>{c.phone || '—'}</td>
             <td>{c.address || '—'}</td>
           </tr>
         ))}
