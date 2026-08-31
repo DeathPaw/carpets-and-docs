@@ -3,6 +3,18 @@ import { MapContainer, TileLayer, Marker, Tooltip, useMap } from 'react-leaflet'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
 
+/**
+ * Ключ MapTiler. Задаётся в frontend/.env как VITE_MAPTILER_KEY.
+ *
+ * CARTO, чьи тайлы стояли раньше, с 2025 отдаёт basemaps только по платному
+ * тарифу и без ключа печатает поверх карты «API KEY REQUIRED». У MapTiler есть
+ * постоянный бесплатный тариф и тот же светло-серый стиль, каким была карта.
+ *
+ * Пусто — работаем на тайлах OpenStreetMap France: они без ключа и без
+ * водяных знаков, с русскими названиями, но стиль цветной, не серый.
+ */
+const MAPTILER_KEY: string | undefined = import.meta.env.VITE_MAPTILER_KEY
+
 // Иконки Leaflet через CDN, чтобы не возиться с импортом ассетов из node_modules в Vite.
 delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl
 L.Icon.Default.mergeOptions({
@@ -230,12 +242,28 @@ export default function MapMarkers({
         style={{ height: typeof height === 'number' ? `${height}px` : height, width: '100%' }}
         scrollWheelZoom
       >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/attributions">CARTO</a>'
-          url="https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png"
-          subdomains={['a', 'b', 'c', 'd']}
-          maxZoom={20}
-        />
+        {/* Подложка. CARTO с 2025 отдаёт свои basemaps только по API-ключу и
+            без него печатает поверх тайлов «API KEY REQUIRED» — раньше ключ был
+            не нужен, поэтому его у нас и нет.
+
+            Ключ берём из VITE_CARTO_API_KEY. Есть ключ — рисуем прежний светло-серый
+            CARTO. Нет — светло-серая подложка Esri плюс слой дорог с названиями:
+            она без ключа и без водяных знаков. Серверы OSM тут не годятся —
+            их политика запрещает использование сторонними приложениями. */}
+        {MAPTILER_KEY ? (
+          <TileLayer
+            attribution='&copy; <a href="https://www.maptiler.com/copyright/">MapTiler</a> &copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>'
+            url={`https://api.maptiler.com/maps/dataviz-light/{z}/{x}/{y}.png?key=${MAPTILER_KEY}`}
+            maxZoom={20}
+          />
+        ) : (
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a>, tiles by <a href="https://openstreetmap.fr/">OSM France</a>'
+            url="https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png"
+            subdomains={['a', 'b', 'c']}
+            maxZoom={20}
+          />
+        )}
         <MapTuning points={valid} />
         {groups.map((g, i) => {
           const isCluster = g.points.length > 1
