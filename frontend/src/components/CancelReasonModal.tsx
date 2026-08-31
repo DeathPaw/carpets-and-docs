@@ -49,7 +49,7 @@ export default function CancelReasonModal({
             autoFocus
             placeholder={placeholder}
           />
-          <div style={{ fontSize: '0.85em', color: tooShort ? '#e67e22' : '#27ae60', marginTop: 2 }}>
+          <div style={{ fontSize: 'var(--font-sm)', color: tooShort ? '#e67e22' : '#27ae60', marginTop: 2 }}>
             {tooShort
               ? `Ещё минимум ${MIN_LEN - trimmed.length} символ(ов)`
               : 'Причина введена'}

@@ -90,8 +90,10 @@ export default function MultiSelectFilter({
         type="button"
         onClick={() => setOpen(o => !o)}
         style={{
-          width: '100%', minHeight: 32,
-          textAlign: 'left', padding: '6px 10px',
+          // Высота общая с полями ввода рядом (см. --control-h в index.css):
+          // раньше триггер был на пару пикселей ниже соседнего input.
+          width: '100%', height: 'var(--control-h)',
+          textAlign: 'left', padding: '0 10px',
           border: '1px solid #ccc', borderRadius: 4, background: '#fff', cursor: 'pointer',
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}
@@ -111,7 +113,7 @@ export default function MultiSelectFilter({
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <button
               type="button"
-              style={{ background: 'none', border: 'none', color: '#3498db', cursor: 'pointer', padding: 0, fontSize: '0.85em' }}
+              style={{ background: 'none', border: 'none', color: '#3498db', cursor: 'pointer', padding: 0, fontSize: 'var(--font-sm)' }}
               onClick={() => onChange([])}
               disabled={value.length === 0}
             >
@@ -119,7 +121,7 @@ export default function MultiSelectFilter({
             </button>
             <button
               type="button"
-              style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: 0, fontSize: '0.85em' }}
+              style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', padding: 0, fontSize: 'var(--font-sm)' }}
               onClick={() => { setOpen(false); setSearch('') }}
             >
               Закрыть
@@ -134,13 +136,13 @@ export default function MultiSelectFilter({
               placeholder="Поиск..."
               style={{
                 width: '100%', padding: '4px 8px', marginBottom: 6,
-                border: '1px solid #ddd', borderRadius: 3, fontSize: '0.9em',
+                border: '1px solid #ddd', borderRadius: 3, fontSize: 'var(--font-sm)',
                 boxSizing: 'border-box',
               }}
             />
           )}
           {filteredOptions.length === 0 && (
-            <div style={{ color: '#aaa', fontSize: '0.85em', padding: '4px 0' }}>
+            <div style={{ color: '#aaa', fontSize: 'var(--font-sm)', padding: '4px 0' }}>
               Ничего не найдено
             </div>
           )}

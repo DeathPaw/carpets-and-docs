@@ -31,6 +31,9 @@ public class SkuService {
 
     public List<Sku> findAll() { return repository.findAll(false); }
 
+    /** V37: нужен ли услуге исполнитель для смены статуса (см. SkuRepository). */
+    public boolean requiresAssignee(Long skuId) { return repository.requiresAssignee(skuId); }
+
     public Sku findById(Long id) {
         return repository.findById(id).orElseThrow(() -> new EntityNotFoundException("Sku not found: " + id));
     }

@@ -87,7 +87,7 @@ export default function SpbDistrictMap({ data, onDistrictClick }: Props) {
                 <div style={{
                   position: 'absolute', top: '100%', left: '50%', transform: 'translateX(-50%)',
                   marginTop: 4, background: '#1e293b', color: '#fff', padding: '5px 9px',
-                  borderRadius: 5, fontSize: '0.7em', whiteSpace: 'nowrap',
+                  borderRadius: 5, fontSize: 'var(--font-sm)', whiteSpace: 'nowrap',
                   boxShadow: '0 2px 8px rgba(0,0,0,0.3)',
                 }}>
                   <strong>{d.name}</strong>
@@ -100,13 +100,13 @@ export default function SpbDistrictMap({ data, onDistrictClick }: Props) {
       </div>
 
       {/* Легенда — расшифровка номеров */}
-      <div style={{ flex: '0 0 200px', fontSize: '0.8em' }}>
+      <div style={{ flex: '0 0 200px', fontSize: 'var(--font-sm)' }}>
         <table style={{ width: '100%', borderCollapse: 'collapse' }}>
           <thead>
             <tr>
-              <th style={{ textAlign: 'left', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: '0.9em' }}>№</th>
-              <th style={{ textAlign: 'left', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: '0.9em' }}>Район</th>
-              <th style={{ textAlign: 'right', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: '0.9em' }}>Заказов</th>
+              <th style={{ textAlign: 'left', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: 'var(--font-sm)' }}>№</th>
+              <th style={{ textAlign: 'left', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: 'var(--font-sm)' }}>Район</th>
+              <th style={{ textAlign: 'right', padding: '3px 6px', borderBottom: '1px solid #ddd', fontSize: 'var(--font-sm)' }}>Заказов</th>
             </tr>
           </thead>
           <tbody>

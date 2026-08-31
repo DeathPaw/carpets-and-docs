@@ -124,13 +124,13 @@ function renderStructuredPoint(p: MapPoint) {
     return (
       <>
         {p.title && <div style={{ fontWeight: 600 }}>{p.title}</div>}
-        {p.description && <div style={{ fontSize: '0.85em', color: '#555' }}>{p.description}</div>}
+        {p.description && <div style={{ fontSize: 'var(--font-sm)', color: '#555' }}>{p.description}</div>}
       </>
     )
   }
   const kindLabel = p.kind === 'pickup' ? 'Забор' : p.kind === 'delivery' ? 'Доставка' : null
   return (
-    <div style={{ fontSize: '0.85em', lineHeight: 1.45 }}>
+    <div style={{ fontSize: 'var(--font-sm)', lineHeight: 1.45 }}>
       {(p.date || p.time) && (
         <div style={{ fontWeight: 600, color: '#2c3e50' }}>
           {p.date ? new Date(p.date).toLocaleDateString('ru', { weekday: 'short', day: 'numeric', month: 'short' }) : ''}
@@ -257,7 +257,7 @@ export default function MapMarkers({
                       {g.points.length} {g.points.length === 1 ? 'заказ' : 'заказов'} в этой точке
                     </div>
                     {g.points.map((p, idx) => (
-                      <div key={idx} style={{ fontSize: '0.85em', marginTop: idx > 0 ? 6 : 0, paddingTop: idx > 0 ? 6 : 0, borderTop: idx > 0 ? '1px solid #ecf0f1' : undefined }}>
+                      <div key={idx} style={{ fontSize: 'var(--font-sm)', marginTop: idx > 0 ? 6 : 0, paddingTop: idx > 0 ? 6 : 0, borderTop: idx > 0 ? '1px solid #ecf0f1' : undefined }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                           <span style={{
                             display: 'inline-block', width: 10, height: 10, borderRadius: 2,

@@ -125,7 +125,11 @@ public class WorkerController {
             JOIN orders      o           ON o.id   = oi.order_id
             WHERE sa.employee_id = :eid
               AND ois.status <> 'CANCELLED'
-              AND o.status NOT IN ('CANCELLED','COMPLETED')
+              -- Правка №2 (31.08): выполненную работу показываем всегда, даже когда
+              -- заказ уже оплачен и закрыт. Раньше COMPLETED-заказы отсекались, и
+              -- стирщик не мог вернуться к своему ковру, чтобы посмотреть фото и
+              -- размеры. Активные услуги по-прежнему прячем у отменённых заказов.
+              AND (ois.status = 'DONE' OR o.status NOT IN ('CANCELLED','COMPLETED'))
             ORDER BY
                 CASE ois.status
                     WHEN 'IN_PROGRESS' THEN 1
@@ -440,6 +444,12 @@ public class WorkerController {
                 COALESCE(sv.name, s.name) AS service_name,
                 oi.id               AS item_id,
                 oi.description      AS item_description,
+                -- Правка №3 (31.08): размеры видны ДО взятия в работу — стирщик
+                -- заранее оценивает габариты и распределяет нагрузку.
+                oi.length           AS item_length,
+                oi.width            AS item_width,
+                oi.area             AS item_area,
+                oi.weight           AS item_weight,
                 it.name             AS item_type_name,
                 o.id                AS order_id,
                 o.client_name       AS client_name,

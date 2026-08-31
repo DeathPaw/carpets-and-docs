@@ -91,7 +91,7 @@ export default function NotificationBell() {
         {count > 0 && (
           <span style={{
             position: 'absolute', top: 2, right: 2,
-            background: '#e74c3c', color: '#fff', fontSize: 10, fontWeight: 700,
+            background: '#e74c3c', color: '#fff', fontSize: 'var(--font-sm)', fontWeight: 700,
             borderRadius: '50%', minWidth: 16, height: 16, lineHeight: '16px',
             textAlign: 'center', padding: '0 4px',
           }}>{count > 99 ? '99+' : count}</span>
@@ -111,7 +111,7 @@ export default function NotificationBell() {
             <strong>Уведомления</strong>
             {items.length > 0 && (
               <button onClick={markAllRead} style={{
-                background: 'none', border: 'none', color: '#3498db', cursor: 'pointer', fontSize: 12,
+                background: 'none', border: 'none', color: '#3498db', cursor: 'pointer', fontSize: 'var(--font-sm)',
               }}>Прочитать все</button>
             )}
           </div>
@@ -123,11 +123,11 @@ export default function NotificationBell() {
               onClick={() => navigate_to(n)}
               style={{
                 padding: '10px 14px', borderBottom: '1px solid #f5f5f5',
-                cursor: 'pointer', fontSize: 13,
+                cursor: 'pointer', fontSize: 'var(--font-sm)',
               }}
             >
               <div>{n.message}</div>
-              <div style={{ fontSize: 11, color: '#888', marginTop: 2 }}>
+              <div style={{ fontSize: 'var(--font-sm)', color: '#888', marginTop: 2 }}>
                 {new Date(n.created_at).toLocaleString('ru')}
               </div>
             </div>

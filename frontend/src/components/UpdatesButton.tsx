@@ -57,7 +57,7 @@ export default function UpdatesButton() {
           background: '#2980b9', color: '#fff',
           border: '1px solid rgba(255,255,255,0.12)',
           borderRadius: 6, padding: '8px 14px',
-          fontSize: '0.9em', fontWeight: 500,
+          fontSize: 'var(--font-sm)', fontWeight: 500,
           boxShadow: '0 4px 12px rgba(0,0,0,0.18)', cursor: 'pointer',
           opacity: 0.85, transition: 'opacity 0.12s',
         }}
@@ -68,7 +68,7 @@ export default function UpdatesButton() {
         {unread > 0 && (
           <span style={{
             display: 'inline-block', marginLeft: 6, minWidth: 18, padding: '0 5px',
-            background: '#e74c3c', borderRadius: 9, fontSize: '0.8em', lineHeight: '18px',
+            background: '#e74c3c', borderRadius: 9, fontSize: 'var(--font-sm)', lineHeight: '18px',
           }}>{unread}</span>
         )}
       </button>
@@ -88,7 +88,7 @@ export default function UpdatesButton() {
             <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
               <h2 style={{ margin: 0 }}>Обновления</h2>
               {banners.length > 1 && (
-                <span style={{ color: 'var(--c-text-muted)', fontSize: '0.85em' }}>
+                <span style={{ color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)' }}>
                   {banners.length} сообщения
                 </span>
               )}
@@ -107,7 +107,7 @@ export default function UpdatesButton() {
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline' }}>
                     <strong style={{ fontSize: '1.02em' }}>{b.title}</strong>
                     {b.starts_on && (
-                      <span style={{ color: 'var(--c-text-muted)', fontSize: '0.82em', whiteSpace: 'nowrap' }}>
+                      <span style={{ color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)', whiteSpace: 'nowrap' }}>
                         {new Date(b.starts_on).toLocaleDateString('ru')}
                       </span>
                     )}
@@ -116,7 +116,7 @@ export default function UpdatesButton() {
                       переносы сохраняем как есть. */}
                   <div style={{
                     marginTop: 6, whiteSpace: 'pre-wrap', lineHeight: 1.55,
-                    fontSize: '0.93em', color: 'var(--c-text)',
+                    fontSize: 'var(--font-sm)', color: 'var(--c-text)',
                   }}>{b.body}</div>
                 </div>
               ))}

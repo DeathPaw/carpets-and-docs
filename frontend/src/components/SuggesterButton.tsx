@@ -163,7 +163,7 @@ const SECTION_ANALYTICS: Suggestion[] = [
 const SECTION_CLIENTS: Suggestion[] = [
   {
     title: 'Найти клиента',
-    body: <>Раздельные фильтры: имя, телефон, № заказа, Legacy ID (оба ищут через заказ → клиент). Плюс общий текстовый поиск (адрес, ИНН, орг).</>,
+    body: <>Одно поле поиска: имя, телефон, адрес, ИНН, организация. Отдельно — «№ заказа» (клиент находится через заказ) и «Район».</>,
   },
   {
     title: 'Создать клиента',
@@ -270,6 +270,33 @@ const SECTION_ERROR_LOG: Suggestion[] = [
   },
 ]
 
+const SECTION_SUPPLY: Suggestion[] = [
+  {
+    title: 'Зачем этот раздел',
+    body: <>Заявки на расходники от производства: что нужно, сколько и к какому сроку. Раньше это передавали устно и теряли.</>,
+  },
+  {
+    title: 'Как ведётся заявка',
+    body: <>Три колонки: «Создано» → «В работе» (согласована / заказана) → «Готово». Кнопка со стрелкой вперёд двигает на следующий статус, «↶» — на один шаг назад.</>,
+  },
+  {
+    title: 'Цена',
+    body: <>Ожидаемую цену можно указать сразу при создании — это план. При получении она подставится в поле фактической суммы, останется поправить, если разошлось.</>,
+  },
+  {
+    title: 'Куда уходят деньги',
+    body: <>При переводе в «Получена» указываете дату закупки и фактическую сумму. Сумма автоматически попадает в «Расходы» → «Расходные материалы» за месяц <b>даты закупки</b> и участвует в расчёте доходности.</>,
+  },
+  {
+    title: 'Отмена',
+    body: <>Только с причиной от 10 символов — чтобы потом было понятно, почему материал так и не купили. Причина остаётся на карточке.</>,
+  },
+  {
+    title: 'Что горит',
+    body: <>Кнопка «Просроченные» оставляет только заявки с прошедшим сроком. Они же попадают на «Главную» — блок под проблемными заказами показывает всё, что нужно в ближайшую неделю.</>,
+  },
+]
+
 const SECTION_AUDIT_LOG: Suggestion[] = [
   {
     title: 'Лог действий',
@@ -285,6 +312,7 @@ const SUGGESTIONS_BY_ROUTE: { match: RouteMatcher; section: string; items: Sugge
   { match: startsWith('/production'),                   section: 'Производство', items: SECTION_PRODUCTION },
   { match: startsWith('/analytics'),                    section: 'Аналитика',    items: SECTION_ANALYTICS },
   { match: startsWith('/clients'),                      section: 'Клиенты',      items: SECTION_CLIENTS },
+  { match: startsWith('/supply'),                       section: 'Закупки',      items: SECTION_SUPPLY },
   // V19 (#9): супервизорские/админские разделы.
   { match: startsWith('/references'),                   section: 'Справочники',  items: SECTION_REFERENCES },
   { match: startsWith('/employees'),                    section: 'Сотрудники',   items: SECTION_EMPLOYEES },
@@ -339,7 +367,7 @@ export default function SuggesterButton() {
           background: '#16a085', color: '#fff',
           border: '1px solid rgba(255,255,255,0.12)',
           borderRadius: 6, padding: '8px 14px',
-          fontSize: '0.9em', fontWeight: 500,
+          fontSize: 'var(--font-sm)', fontWeight: 500,
           boxShadow: '0 4px 12px rgba(0,0,0,0.18)', cursor: 'pointer',
           opacity: 0.85, transition: 'opacity 0.12s',
         }}
@@ -361,7 +389,7 @@ export default function SuggesterButton() {
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
               <div>
                 <h2 style={{ margin: 0, fontSize: '1.15em' }}>💡 Что делать дальше</h2>
-                <div style={{ fontSize: '0.85em', color: '#7f8c8d', marginTop: 2 }}>
+                <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 2 }}>
                   Раздел: <strong>{sectionName}</strong>
                 </div>
               </div>
@@ -394,22 +422,22 @@ export default function SuggesterButton() {
                       style={{
                         width: '100%', textAlign: 'left',
                         background: 'transparent', border: 'none', cursor: s.alwaysOpen && !s.navigateTo ? 'default' : 'pointer',
-                        padding: '10px 12px', fontSize: '0.95em', fontWeight: 600, color: '#16a085',
+                        padding: '10px 12px', fontSize: 'var(--font-sm)', fontWeight: 600, color: '#16a085',
                         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                       }}
                     >
                       <span>{s.title}</span>
                       {!s.alwaysOpen && (
-                        <span style={{ fontSize: '0.85em', color: '#7f8c8d', marginLeft: 8 }}>
+                        <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginLeft: 8 }}>
                           {isOpen ? '▴' : '▾'}
                         </span>
                       )}
                       {s.navigateTo && (
-                        <span style={{ fontSize: '0.78em', color: '#7f8c8d', marginLeft: 8 }}>→</span>
+                        <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginLeft: 8 }}>→</span>
                       )}
                     </button>
                     {isOpen && (
-                      <div style={{ padding: '0 12px 12px', fontSize: '0.88em', color: '#34495e', lineHeight: 1.45 }}>
+                      <div style={{ padding: '0 12px 12px', fontSize: 'var(--font-sm)', color: '#34495e', lineHeight: 1.45 }}>
                         {s.body}
                       </div>
                     )}
@@ -417,7 +445,7 @@ export default function SuggesterButton() {
                 )
               })}
             </div>
-            <div style={{ marginTop: 12, fontSize: '0.78em', color: '#95a5a6' }}>
+            <div style={{ marginTop: 12, fontSize: 'var(--font-sm)', color: '#95a5a6' }}>
               Подсказки контекстные — меняются от страницы.
               На каждый шаг — короткое описание; «Наполнить заказ» / «Печать маршрутного листа» — раскрыты сразу как наиболее частые.
             </div>

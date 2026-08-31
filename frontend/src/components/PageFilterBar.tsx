@@ -2,6 +2,19 @@ import type { ReactNode } from 'react'
 import MultiSelectFilter from './MultiSelectFilter'
 
 /**
+ * Ширины трёх контролов центральной группы фильтров.
+ *
+ * Вынесены в константу, потому что их использует не только PageFilterBar:
+ * у «Закупок» свой набор фильтров (месяц / № закупки / поиск), но геометрия
+ * обязана совпадать до пикселя — иначе группа «прыгает» по ширине при
+ * переходе между разделами, ровно то, от чего мы уходили центровкой.
+ */
+export const FILTER_WIDTHS = { first: 180, second: 120, third: 300 } as const
+
+/** Отступ от левого края контента до центра группы: (1400 − 48) / 2. */
+export const FILTER_CENTER = 'min(50%, 676px)'
+
+/**
  * Единая шапка страницы с фильтрами — Заказы / Позиции / Производство.
  *
  * Ключевое: группа фильтров позиционируется АБСОЛЮТНО по центру ширины контента,
@@ -52,8 +65,8 @@ export default function PageFilterBar({
 
             transform создаёт свой контекст наложения, поэтому z-index задаём
             явно: иначе раскрытые списки фильтров смешивались с таблицей под ними. */}
-        <div style={{
-          position: 'absolute', left: 'min(50%, 676px)', transform: 'translateX(-50%)',
+        <div className="page-filters" style={{
+          position: 'absolute', left: FILTER_CENTER, transform: 'translateX(-50%)',
           zIndex: 100,
           display: 'flex', gap: 8, alignItems: 'center',
         }}>
@@ -63,21 +76,21 @@ export default function PageFilterBar({
             value={districtValue}
             onChange={onDistrictChange}
             placeholder="Район: все"
-            width={180}
+            width={FILTER_WIDTHS.first}
           />
           <input
             type="number"
             value={orderNo}
             onChange={e => onOrderNoChange(e.target.value)}
             placeholder="№ заказа"
-            style={{ width: 120 }}
+            style={{ width: FILTER_WIDTHS.second }}
             title="Фильтр по номеру заказа"
           />
           <input
             value={search}
             onChange={e => onSearchChange(e.target.value)}
             placeholder="Имя клиента / телефон / legacy ID"
-            style={{ width: 300 }}
+            style={{ width: FILTER_WIDTHS.third }}
             title="Частичное совпадение по имени клиента, телефону или legacy ID"
           />
         </div>
@@ -89,4 +102,13 @@ export default function PageFilterBar({
       {extra}
     </div>
   )
+}
+
+/**
+ * Стиль главной кнопки страницы — «+ Новый заказ», «+ Новый клиент»,
+ * «+ Новая заявка». Фиксированная ширина, чтобы кнопка стояла на одном месте
+ * и одинаково выглядела во всех разделах.
+ */
+export const pageActionBtn: React.CSSProperties = {
+  width: 170, textAlign: 'center', whiteSpace: 'nowrap',
 }

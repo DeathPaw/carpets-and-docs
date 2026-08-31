@@ -1,10 +1,12 @@
 import { useState } from 'react'
 
 /**
- * Раскрывающаяся «памятка» по статусам — что означает каждый статус
- * и когда он ставится автоматически. Висит рядом с бейджем статуса.
+ * «Памятка» по статусам — что означает каждый статус и когда он ставится.
  *
- * Закрыта по умолчанию. По клику разворачивается прямо под собой.
+ * Раньше это была отдельная кнопка «? памятка» рядом со статусом: она занимала
+ * место в самой ценной строке карточки и читалась как ещё одно действие.
+ * Теперь компонент оборачивает сам бейдж статуса — памятка всплывает при
+ * наведении на него, а клик её закрепляет (чтобы можно было увести курсор).
  */
 
 interface StatusInfo {
@@ -52,33 +54,32 @@ const TRIGGER_LABELS: Record<string, string> = {
   payment: 'после оплаты',
 }
 
-export default function StatusLegend() {
-  const [open, setOpen] = useState(false)
+export default function StatusLegend({ children }: { children: React.ReactNode }) {
+  const [hover, setHover] = useState(false)
+  /** Клик «закрепляет» памятку: иначе она гаснет, стоит увести курсор. */
+  const [pinned, setPinned] = useState(false)
+  const open = hover || pinned
   return (
-    <div style={{ display: 'inline-block', position: 'relative' }}>
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        title="Памятка: что означает каждый статус"
-        style={{
-          background: 'none', border: '1px solid #bdc3c7', borderRadius: 4,
-          color: '#7f8c8d', cursor: 'pointer', padding: '2px 8px', fontSize: '0.78em',
-          marginLeft: 8,
-        }}
-      >
-        ? памятка
-      </button>
+    <span
+      style={{ display: 'inline-block', position: 'relative', cursor: 'help' }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}
+      onClick={() => setPinned(p => !p)}
+      title="Что означает статус — наведите или нажмите"
+    >
+      {children}
       {open && (
         <div
-          onMouseLeave={() => setOpen(false)}
           style={{
-            position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 50,
+            // top: 100% без внешнего отступа — иначе между бейджем и панелью
+            // появляется зазор, курсор его пересекает и памятка закрывается.
+            position: 'absolute', top: '100%', left: 0, zIndex: 50,
             background: '#fff', border: '1px solid #ddd', borderRadius: 6,
-            boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 12,
-            minWidth: 380, maxWidth: 480,
+            boxShadow: '0 4px 16px rgba(0,0,0,0.12)', padding: 12, marginTop: 2,
+            minWidth: 380, maxWidth: 480, cursor: 'default',
           }}
         >
-          <div style={{ fontSize: '0.85em', color: '#555', marginBottom: 8 }}>
+          <div style={{ fontSize: 'var(--font-sm)', color: '#555', marginBottom: 8 }}>
             Какой статус что значит и как ставится:
           </div>
           {ORDER_STATUSES.map(s => (
@@ -86,7 +87,7 @@ export default function StatusLegend() {
               <span className={`badge badge-${s.status.toLowerCase()}`} style={{ flexShrink: 0, minWidth: 110, textAlign: 'center' }}>
                 {s.label}
               </span>
-              <div style={{ fontSize: '0.85em' }}>
+              <div style={{ fontSize: 'var(--font-sm)' }}>
                 <span style={{ color: '#333' }}>{s.description}</span>
                 <span style={{ color: '#95a5a6', marginLeft: 4 }}>· {TRIGGER_LABELS[s.trigger]}</span>
               </div>
@@ -94,6 +95,6 @@ export default function StatusLegend() {
           ))}
         </div>
       )}
-    </div>
+    </span>
   )
 }

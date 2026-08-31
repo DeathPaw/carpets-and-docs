@@ -60,7 +60,7 @@ export default function LoginPage() {
       }}>
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{ fontSize: 28, fontWeight: 700, letterSpacing: 1 }}>УЧЁТ ЗАКАЗОВ</div>
-          <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>Система управления производством</div>
+          <div style={{ fontSize: 'var(--font-sm)', color: '#888', marginTop: 4 }}>Система управления производством</div>
         </div>
 
         <div className="form-group">
@@ -90,7 +90,7 @@ export default function LoginPage() {
           className="btn-primary"
           onClick={submit}
           disabled={loading}
-          style={{ width: '100%', padding: '10px', fontSize: 15 }}
+          style={{ width: '100%', padding: '10px', fontSize: 14 }}
         >
           {loading ? 'Вход...' : 'Войти'}
         </button>
@@ -101,7 +101,7 @@ export default function LoginPage() {
             onClick={() => navigate('/worker-login')}
             style={{
               background: 'transparent', border: 'none', color: '#3498db',
-              fontSize: 13, cursor: 'pointer', textDecoration: 'underline',
+              fontSize: 'var(--font-sm)', cursor: 'pointer', textDecoration: 'underline',
             }}
           >
             Вход для работника →

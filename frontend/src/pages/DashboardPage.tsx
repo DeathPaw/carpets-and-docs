@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { getDashboard, getProblemOrders, type ProblemOrderCard, type ProblemOrdersResponse } from '../api/analytics'
+import {
+  getUpcomingSupplyRequests, SUPPLY_STATUS_LABELS, type SupplyRequest,
+} from '../api/supplyRequests'
 
 /** Период автообновления главной — Спринт B, Миша: «дашборд для руководителя
  *  должен сам обновляться, чтобы быть первым в курсе проблем». */
@@ -53,22 +56,47 @@ const STATUS_WIDGETS: Widget[] = [
 // на детальные карточки: вместо «4» — список конкретных заказов с причиной,
 // клиентом и адресом. Логика собирается прямо в JSX ниже через renderProblemColumn.
 
+/** Кнопка-ссылка в заголовке секции Главной: «Все заказы», «Все заявки».
+ *  Одна ширина — иначе блоки смотрятся сдвинутыми друг относительно друга. */
+const dashboardActionBtn: React.CSSProperties = { width: 150, whiteSpace: 'nowrap' }
+
+/** Заголовок секции — единый стиль для всех блоков Главной. */
+const SECTION_TITLE: React.CSSProperties = {
+  fontSize: 'var(--font-sm)', color: '#95a5a6', fontWeight: 600,
+  textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 8px 0',
+}
+
+/** Сколько строк показываем внутри одной проблемной колонки.
+ *  Бэк отдаёт до 5, но Главная должна помещаться в экран — остальные
+ *  доступны по ссылке «и ещё N». */
+const PROBLEM_ROWS = 3
+
+/** Столько же для блока закупок — остальное по ссылке «и ещё N». */
+const SUPPLY_ROWS = 3
+
 export default function DashboardPage() {
   const navigate = useNavigate()
   const [data, setData] = useState<Record<string, number>>({})
   const [problems, setProblems] = useState<ProblemOrdersResponse | null>(null)
   const [loading, setLoading] = useState(true)
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+  /** V33: открытые заявки на закупку со сроком в ближайшие 7 дней. */
+  const [supplyUpcoming, setSupplyUpcoming] = useState<SupplyRequest[]>([])
 
   useEffect(() => {
     let alive = true
 
     const fetchAll = async () => {
       try {
-        const [d, p] = await Promise.all([getDashboard(), getProblemOrders()])
+        const [d, p, sup] = await Promise.all([
+          getDashboard(),
+          getProblemOrders(),
+          getUpcomingSupplyRequests(7).catch(() => [] as SupplyRequest[]),
+        ])
         if (!alive) return
         setData(d)
         setProblems(p)
+        setSupplyUpcoming(sup)
         setLastRefresh(new Date())
       } catch {
         // silent — на фоне обновляется; первый промах через 1 минуту попробует снова
@@ -103,7 +131,10 @@ export default function DashboardPage() {
           background: '#fff',
           border: '1px solid #e6e9ec',
           borderRadius: 10,
-          padding: '24px 20px',
+          // Компактнее прежнего (было 24/20 и цифра 32px): вся Главная должна
+          // помещаться в экран без прокрутки — оператор смотрит её как сводку,
+          // а не листает.
+          padding: '12px 14px',
           cursor: 'pointer',
           transition: 'border-color 0.15s, box-shadow 0.15s, transform 0.15s',
           textAlign: 'left',
@@ -119,17 +150,17 @@ export default function DashboardPage() {
           e.currentTarget.style.transform = 'none'
         }}
       >
-        <div style={{ color: '#7f8c8d', fontSize: 13, marginBottom: 8, letterSpacing: 0.2 }}>
+        <div style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)', marginBottom: 2, letterSpacing: 0.2 }}>
           {w.label}
         </div>
         <div style={{
-          fontSize: 32, fontWeight: 600, lineHeight: 1.1, color: valueColor,
+          fontSize: 24, fontWeight: 600, lineHeight: 1.15, color: valueColor,
           fontVariantNumeric: 'tabular-nums',
           display: 'flex', alignItems: 'baseline', gap: 8,
         }}>
           {value}
           {isLeads && totalLeads > value && (
-            <span style={{ fontSize: 14, fontWeight: 400, color: '#95a5a6' }}>
+            <span style={{ fontSize: 'var(--font-sm)', fontWeight: 400, color: '#95a5a6' }}>
               / {totalLeads} всего
             </span>
           )}
@@ -140,58 +171,56 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <div className="page-header"><h1>Главная</h1></div>
+      <div className="page-header" style={{ marginBottom: 12 }}><h1 style={{ margin: 0 }}>Главная</h1></div>
 
-      {/* Блок 1: «На сегодня» — что физически нужно делать сегодня. */}
-      <section data-tour="dashboard-today" style={{ marginBottom: 28 }}>
-        <h2 style={{
-          fontSize: 14, color: '#95a5a6', fontWeight: 600,
-          textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 12px 0',
-        }}>
-          На сегодня
-        </h2>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 14,
-        }}>
-          {TODAY_WIDGETS.map(renderCard)}
-        </div>
-      </section>
+      {/* Блоки 1 и 2 стоят рядом: «На сегодня» — это всего две плитки, и
+          отдельной строкой они съедали высоту, из-за которой Главная не
+          помещалась в экран. На узких экранах .dashboard-top разворачивается
+          обратно в две строки (см. index.css). */}
+      <div className="dashboard-top">
+        {/* Блок 1: «На сегодня» — что физически нужно делать сегодня. */}
+        <section data-tour="dashboard-today">
+          <h2 style={SECTION_TITLE}>На сегодня</h2>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+            gap: 10,
+          }}>
+            {TODAY_WIDGETS.map(renderCard)}
+          </div>
+        </section>
 
-      {/* Блок 2: «По статусам» — состояние пайплайна. */}
-      <section data-tour="dashboard-statuses" style={{ marginBottom: 28 }}>
-        <h2 style={{
-          fontSize: 14, color: '#95a5a6', fontWeight: 600,
-          textTransform: 'uppercase', letterSpacing: 1.2, margin: '0 0 12px 0',
-        }}>
-          По статусам
-        </h2>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-          gap: 14,
-        }}>
-          {STATUS_WIDGETS.map(renderCard)}
-        </div>
-      </section>
+        {/* Блок 2: «По статусам» — состояние пайплайна. */}
+        <section data-tour="dashboard-statuses">
+          <h2 style={SECTION_TITLE}>По статусам</h2>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
+            gap: 10,
+          }}>
+            {STATUS_WIDGETS.map(renderCard)}
+          </div>
+        </section>
+      </div>
 
       {/* Блок 3: «Проблемные заказы» — теперь карточки с деталями (Спринт B).
           Не голые счётчики «4», а список из реальных карточек: номер, клиент,
           причина, дата. Клик — провалиться в заказ. */}
-      <section data-tour="dashboard-problems">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '0 0 12px 0' }}>
-          <h2 style={{
-            fontSize: 14, color: '#c0392b', fontWeight: 600,
-            textTransform: 'uppercase', letterSpacing: 1.2, margin: 0,
-          }}>
+      <section data-tour="dashboard-problems" style={{ marginTop: 16 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', margin: '0 0 8px 0' }}>
+          <h2 style={{ ...SECTION_TITLE, color: '#c0392b', margin: 0 }}>
             Проблемные заказы
           </h2>
-          {lastRefresh && (
-            <span style={{ fontSize: 11, color: '#95a5a6' }}>
-              обновлено в {lastRefresh.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })} · авто-обновление каждую минуту
-            </span>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            {lastRefresh && (
+              <span style={{ fontSize: 'var(--font-sm)', color: '#95a5a6' }}>
+                обновлено в {lastRefresh.toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })} · авто-обновление каждую минуту
+              </span>
+            )}
+            <button className="btn-secondary" style={dashboardActionBtn} onClick={() => navigate('/orders')}>
+              Все заказы →
+            </button>
+          </div>
         </div>
         {(() => {
           if (!problems) return null
@@ -203,8 +232,8 @@ export default function DashboardPage() {
           if (totalProblems === 0) {
             return (
               <div style={{
-                padding: '14px 18px', borderRadius: 10,
-                background: '#eafaf1', color: '#27ae60', fontSize: 14,
+                padding: '10px 14px', borderRadius: 10,
+                background: '#eafaf1', color: '#27ae60', fontSize: 'var(--font-sm)',
               }}>
                 ✓ Проблемных заказов нет
               </div>
@@ -213,8 +242,8 @@ export default function DashboardPage() {
           return (
             <div style={{
               display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: 14,
+              gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+              gap: 10,
             }}>
               {renderProblemColumn('Просрочка по факт. дате', problems.overdue_actual, data['overdue_actual'] ?? 0, navigate, '#c0392b',
                 `/orders?statuses=${ACTIVE_STATUSES}&overdueActual=true`)}
@@ -232,6 +261,85 @@ export default function DashboardPage() {
           )
         })()}
       </section>
+
+      {/* V33: открытые заявки на закупку со сроком в ближайшую неделю.
+          Стоят под проблемными заказами — это тоже «горит», но по материалам,
+          а не по заказам. Просроченные попадают сюда же и подсвечены красным.
+          Блок показываем всегда: раньше он исчезал при пустом списке, и было
+          непонятно — заявок нет или раздел куда-то делся. */}
+      <section style={{ marginTop: 16 }}>
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          marginBottom: 8, gap: 12, flexWrap: 'wrap',
+        }}>
+          <h2 style={{ ...SECTION_TITLE, color: '#d35400', margin: 0 }}>
+            Закупки на ближайшую неделю
+          </h2>
+          <button className="btn-secondary" style={dashboardActionBtn} onClick={() => navigate('/supply')}>
+            Все заявки →
+          </button>
+        </div>
+        {supplyUpcoming.length === 0 ? (
+          <div style={{
+            padding: '10px 14px', borderRadius: 10,
+            background: '#eafaf1', color: '#27ae60', fontSize: 'var(--font-sm)',
+          }}>
+            ✓ Заявок на ближайшую неделю нет
+          </div>
+        ) : (
+          <div className="card" style={{ borderLeft: '4px solid #d35400', padding: '6px 10px', marginBottom: 0 }}>
+            {supplyUpcoming.slice(0, SUPPLY_ROWS).map(r => {
+              const overdue = r.needed_by != null && r.needed_by < new Date().toISOString().slice(0, 10)
+              return (
+                <div
+                  key={r.id}
+                  onClick={() => navigate(`/supply?id=${r.id}`)}
+                  style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                    gap: 12, padding: '5px 8px', borderRadius: 'var(--radius-sm)',
+                    cursor: 'pointer', background: overdue ? '#fdedec' : 'transparent',
+                    marginBottom: 2,
+                  }}
+                  title="Открыть эту заявку"
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <span style={{ fontWeight: 600 }}>{r.title}</span>
+                    {r.quantity != null && (
+                      <span style={{ color: 'var(--c-text-secondary)', marginLeft: 8 }}>
+                        {r.quantity}{r.unit ? ' ' + r.unit : ''}
+                      </span>
+                    )}
+                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginLeft: 8 }}>
+                      {SUPPLY_STATUS_LABELS[r.status]}
+                      {r.created_by_name && ` · ${r.created_by_name}`}
+                    </span>
+                  </div>
+                  <div style={{
+                    whiteSpace: 'nowrap', fontSize: 'var(--font-sm)',
+                    color: overdue ? '#c0392b' : 'var(--c-text-secondary)',
+                    fontWeight: overdue ? 600 : 400,
+                  }}>
+                    {r.needed_by && new Date(r.needed_by).toLocaleDateString('ru')}
+                    {overdue && ' · просрочена'}
+                  </div>
+                </div>
+              )
+            })}
+            {supplyUpcoming.length > SUPPLY_ROWS && (
+              <button
+                type="button"
+                onClick={() => navigate('/supply')}
+                style={{
+                  background: 'none', border: 'none', color: '#d35400',
+                  cursor: 'pointer', fontSize: 'var(--font-sm)', fontWeight: 500, padding: '2px 8px',
+                }}
+              >
+                и ещё {supplyUpcoming.length - SUPPLY_ROWS} — открыть все →
+              </button>
+            )}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
@@ -243,13 +351,15 @@ export default function DashboardPage() {
  */
 function renderProblemColumn(
   title: string,
-  rows: ProblemOrderCard[],
+  allRows: ProblemOrderCard[],
   total: number,
   navigate: ReturnType<typeof useNavigate>,
   color: string,
   fallbackLink: string,
 ) {
-  if (rows.length === 0) return null
+  if (allRows.length === 0) return null
+  // Показываем не всё, что прислал бэк: Главная должна помещаться в экран.
+  const rows = allRows.slice(0, PROBLEM_ROWS)
   const more = Math.max(0, total - rows.length)
   return (
     <div key={title} style={{
@@ -257,13 +367,13 @@ function renderProblemColumn(
       border: `1px solid ${color}33`,
       borderLeft: `4px solid ${color}`,
       borderRadius: 10,
-      padding: '14px 16px',
+      padding: '10px 12px',
     }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 600, color }}>{title}</div>
-        <div style={{ fontSize: 16, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{total}</div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <div style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color }}>{title}</div>
+        <div style={{ fontSize: 14, fontWeight: 700, color, fontVariantNumeric: 'tabular-nums' }}>{total}</div>
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
         {rows.map(r => (
           <button
             key={r.id}
@@ -274,7 +384,7 @@ function renderProblemColumn(
               background: '#fafbfc',
               border: '1px solid #ecf0f1',
               borderRadius: 6,
-              padding: '6px 10px',
+              padding: '4px 8px',
               cursor: 'pointer',
               transition: 'background 0.12s',
             }}
@@ -282,17 +392,17 @@ function renderProblemColumn(
             onMouseLeave={e => (e.currentTarget.style.background = '#fafbfc')}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ fontSize: 13, fontWeight: 500, color: '#2c3e50' }}>
+              <span style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: '#2c3e50' }}>
                 #{r.id} · {r.client_name}
               </span>
               {r.problem_date && (
-                <span style={{ fontSize: 11, color: '#7f8c8d' }}>
+                <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>
                   {new Date(r.problem_date).toLocaleDateString('ru')}
                 </span>
               )}
             </div>
             {r.address && (
-              <div style={{ fontSize: 11, color: '#7f8c8d', marginTop: 2, lineHeight: 1.2 }}>
+              <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 2, lineHeight: 1.2 }}>
                 {r.address.length > 60 ? r.address.slice(0, 57) + '…' : r.address}
               </div>
             )}
@@ -304,12 +414,12 @@ function renderProblemColumn(
           type="button"
           onClick={() => navigate(fallbackLink)}
           style={{
-            marginTop: 8,
+            marginTop: 6,
             background: 'none',
             border: 'none',
             color,
             cursor: 'pointer',
-            fontSize: 12,
+            fontSize: 'var(--font-sm)',
             fontWeight: 500,
             padding: 0,
           }}

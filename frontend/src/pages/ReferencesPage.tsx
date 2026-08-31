@@ -156,7 +156,7 @@ function ItemTypesCard({ types, reload, setConfirm, showToast }: CardProps<{ typ
   return (
     <div className="card">
       <h2>Типы позиций</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
         Категория вещи клиента (ковёр, тюль, плед…). Используется как один из атрибутов SKU.
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -236,7 +236,7 @@ function SkuGroupsCard({ groups, reload, setConfirm, showToast }: CardProps<{ gr
   return (
     <div className="card">
       <h2>Группы SKU</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
         Логические группы каталога — Чистка, Стирка, Доставка и т.п. Удобно для группировки в интерфейсе.
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
@@ -312,7 +312,7 @@ function AttributeDefinitionsCard({ attrs, reload, setConfirm, showToast }: Card
   return (
     <div className="card">
       <h2>Атрибуты SKU</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
         Ключи EAV-атрибутов SKU. Примеры: <code>material</code>, <code>weight_min</code>, <code>weight_max</code>,
         <code>item_type</code>. Тип значений — STRING/NUMBER/REFERENCE_ITEM_TYPE.
       </div>
@@ -376,7 +376,7 @@ function SkuCatalogCard({
   return (
     <div className="card">
       <h2>Каталог SKU</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
         Каждая запись — конкретная учётная единица: например, «Стирка ковёр шерсть 5–10 кг».
         Атрибуты задают, для каких позиций SKU подходит (используется в авто-подборе на форме заказа).
         История изменений каждой цены доступна через 🕒.
@@ -411,18 +411,18 @@ function SkuCatalogCard({
               <td>{s.group_name || '—'}</td>
               <td>
                 {s.name}
-                {s.is_deleted && <span style={{ marginLeft: 6, color: '#c0392b', fontSize: '0.8em' }}>(удалён)</span>}
+                {s.is_deleted && <span style={{ marginLeft: 6, color: '#c0392b', fontSize: 'var(--font-sm)' }}>(удалён)</span>}
               </td>
               <td>{PRICING_LABEL[s.pricing_type] || s.pricing_type}</td>
               <td>
                 <div>{s.price != null ? Number(s.price).toFixed(2) + ' ₽' : '—'}</div>
-                <div style={{ fontSize: '0.8em', color: '#888' }}>
+                <div style={{ fontSize: 'var(--font-sm)', color: '#888' }}>
                   себ. {s.cost_price != null ? Number(s.cost_price).toFixed(2) : '—'}
                 </div>
               </td>
               <td>{s.is_auto_add ? '✓' : '—'}</td>
               <td>{s.free_threshold != null ? `${s.free_threshold} ₽` : '—'}</td>
-              <td style={{ fontSize: '0.82em', color: '#555', maxWidth: 280 }}>
+              <td style={{ fontSize: 'var(--font-sm)', color: '#555', maxWidth: 280 }}>
                 {Object.entries(s.attributes).length === 0
                   ? <span style={{ color: '#aaa' }}>—</span>
                   : Object.entries(s.attributes).map(([k, vs]) => (
@@ -506,7 +506,7 @@ function SkuHistoryButton({ skuId }: { skuId: number }) {
             {history === null ? <div style={{ color: '#888' }}>Загрузка…</div>
               : history.length === 0 ? <div style={{ color: '#95a5a6' }}>Изменений нет</div>
               : (
-                <div style={{ fontSize: 13 }}>
+                <div style={{ fontSize: 'var(--font-sm)' }}>
                   {history.map(h => (
                     <div key={h.id} style={{ padding: '8px 0', borderBottom: '1px dashed #ecf0f1' }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
@@ -514,7 +514,7 @@ function SkuHistoryButton({ skuId }: { skuId: number }) {
                         {h.cost_price != null && (<span style={{ color: '#7f8c8d' }}>себ. {Number(h.cost_price).toFixed(2)}</span>)}
                       </div>
                       <div style={{ color: '#7f8c8d' }}>{h.name} · {h.pricing_type}</div>
-                      <div style={{ color: '#95a5a6', fontSize: 12 }}>
+                      <div style={{ color: '#95a5a6', fontSize: 'var(--font-sm)' }}>
                         {new Date(h.valid_from).toLocaleString('ru')}{h.changed_by ? ' · ' + h.changed_by : ''}
                       </div>
                     </div>
@@ -663,7 +663,7 @@ function SkuEditorModal({
         {/* V11 lifecycle — видно только если auto-add включён */}
         {isAutoAdd && (
           <div style={{ border: '1px solid #ffeaa7', borderRadius: 6, padding: 12, marginBottom: 12, background: '#fffef5' }}>
-            <div style={{ fontSize: '0.85em', fontWeight: 600, color: '#f39c12', marginBottom: 8 }}>Lifecycle (авто-добавляемые SKU)</div>
+            <div style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: '#f39c12', marginBottom: 8 }}>Lifecycle (авто-добавляемые SKU)</div>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               <div className="form-group" style={{ flex: '1 1 200px', marginBottom: 0 }}>
                 <label>Авто-завершить при статусе заказа</label>
@@ -698,7 +698,7 @@ function SkuEditorModal({
         <div className="form-group">
           <label style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span>Атрибуты</span>
-            <span style={{ fontSize: '0.8em', color: '#888', fontWeight: 'normal' }}>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#888', fontWeight: 'normal' }}>
               Каждый атрибут может иметь несколько значений (диапазон, список типов)
             </span>
           </label>
@@ -706,8 +706,8 @@ function SkuEditorModal({
             {attrs.length === 0 && <div style={{ color: '#aaa' }}>Сначала добавьте атрибуты в справочнике</div>}
             {attrs.map(a => (
               <div key={a.key} style={{ marginBottom: 8, paddingBottom: 8, borderBottom: '1px dashed #ecf0f1' }}>
-                <div style={{ fontSize: '0.85em', fontWeight: 600, color: '#34495e' }}>
-                  {a.label} <code style={{ fontSize: '0.85em', color: '#7f8c8d' }}>{a.key}</code>
+                <div style={{ fontSize: 'var(--font-sm)', fontWeight: 600, color: '#34495e' }}>
+                  {a.label} <code style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>{a.key}</code>
                   {a.unit && <span style={{ color: '#7f8c8d' }}> ({a.unit})</span>}
                 </div>
                 <div style={{ marginTop: 4 }}>
@@ -890,7 +890,7 @@ function DistrictsCard({ districts, reload, setConfirm, showToast }: CardProps<{
   return (
     <div className="card">
       <h2>Районы</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 8 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
         Используются для выбора района в адресах клиентов и заказов.
       </div>
       <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
@@ -1011,7 +1011,7 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
   return (
     <div className="card">
       <h2>Слоты доставки</h2>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 12 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 12 }}>
         Рабочее время развозки для каждого дня недели. Эти слоты видны в Логистике
         (колонки внутри дня, куда перетаскиваются заказы) и в выборе времени у заказа.
         День без слотов = выходной. Слот «точное время» — для клиентов, которым нужна
@@ -1030,14 +1030,14 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
               <strong style={{ minWidth: 130 }}>{DOW_NAMES[dow]}</strong>
               {daySlots.length === 0 && (
-                <span style={{ color: '#95a5a6', fontSize: '0.9em' }}>выходной (слотов нет)</span>
+                <span style={{ color: '#95a5a6', fontSize: 'var(--font-sm)' }}>выходной (слотов нет)</span>
               )}
               {daySlots.map(s => (
                 <span
                   key={s.id}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '3px 8px', borderRadius: 12, fontSize: '0.86em',
+                    padding: '3px 8px', borderRadius: 12, fontSize: 'var(--font-sm)',
                     background: s.is_active ? '#eaf4fd' : '#f4f6f7',
                     color: s.is_active ? '#1b4f72' : '#95a5a6',
                     border: `1px solid ${s.is_active ? '#aed6f1' : '#dfe4e6'}`,
@@ -1063,15 +1063,15 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
 
             {addFor === dow && (
               <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 8 }}>
-                <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>с</label>
+                <label style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>с</label>
                 <input type="time" value={start} onChange={e => setStart(e.target.value)} style={{ width: 'auto' }} />
                 {!exact && (
                   <>
-                    <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>до</label>
+                    <label style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>до</label>
                     <input type="time" value={end} onChange={e => setEnd(e.target.value)} style={{ width: 'auto' }} />
                   </>
                 )}
-                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.85em' }}>
+                <label style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--font-sm)' }}>
                   <input type="checkbox" checked={exact} onChange={e => setExact(e.target.checked)} style={{ margin: 0 }} />
                   точное время
                 </label>
@@ -1094,8 +1094,8 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
           подчистить старые, не разыскивая нужную неделю на доске. */}
       {slots.some(s => s.specific_date) && (
         <div style={{ marginTop: 14 }}>
-          <strong style={{ fontSize: '0.9em' }}>Разовые слоты (на конкретные даты)</strong>
-          <div style={{ fontSize: '0.82em', color: '#7f8c8d', margin: '4px 0 8px' }}>
+          <strong style={{ fontSize: 'var(--font-sm)' }}>Разовые слоты (на конкретные даты)</strong>
+          <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', margin: '4px 0 8px' }}>
             Добавляются из раздела «Логистика» кнопкой «+ слот» в нужном дне.
             На еженедельное расписание не влияют.
           </div>
@@ -1109,7 +1109,7 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
                   key={s.id}
                   style={{
                     display: 'inline-flex', alignItems: 'center', gap: 6,
-                    padding: '3px 8px', borderRadius: 12, fontSize: '0.86em',
+                    padding: '3px 8px', borderRadius: 12, fontSize: 'var(--font-sm)',
                     background: '#fdf2e9', color: '#7e5109', border: '1px solid #f5cba7',
                   }}
                 >
@@ -1131,7 +1131,7 @@ function DeliverySlotsCard({ slots, reload, setConfirm, showToast }: CardProps<{
 
 const chipBtn: React.CSSProperties = {
   background: 'none', border: 'none', cursor: 'pointer',
-  padding: 0, fontSize: 13, lineHeight: 1, color: 'inherit',
+  padding: 0, fontSize: 'var(--font-sm)', lineHeight: 1, color: 'inherit',
 }
 
 // ============================================================================
@@ -1203,7 +1203,7 @@ function UpdateBannersCard({ banners, reload, setConfirm, showToast }: CardProps
   return (
     <div className="card" style={{ marginBottom: 16 }}>
       <h2 style={{ marginTop: 0 }}>Баннеры обновлений</h2>
-      <div style={{ fontSize: '0.85em', color: 'var(--c-text-secondary)', marginBottom: 12 }}>
+      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginBottom: 12 }}>
         Показываются оператору по кнопке «Обновления» внизу экрана. Баннер виден,
         если сегодня попадает в интервал дат и он включён. Пустая дата — граница не задана.
       </div>
@@ -1224,11 +1224,11 @@ function UpdateBannersCard({ banners, reload, setConfirm, showToast }: CardProps
                   <div style={{ minWidth: 0 }}>
                     <strong style={{ color: live ? 'var(--c-text)' : 'var(--c-text-muted)' }}>{b.title}</strong>
                     <span style={{
-                      marginLeft: 8, fontSize: '0.78em', padding: '2px 7px', borderRadius: 10,
+                      marginLeft: 8, fontSize: 'var(--font-sm)', padding: '2px 7px', borderRadius: 10,
                       background: live ? 'var(--c-success-light)' : '#eceff1',
                       color: live ? '#186a3b' : 'var(--c-text-muted)',
                     }}>{live ? 'показывается' : 'скрыт'}</span>
-                    <div style={{ fontSize: '0.82em', color: 'var(--c-text-secondary)', marginTop: 3 }}>
+                    <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginTop: 3 }}>
                       {b.starts_on ? new Date(b.starts_on).toLocaleDateString('ru') : '—'}
                       {' … '}
                       {b.ends_on ? new Date(b.ends_on).toLocaleDateString('ru') : 'бессрочно'}

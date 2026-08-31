@@ -136,7 +136,7 @@ export default function FeedbackButton() {
           background: '#2c3e50', color: '#ecf0f1',
           border: '1px solid rgba(255,255,255,0.08)',
           borderRadius: 6, padding: '8px 14px',
-          fontSize: '0.9em', fontWeight: 500,
+          fontSize: 'var(--font-sm)', fontWeight: 500,
           boxShadow: '0 4px 12px rgba(0,0,0,0.18)', cursor: 'pointer',
           opacity: 0.7, transition: 'opacity 0.12s, background 0.12s',
         }}
@@ -160,7 +160,7 @@ export default function FeedbackButton() {
         <div className="modal-overlay" onClick={() => !sending && setOpen(false)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 560, width: '100%' }}>
             <h2>Связь с разработчиком</h2>
-            <p style={{ color: '#7f8c8d', fontSize: '0.9em', marginTop: 0 }}>
+            <p style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)', marginTop: 0 }}>
               Опишите проблему или идею. Адрес страницы добавится автоматически — разработчик
               увидит, где это произошло. Можно вставить скриншот <kbd>Ctrl/Cmd+V</kbd> или загрузить файл.
             </p>
@@ -230,21 +230,21 @@ export default function FeedbackButton() {
                         }}
                       >&times;</button>
                       <div style={{
-                        fontSize: '0.7em', color: '#95a5a6', marginTop: 2, maxWidth: 120,
+                        fontSize: 'var(--font-sm)', color: '#95a5a6', marginTop: 2, maxWidth: 120,
                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                       }}>{s.name}</div>
                     </div>
                   ))}
                 </div>
               )}
-              <div style={{ fontSize: '0.78em', color: '#7f8c8d', marginTop: 4 }}>
+              <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 4 }}>
                 Можно выбрать сразу несколько файлов или добавлять по одному.
                 Либо сделайте скриншот (Cmd+Shift+4 на Mac, Win+Shift+S на Windows)
                 и нажмите Ctrl/Cmd+V в этом окне — он добавится к списку.
               </div>
             </div>
 
-            <div style={{ fontSize: '0.78em', color: '#95a5a6', marginBottom: 8 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: '#95a5a6', marginBottom: 8 }}>
               Будет отправлено: страница <code>{location.pathname + (location.search || '')}</code>
             </div>
 

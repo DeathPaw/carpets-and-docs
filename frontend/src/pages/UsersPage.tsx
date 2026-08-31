@@ -89,7 +89,7 @@ export default function UsersPage() {
   return (
     <div>
       <h1>Пользователи</h1>
-      <div style={{ color: '#666', fontSize: '0.9em', marginBottom: 12 }}>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 12 }}>
         Управление учётными записями для входа в систему. Каждый пользователь привязан к роли
         (Супервизор / Администратор / Оператор / Только просмотр) и опционально к сотруднику
         (для авто-назначения на оформление).

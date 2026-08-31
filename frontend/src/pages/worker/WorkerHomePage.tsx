@@ -22,6 +22,22 @@ function serverMessage(e: unknown): string | null {
 }
 
 /**
+ * Подпись размеров ковра: «2×3 м (6 м²) · 5 кг». null — размеры не заполнены.
+ * Общий хелпер: используется и в карточке своей услуги, и в списке доступных
+ * (правка №3 — стирщик оценивает габариты ДО взятия в работу).
+ */
+function dimsLabel(d: {
+  item_length?: number | null; item_width?: number | null
+  item_area?: number | null; item_weight?: number | null
+}): string | null {
+  const parts: string[] = []
+  if (d.item_length) parts.push(`${d.item_length}×${d.item_width || '?'} м`)
+  if (d.item_area) parts.push(`${d.item_area} м²`)
+  if (d.item_weight) parts.push(`${d.item_weight} кг`)
+  return parts.length > 0 ? parts.join(' · ') : null
+}
+
+/**
  * Служебная позиция (V22): «Приём», «Доставка», «Оформление» — это этапы работы,
  * а не изделия. У них нет размеров, и работает по ним водитель/оператор.
  */
@@ -62,7 +78,11 @@ export default function WorkerHomePage() {
     const navigate = useNavigate()
     const [services, setServices] = useState<WorkerService[] | null>(null)
     const [error, setError] = useState('')
-    const [photoFor, setPhotoFor] = useState<{ item: WorkerService; afterStatus: 'IN_PROGRESS' | 'DONE' } | null>(null)
+    /**
+     * Открытая фото-модалка. afterStatus = null — правка №6: фото прикрепляется
+     * само по себе, без смены статуса (ковёр ещё в работе, на сушке и т.п.).
+     */
+    const [photoFor, setPhotoFor] = useState<{ item: WorkerService; afterStatus: 'IN_PROGRESS' | 'DONE' | null } | null>(null)
     const [editing, setEditing] = useState<WorkerService | null>(null)
     /** Правка №4: услуга, которую берём/к которой присоединяемся — открывает модалку выбора коллег. */
     const [takeFor, setTakeFor] = useState<any | null>(null)
@@ -203,12 +223,17 @@ export default function WorkerHomePage() {
         try {
             if (photoData) {
                 await uploadItemPhoto(employeeId, item.item_id, {
-                    filename: `photo-${afterStatus.toLowerCase()}-${Date.now()}.jpg`,
+                    // Правка №6: фото может прикрепляться вне смены статуса —
+                    // тогда помечаем его текущим состоянием услуги.
+                    filename: `photo-${(afterStatus ?? item.service_status).toLowerCase()}-${Date.now()}.jpg`,
                     content_type: 'image/jpeg',
                     data: photoData,
                 })
             }
-            await changeServiceStatus(employeeId, item.service_id, afterStatus)
+            // Статус трогаем только когда модалка открыта ради перехода.
+            if (afterStatus) {
+                await changeServiceStatus(employeeId, item.service_id, afterStatus)
+            }
             setPhotoFor(null)
             await reload()
         } catch (e: unknown) {
@@ -374,6 +399,13 @@ export default function WorkerHomePage() {
                                         <div style={{ fontSize: 12, color: '#7f8c8d' }}>
                                             {a.item_type_name} · Заказ #{String(a.order_id).padStart(5, '0')} · {a.client_name}
                                         </div>
+                                        {/* Правка №3: габариты видны до взятия в работу —
+                                            стирщик заранее понимает объём. */}
+                                        {dimsLabel(a) && (
+                                            <div style={{ fontSize: 12, color: '#2c3e50', marginTop: 2, fontWeight: 500 }}>
+                                                {dimsLabel(a)}
+                                            </div>
+                                        )}
                                         {a.is_taken && (
                                             <div style={{ fontSize: 12, color: '#e67e22', marginTop: 2 }}>
                                                 Уже в работе: {a.assignee_names || '—'}
@@ -395,6 +427,7 @@ export default function WorkerHomePage() {
                                     onAdvance={() => void advance(s)}
                                     onEdit={() => setEditing(s)}
                                     onUndo={() => void undoStatus(s)}
+                                    onPhoto={() => setPhotoFor({ item: s, afterStatus: null })}
                                 />
                             ))}
                         </>
@@ -413,6 +446,7 @@ export default function WorkerHomePage() {
                             onAdvance={() => void advance(s)}
                             onEdit={() => setEditing(s)}
                             onUndo={() => void undoStatus(s)}
+                            onPhoto={() => setPhotoFor({ item: s, afterStatus: null })}
                         />
                     ))}
                 </div>
@@ -427,9 +461,10 @@ export default function WorkerHomePage() {
                             key={s.service_id}
                             s={s}
                             onAdvance={() => {}}
-                            onEdit={() => setEditing(s)}
-                            onUndo={() => void undoStatus(s)}
-                            compact
+                            onEdit={() => {}}
+                            onUndo={() => {}}
+                            onPhoto={() => setPhotoFor({ item: s, afterStatus: null })}
+                            readOnly
                         />
                     ))}
                 </div>
@@ -437,7 +472,16 @@ export default function WorkerHomePage() {
 
             {photoFor && (
                 <PhotoModal
-                    title={photoFor.afterStatus === 'IN_PROGRESS' ? t('photo.before') : t('photo.after')}
+                    title={
+                      photoFor.afterStatus === 'IN_PROGRESS' ? t('photo.before')
+                      : photoFor.afterStatus === 'DONE' ? t('photo.after')
+                      // Правка №6: фото вне смены статуса — заголовок нейтральный,
+                      // чтобы не обещать перевод услуги.
+                      : 'Фото ковра'
+                    }
+                    // Без смены статуса «Пропустить» бессмысленно: модалка нужна
+                    // ровно ради фотографии.
+                    skippable={photoFor.afterStatus !== null}
                     onClose={() => setPhotoFor(null)}
                     onSubmit={submitWithPhoto}
                 />
@@ -474,14 +518,18 @@ function EmptyState({ text }: { text: string }) {
 }
 
 /** Карточка услуги в списке. */
-function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
+function ServiceCard({ s, onAdvance, onEdit, onUndo, onPhoto, compact, readOnly }: {
     s: WorkerService
     onAdvance: () => void
     onEdit: () => void
     /** Откат на один статус назад. Доступен для IN_PROGRESS (→ CREATED)
      *  и DONE (→ IN_PROGRESS). Для CREATED — нет (некуда откатывать). */
     onUndo: () => void
+    /** Правка №6: прикрепить фото на любом этапе, не завершая его. */
+    onPhoto: () => void
     compact?: boolean
+    /** Правка №2: карточка завершённой работы — только просмотр и фото. */
+    readOnly?: boolean
 }) {
     const colorByStatus: Record<string, string> = {
         CREATED:     '#7f8c8d',
@@ -518,11 +566,9 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
             {s.item_description && (
                 <div style={{ fontSize: 13, marginTop: 6, color: '#34495e' }}>{s.item_description}</div>
             )}
-            {(s.item_length || s.item_width || s.item_area || s.item_weight) && (
+            {dimsLabel(s) && (
                 <div style={{ fontSize: 12, color: '#7f8c8d', marginTop: 4 }}>
-                    {s.item_length && `${s.item_length}×${s.item_width || '?'} м`}
-                    {s.item_area && ` (${s.item_area} м²)`}
-                    {s.item_weight && ` · ${s.item_weight} кг`}
+                    {dimsLabel(s)}
                 </div>
             )}
             {s.item_defects && (
@@ -530,7 +576,16 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
                     Дефекты: {s.item_defects}
                 </div>
             )}
-            {!compact && (
+            {/* Правка №2: завершённая работа — только просмотр. Ни смены статуса,
+                ни правки размеров; остаётся кнопка фото (см. правку №6). */}
+            {readOnly ? (
+                <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'center' }}>
+                    <span style={{ fontSize: 12, color: '#7f8c8d' }}>Работа завершена</span>
+                    <button onClick={onPhoto} style={{ ...photoBtnStyle, marginLeft: 'auto' }}>
+                        📷 Фото
+                    </button>
+                </div>
+            ) : !compact && (
                 <div style={{ display: 'flex', gap: 8, marginTop: 12, alignItems: 'stretch' }}>
                     {advLabel[s.service_status] && (
                         <button onClick={onAdvance} style={{
@@ -542,6 +597,13 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
                             {advLabel[s.service_status]}
                         </button>
                     )}
+                    {/* Правка №6: фото прикрепляется на любом этапе, без завершения
+                        текущего. Раньше это было возможно только в момент смены
+                        статуса, и работник либо откладывал съёмку, либо закрывал
+                        этап только ради фотографии. */}
+                    <button onClick={onPhoto} style={photoBtnStyle} title="Прикрепить фото">
+                        📷
+                    </button>
                     {/* Правка №7: на служебных позициях (Приём/Доставка/Оформление)
                         размеров нет, а правит их водитель на этапе развозки — можно
                         случайно затереть данные, уже уточнённые на производстве.
@@ -564,22 +626,17 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, compact }: {
                     )}
                 </div>
             )}
-            {compact && s.service_status === 'DONE' && (
-                <div style={{ marginTop: 8, textAlign: 'right' }}>
-                    <button onClick={onUndo} title={t('home.undo')} style={{
-                        ...undoBtnStyle, padding: '4px 10px', fontSize: 13,
-                    }}>↶ {t('home.undo')}</button>
-                </div>
-            )}
         </div>
     )
 }
 
 /** Модалка для фото. Обязательно появляется при смене статуса; можно пропустить. */
-function PhotoModal({ title, onClose, onSubmit }: {
+function PhotoModal({ title, onClose, onSubmit, skippable = true }: {
     title: string
     onClose: () => void
     onSubmit: (photoBase64: string | null) => void
+    /** «Пропустить» имеет смысл только когда модалка сопровождает смену статуса. */
+    skippable?: boolean
 }) {
     const [data, setData] = useState<string | null>(null)
     const [preview, setPreview] = useState<string | null>(null)
@@ -616,10 +673,11 @@ function PhotoModal({ title, onClose, onSubmit }: {
                     </label>
                 )}
                 <div style={{ display: 'flex', gap: 8 }}>
-                    <button onClick={() => onSubmit(null)} style={{
+                    <button onClick={skippable ? () => onSubmit(null) : onClose} style={{
                         flex: 1, padding: '12px', background: '#fff',
-                        border: '1px solid #bdc3c7', borderRadius: 6, cursor: 'pointer',
-                    }}>{t('common.skip')}</button>
+                        border: '1px solid #3498db', color: '#2980b9',
+                        borderRadius: 6, cursor: 'pointer',
+                    }}>{skippable ? t('common.skip') : 'Отмена'}</button>
                     <button onClick={() => onSubmit(data)} disabled={!data} style={{
                         flex: 1, padding: '12px',
                         background: data ? '#3498db' : '#bdc3c7', color: '#fff',
@@ -827,6 +885,12 @@ const textareaStyle: React.CSSProperties = {
     width: '100%', padding: 10, fontSize: 14, border: '1px solid #d6dbdf', borderRadius: 6, boxSizing: 'border-box', resize: 'vertical',
 }
 /** Кнопка-стрелка отката статуса — серый «вторичный» стиль. */
+/** Кнопка «прикрепить фото» — компактная, рядом с основным действием. */
+const photoBtnStyle: React.CSSProperties = {
+    padding: '10px 12px', background: '#fff', color: '#2c3e50',
+    border: '1px solid #3498db', borderRadius: 6, fontSize: 14, cursor: 'pointer',
+}
+
 const undoBtnStyle: React.CSSProperties = {
     padding: '0 14px', minWidth: 44,
     background: '#fff', color: '#7f8c8d',

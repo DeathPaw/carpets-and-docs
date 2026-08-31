@@ -64,6 +64,19 @@ public class SkuRepository {
             Map.of()
     );
 
+    /**
+     * V37: нужен ли услуге назначенный сотрудник для перевода в работу/готово.
+     * FALSE у самовывоза — вещи везёт клиент, наш сотрудник не участвует.
+     * Точечный запрос вместо поля в записи Sku: флаг нужен ровно в одном месте —
+     * при проверке смены статуса.
+     */
+    public boolean requiresAssignee(Long skuId) {
+        Boolean v = jdbc.queryForList(
+                "SELECT requires_assignee FROM skus WHERE id = :id",
+                Map.of("id", skuId), Boolean.class).stream().findFirst().orElse(null);
+        return v == null || v;   // нет записи — ведём себя как раньше
+    }
+
     public List<Sku> findAll(boolean includeDeleted) {
         String where = includeDeleted ? "" : "WHERE s.is_deleted = FALSE";
         List<Sku> list = jdbc.query(

@@ -5,7 +5,7 @@ import { getOrdersQuery } from '../api/orders'
 import { getFilteredItems } from '../api/services'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
-import PageFilterBar from '../components/PageFilterBar'
+import PageFilterBar, { pageActionBtn } from '../components/PageFilterBar'
 import { getDistricts } from '../api/districts'
 import CreateOrderModal from '../components/orders/CreateOrderModal'
 import { useAuth } from '../auth/AuthContext'
@@ -405,12 +405,12 @@ export default function OrdersPage() {
           >{exporting ? 'Выгрузка…' : 'Экспорт Excel'}</button>
           {/* В viewer-mode (моноблок) скрываем мутирующие кнопки. */}
           {!isReadonly && (
-            <button className="btn-primary" onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
+            <button className="btn-primary" style={pageActionBtn} onClick={() => setShowCreate(true)} data-tour="orders-create-btn">+ Новый заказ</button>
           )}
         </>}
         extra={<div data-tour="orders-filters">
         <div style={{ marginBottom: 12 }}>
-          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Статус</label>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 'var(--font-sm)', color: '#555' }}>Статус</label>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
             {ALL_STATUSES.map(s => {
               const on = statusFilters.includes(s)
@@ -418,16 +418,15 @@ export default function OrdersPage() {
                 <button
                   key={s}
                   type="button"
-                  className={`badge badge-${s.toLowerCase()}`}
+                  className={`badge chip badge-${s.toLowerCase()}`}
                   onClick={() => {
                     setStatusFilters(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
                     setPage(0)
                   }}
                   style={{
-                    cursor: 'pointer',
-                    padding: '5px 12px',
-                    fontSize: 13,
-                    border: on ? '2px solid #2c3e50' : '1px solid transparent',
+                    // Рамка всегда 2px — при выборе просто перекрашивается.
+                    // С 1px→2px чип подрастал на два пикселя и строка дёргалась.
+                    border: `2px solid ${on ? '#2c3e50' : 'transparent'}`,
                     opacity: statusFilters.length === 0 || on ? 1 : 0.4,
                     fontWeight: on ? 700 : 500,
                   }}
@@ -440,7 +439,7 @@ export default function OrdersPage() {
                 onClick={() => { setStatusFilters([]); setPage(0) }}
                 style={{
                   background: 'transparent', border: 'none', color: '#7f8c8d',
-                  cursor: 'pointer', fontSize: 12, padding: '5px 8px',
+                  cursor: 'pointer', fontSize: 'var(--font-sm)', padding: '5px 8px',
                 }}
               >Снять все</button>
             )}
@@ -449,7 +448,7 @@ export default function OrdersPage() {
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
         {clientIdFilter && (
           <div>
-            <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Клиент</label>
+            <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 'var(--font-sm)', color: '#555' }}>Клиент</label>
             <button
               type="button"
               onClick={() => { setClientIdFilter(null); setClientFilterLabel(''); setPage(0) }}
@@ -461,7 +460,7 @@ export default function OrdersPage() {
           </div>
         )}
         <div style={{ width: 180 }}>
-          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Тип оплаты</label>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 'var(--font-sm)', color: '#555' }}>Тип оплаты</label>
           <MultiSelectFilter
             options={[
               { value: 'CARD',     label: 'Карта' },
@@ -481,9 +480,9 @@ export default function OrdersPage() {
             ВОТ ЭТОЙ даты. Поле даты сделано плашками — три варианта, дроп-даун
             был лишним. */}
         <div>
-          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 13, color: '#555' }}>Период</label>
+          <label style={{ display: 'block', marginBottom: 5, fontWeight: 500, fontSize: 'var(--font-sm)', color: '#555' }}>Период</label>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-            <div style={{ display: 'inline-flex', border: '1px solid #bdc3c7', borderRadius: 6, overflow: 'hidden' }}>
+            <div className="segmented">
               {[
                 { v: 'created_at',   label: 'Создан' },
                 { v: 'pickup_date',  label: 'Забор' },
@@ -492,20 +491,15 @@ export default function OrdersPage() {
                 <button
                   key={o.v}
                   type="button"
+                  className={dateField === o.v ? 'active' : undefined}
                   onClick={() => { setDateField(o.v as typeof dateField); setPage(0) }}
-                  style={{
-                    padding: '6px 10px', border: 'none', cursor: 'pointer', fontSize: 13,
-                    background: dateField === o.v ? '#3498db' : '#fff',
-                    color: dateField === o.v ? '#fff' : '#2c3e50',
-                    fontWeight: dateField === o.v ? 600 : 500,
-                  }}
                 >{o.label}</button>
               ))}
             </div>
-            <span style={{ fontSize: 12, color: '#7f8c8d' }}>с</span>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>с</span>
             <input type="date" value={dateFrom} style={{ width: 150 }}
               onChange={e => { setDateFrom(e.target.value); setPage(0) }} />
-            <span style={{ fontSize: 12, color: '#7f8c8d' }}>по</span>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>по</span>
             <input type="date" value={dateTo} style={{ width: 150 }}
               onChange={e => { setDateTo(e.target.value); setPage(0) }} />
           </div>
@@ -520,7 +514,7 @@ export default function OrdersPage() {
         <>
           <div style={{
             display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-            marginBottom: 6, color: '#666', fontSize: '0.85em', gap: 12, flexWrap: 'wrap',
+            marginBottom: 6, color: '#666', fontSize: 'var(--font-sm)', gap: 12, flexWrap: 'wrap',
           }}>
             <div>
               {totalElements > 0 && <>Показано {orders.length} из {totalElements} · </>}

@@ -15,6 +15,7 @@ import {
   slotValue, slotLabel, type DeliverySlot,
 } from '../api/deliverySlots'
 import { hashColor } from '../components/Tiles'
+import { useEscapeClose } from '../hooks/useEscapeClose'
 import { formatOrderNumber } from '../utils/format'
 import { PAYMENT_LABELS, PRELIMINARY_PAYMENT_LABELS } from '../constants/statuses'
 import { formatPhone } from '../components/PhoneInput'
@@ -250,6 +251,9 @@ export default function LogisticsPage() {
   const [horizon, setHorizon] = useState<Horizon>(4)
   // Карта в sidebar — по умолчанию свёрнута, разворачивается по клику.
   const [mapExpanded, setMapExpanded] = useState(false)
+  // Полноэкранная карта закрывается по Esc — она перекрывает всю страницу,
+  // и выйти из неё кнопкой в углу было единственным способом.
+  useEscapeClose(mapExpanded, () => setMapExpanded(false))
   // День для маршрутного листа и массового завершения развозки.
   const [routeDay, setRouteDay] = useState<string>(() => new Date().toISOString().slice(0, 10))
   /**
@@ -298,7 +302,10 @@ export default function LogisticsPage() {
    * Тот же смысл, что у фильтра маршрутного листа: посмотреть маршрут одного
    * водителя отдельно от остальных.
    */
-  const [mapDriverId, setMapDriverId] = useState<number | null>(null)
+  /** Водитель на карте — тот же, что выбран в общем фильтре: раньше это были
+   *  два независимых состояния, и карта показывала не тех, кого маршрутный лист. */
+  const mapDriverId = routeDriverId
+  const setMapDriverId = setRouteDriverId
   /**
    * Подсветка типа точек на карте: null — все одинаково, 'pickup'/'delivery' —
    * выбранный тип сохраняет цвет дня, остальные гаснут в серый. Именно гаснут,
@@ -419,15 +426,6 @@ export default function LogisticsPage() {
   }, [])
   // Открытый popup выбора водителя для заказа. null — закрыт.
   const [driverPickerFor, setDriverPickerFor] = useState<{ orderId: number; current: number | null } | null>(null)
-  // Сайдбар «Районы» — компактный по умолчанию (узкая колонка с цифрами и баром нагрузки),
-  // развёрнутый — широкая таблица с заборами/доставками/суммой. Состояние помним.
-  const [asideExpanded, setAsideExpanded] = useState<boolean>(
-    () => localStorage.getItem('logistics_aside_expanded') === '1'
-  )
-  useEffect(() => {
-    localStorage.setItem('logistics_aside_expanded', asideExpanded ? '1' : '0')
-  }, [asideExpanded])
-
   const weekDays = useMemo(() => getWeekDays(weekStart), [weekStart])
 
   /** Полная перезагрузка списка заказов. Вынесена из useEffect — её дёргает
@@ -540,6 +538,12 @@ export default function LogisticsPage() {
       if (districtFilters.length > 0 && (!c.district || !districtFilters.includes(c.district))) return false
       if (orderNoTarget && String(c.order.id) !== orderNoTarget) return false
       if (!matchesCardSearch(c)) return false
+      // Фильтр водителя — общий: раньше он влиял только на маршрутный лист,
+      // а доска дней и карта показывали всех, и выбор ничего не менял на экране.
+      if (routeDriverId !== null) {
+        if (routeDriverId === 0) { if (c.order.assigned_driver_id) return false }
+        else if (c.order.assigned_driver_id !== routeDriverId) return false
+      }
       if (timeSlotFilters.length > 0) {
         const noneSelected = timeSlotFilters.includes('none')
         if (!c.timeSlot) {
@@ -551,7 +555,7 @@ export default function LogisticsPage() {
       return true
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allCards, districtFilters, timeSlotFilters, orderNoFilter, searchText])
+  }, [allCards, districtFilters, timeSlotFilters, orderNoFilter, searchText, routeDriverId])
 
   // Сортировка карточек по началу временного слота (без слота — в конец).
   const slotStartMinutes = (slot: string | null): number => {
@@ -778,7 +782,7 @@ export default function LogisticsPage() {
           background: archived ? '#f7f9f9' : '#fff',
           opacity: archived ? 0.72 : 1,
           cursor: archived ? 'pointer' : 'grab',
-          fontSize: '0.78em',
+          fontSize: 'var(--font-sm)',
           minWidth: 0,
           // тонкая обычная тень
           filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.06))',
@@ -799,7 +803,7 @@ export default function LogisticsPage() {
         </div>
         {card.address && (
           <div style={{
-            color: '#888', fontSize: '0.92em', marginTop: 1,
+            color: '#888', fontSize: 'var(--font-sm)', marginTop: 1,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
             {card.address}
@@ -808,7 +812,7 @@ export default function LogisticsPage() {
         {ageDays >= 7 && (
           <div style={{
             display: 'inline-block', marginTop: 3, padding: '0 5px', borderRadius: 3,
-            fontSize: '0.92em', fontWeight: 600,
+            fontSize: 'var(--font-sm)', fontWeight: 600,
             background: ageDays >= 14 ? '#fdedec' : '#fef5e7',
             color:      ageDays >= 14 ? '#c0392b' : '#d35400',
           }}>
@@ -822,7 +826,7 @@ export default function LogisticsPage() {
             marginTop: 4, padding: '1px 6px',
             background: card.order.assigned_driver_id ? '#eafaf1' : '#f4f6f7',
             color:      card.order.assigned_driver_id ? '#196f3d' : '#7f8c8d',
-            borderRadius: 3, fontSize: '0.92em',
+            borderRadius: 3, fontSize: 'var(--font-sm)',
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
           }}>
             👤 {card.order.assigned_driver_name || 'не назначен'}
@@ -840,7 +844,7 @@ export default function LogisticsPage() {
               background: card.order.assigned_driver_id ? '#eafaf1' : '#fdf2e9',
               color:      card.order.assigned_driver_id ? '#196f3d' : '#a04000',
               border: 'none', borderRadius: 3,
-              fontSize: '0.92em', fontWeight: 500,
+              fontSize: 'var(--font-sm)', fontWeight: 500,
               cursor: 'pointer', width: '100%', textAlign: 'left',
               whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
             }}
@@ -940,7 +944,7 @@ export default function LogisticsPage() {
       >
         <div style={{
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          fontSize: '0.7em', color: '#95a5a6', marginBottom: cards.length > 0 ? 3 : 0,
+          fontSize: 'var(--font-sm)', color: '#95a5a6', marginBottom: cards.length > 0 ? 3 : 0,
           whiteSpace: 'nowrap',
         }}>
           <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{slot.label}</span>
@@ -977,14 +981,14 @@ export default function LogisticsPage() {
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <strong style={{ fontSize: '1em' }}>{label}</strong>
-            <span style={{ fontSize: '0.85em', color: '#888' }}>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>
               {cards.length} {cards.length === 1 ? 'заказ' : 'заказов'}
             </span>
           </div>
           {cards.length === 0 ? (
             opts?.hideEmpty ? null : (
               <div style={{
-                color: '#999', fontStyle: 'italic', fontSize: '0.9em',
+                color: '#999', fontStyle: 'italic', fontSize: 'var(--font-sm)',
                 padding: '8px 4px', textAlign: 'center',
               }}>
                 {/* В блоке «Без даты» пустота — это нормально (все распределили).
@@ -1007,7 +1011,7 @@ export default function LogisticsPage() {
                   style={{
                     width: '100%', marginTop: 6, padding: '6px 8px',
                     background: '#fff', border: '1px dashed #bdc3c7', borderRadius: 6,
-                    color: '#34495e', cursor: 'pointer', fontSize: '0.9em',
+                    color: '#34495e', cursor: 'pointer', fontSize: 'var(--font-sm)',
                   }}
                 >
                   {noDateExpanded
@@ -1042,29 +1046,30 @@ export default function LogisticsPage() {
         }}
       >
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-          <strong style={{ fontSize: '0.9em', display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+          <strong style={{
+            fontSize: 'var(--font-sm)', display: 'inline-flex', alignItems: 'center', gap: 6,
+            whiteSpace: 'nowrap', flexShrink: 0,
+          }}>
             <span style={{
               display: 'inline-block', width: 10, height: 10, borderRadius: 2,
               background: dColor, flexShrink: 0,
             }} title="Цвет дня на карте" />
             {label}
-            {isToday && <span style={{ marginLeft: 4, fontSize: '0.75em', color: '#f9a825' }}>·</span>}
+            {isToday && <span style={{ marginLeft: 4, fontSize: 'var(--font-sm)', color: '#f9a825' }}>·</span>}
           </strong>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, minWidth: 0 }}>
             {/* V31: добавить слот ТОЛЬКО в этот день. Заводится с specific_date,
                 поэтому в другие такие же дни недели и в другие недели не попадёт. */}
             {!isReadonly && (
               <button
                 type="button"
+                className="btn-secondary btn-sm"
+                style={{ width: 62, flexShrink: 0 }}
                 onClick={() => setAddSlotFor(dateStr)}
                 title="Добавить временной слот только на этот день"
-                style={{
-                  border: '1px solid #ddd', background: '#fff', borderRadius: 4,
-                  cursor: 'pointer', fontSize: '0.72em', padding: '1px 5px', color: '#3498db',
-                }}
-              >+ слот</button>
+              >+ Слот</button>
             )}
-            <span style={{ fontSize: '0.78em', color: '#888' }}>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>
               {cards.length}
             </span>
           </span>
@@ -1085,7 +1090,7 @@ export default function LogisticsPage() {
                 onClick={() => void removeOneOffSlot(s.oneOffId!)}
                 style={{
                   position: 'absolute', top: 2, right: 2, border: 'none', background: 'transparent',
-                  cursor: 'pointer', color: '#c0392b', fontSize: '0.85em', lineHeight: 1, padding: 2,
+                  cursor: 'pointer', color: '#c0392b', fontSize: 'var(--font-sm)', lineHeight: 1, padding: 2,
                 }}
               >×</button>
             )}
@@ -1154,8 +1159,10 @@ export default function LogisticsPage() {
     ]
     return (
       <div style={{
-        display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap',
-        marginBottom: 8, fontSize: big ? '0.9em' : '0.78em',
+        display: big ? 'flex' : 'grid',
+        gridTemplateColumns: big ? undefined : '1fr 1fr',
+        gap: 6, alignItems: 'center', flexWrap: 'wrap',
+        marginBottom: big ? 0 : 8, fontSize: 'var(--font-sm)',
       }}>
         {items.map(it => {
           const count = visibleMapCards.filter(c => c.type === it.kind).length
@@ -1167,7 +1174,8 @@ export default function LogisticsPage() {
               onClick={() => setMapKindFocus(on ? null : it.kind)}
               title={on ? 'Снять подсветку' : `Подсветить: ${it.label} (остальные станут серыми)`}
               style={{
-                padding: big ? '5px 12px' : '3px 8px', borderRadius: 4, cursor: 'pointer',
+                height: big ? 'var(--control-h)' : 28,
+                padding: big ? '0 14px' : '0 10px', borderRadius: 4, cursor: 'pointer',
                 fontSize: 'inherit',
                 border: `1px solid ${on ? 'var(--c-primary)' : '#ddd'}`,
                 background: on ? 'var(--c-primary)' : '#fff',
@@ -1179,21 +1187,39 @@ export default function LogisticsPage() {
             </button>
           )
         })}
-        <span style={{ color: 'var(--c-text-muted)' }}>
-          цвет точки — день недели
-        </span>
       </div>
     )
   }
 
   const renderMapDayStrip = (big: boolean) => {
-    const pad = big ? '8px 4px' : '3px 2px'
-    const font = big ? '0.92em' : '0.72em'
+    const pad = big ? '8px 4px' : '3px 1px'
+    const font = 'var(--font-sm)'
     return (
-      <div style={{ marginBottom: big ? 12 : 8 }}>
+      <div style={{ marginBottom: big ? 0 : 8 }}>
         {/* Дни — одной строкой без переносов: только «Пн», «Вт» и счётчик.
             Полная дата уехала в tooltip, иначе панель занимала три строки. */}
-        <div style={{ display: 'flex', gap: big ? 6 : 3, marginBottom: 6 }}>
+        {/* «Вся неделя» стоит в самой полоске дней, а не строкой ниже: в узкой
+            колонке из-за неё панель занимала лишнюю строку, а смысл тот же —
+            выбор периода для карты. */}
+        <div style={{ display: 'flex', gap: big ? 6 : 2, marginBottom: big ? 0 : 6 }}>
+          <button
+            onClick={() => setMapDay('')}
+            title="Показать точки всей недели"
+            style={{
+              flex: '0 0 auto',
+              height: big ? 'var(--control-h)' : undefined,
+              padding: pad, borderRadius: 4, cursor: 'pointer', fontSize: font,
+              border: `1px solid ${mapDay === '' ? 'var(--c-primary)' : '#ddd'}`,
+              background: mapDay === '' ? 'var(--c-primary)' : '#fff',
+              color: mapDay === '' ? '#fff' : 'var(--c-text)',
+              fontWeight: mapDay === '' ? 600 : 400,
+            }}
+          >
+            Все
+            {/* Пустая точка — чтобы «Все» была той же высоты, что дни рядом:
+                у них под подписью есть индикатор, и без него кнопка съезжала. */}
+            <span style={{ display: 'block', width: 4, height: 4, margin: '2px auto 0' }} />
+          </button>
           {weekDays.map(d => {
             const count = mapCandidateCards.filter(c => c.date === d).length
             const active = mapDay === d
@@ -1204,6 +1230,7 @@ export default function LogisticsPage() {
                 title={`${formatDayHeader(d)} · точек: ${count}`}
                 style={{
                   flex: '1 1 0', minWidth: 0,
+                  height: big ? 'var(--control-h)' : undefined,
                   padding: pad, borderRadius: 4, cursor: 'pointer', fontSize: font,
                   border: `1px solid ${active ? dayColor(d) : '#ddd'}`,
                   background: active ? dayColor(d) : '#fff',
@@ -1211,41 +1238,37 @@ export default function LogisticsPage() {
                   fontWeight: active ? 600 : 400,
                 }}
               >
+                {/* Счётчик — точкой, а не цифрой рядом с днём: в колонке 200px
+                    на восемь кнопок приходится по ~19px, и «Чт 1» уже не влезало.
+                    Само число — в подсказке кнопки. */}
                 {DAY_NAMES[new Date(d).getDay()]}
-                {count > 0 && <span style={{ marginLeft: 3, opacity: 0.85 }}>{count}</span>}
+                <span style={{
+                  display: 'block', width: 4, height: 4, borderRadius: 2, margin: '2px auto 0',
+                  background: count > 0 ? (active ? '#fff' : dayColor(d)) : 'transparent',
+                }} />
               </button>
             )
           })}
         </div>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            onClick={() => setMapDay('')}
-            title="Показать точки всей недели"
-            style={{
-              padding: big ? '6px 12px' : '3px 8px', borderRadius: 4, cursor: 'pointer', fontSize: font,
-              border: `1px solid ${mapDay === '' ? 'var(--c-primary)' : '#ddd'}`,
-              background: mapDay === '' ? 'var(--c-primary)' : '#fff',
-              color: mapDay === '' ? '#fff' : 'var(--c-text)',
-              fontWeight: mapDay === '' ? 600 : 400,
-            }}
-          >Вся неделя</button>
-          {/* Фильтр по водителю — как в маршрутном листе: посмотреть маршрут
-              одного водителя, не отвлекаясь на чужие точки. */}
-          <StyledSelect<string>
-            value={mapDriverId === null ? '' : String(mapDriverId)}
-            width={big ? 220 : 150}
-            ariaLabel="Водитель на карте"
-            options={[
-              { value: '', label: 'Все водители' },
-              { value: '0', label: 'Без водителя' },
-              ...employees.map(d => ({ value: String(d.id), label: d.name })),
-            ]}
-            onChange={v => setMapDriverId(v === '' ? null : Number(v))}
-          />
-        </div>
       </div>
     )
   }
+
+  /** Фильтр водителя для развёрнутой карты. В узкой панели его нет — там
+   *  работает общий фильтр из строки над доской. */
+  const renderMapDriverSelect = () => (
+    <StyledSelect<string>
+      value={mapDriverId === null ? '' : String(mapDriverId)}
+      width={200}
+      ariaLabel="Водитель на карте"
+      options={[
+        { value: '', label: 'Все водители' },
+        { value: '0', label: 'Без водителя' },
+        ...employees.map(d => ({ value: String(d.id), label: d.name })),
+      ]}
+      onChange={v => setMapDriverId(v === '' ? null : Number(v))}
+    />
+  )
 
   // Карта. Правка №12: по умолчанию показываем точки ОДНОГО дня — того, что выбран
   // в «Маршрутный лист на». Оператору перед развозкой нужен маршрут конкретной даты,
@@ -1314,19 +1337,15 @@ export default function LogisticsPage() {
         border: '1px solid #e6e9ec',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: '0.8em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+          <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
             Обзор
           </span>
-          <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden', marginLeft: 'auto' }}>
+          <div className="segmented" style={{ marginLeft: 'auto' }}>
             {([4, 8, 12] as Horizon[]).map(h => (
               <button
                 key={h}
+                className={horizon === h ? 'active' : undefined}
                 onClick={() => setHorizon(h)}
-                style={{
-                  padding: '4px 12px', border: 'none', cursor: 'pointer', fontSize: '0.85em',
-                  background: horizon === h ? '#3498db' : '#fff',
-                  color: horizon === h ? '#fff' : '#333',
-                }}
               >{h} нед.</button>
             ))}
           </div>
@@ -1359,7 +1378,9 @@ export default function LogisticsPage() {
                   borderRight:  `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
                   borderBottom: `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
                   borderLeft:   `4px solid ${isThisWeek ? '#f9a825' : (isCurrent ? '#3498db' : '#e6e9ec')}`,
-                  background: isCurrent ? '#ebf5fb' : '#fafafa',
+                  // Невыбранная неделя — белая, а не серая: серый фон читался
+                  // как «неактивно», хотя неделя кликабельна.
+                  background: isCurrent ? '#ebf5fb' : '#fff',
                   textAlign: 'left',
                   position: 'relative',
                   overflow: 'hidden',
@@ -1369,13 +1390,13 @@ export default function LogisticsPage() {
                 title={`${w.mondayStr} — ${sundayDate}${isThisWeek ? ' · текущая неделя' : ''}`}
               >
                 <div style={{
-                  fontSize: compact ? '0.78em' : '0.82em',
+                  fontSize: 'var(--font-sm)',
                   color: '#7f8c8d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
                 }}>
                   {formatShortDate(w.mondayStr)}–{formatShortDate(sundayDate)}
                 </div>
                 <div style={{
-                  marginTop: 3, fontSize: compact ? '0.78em' : '0.85em', display: 'flex', gap: compact ? 4 : 8,
+                  marginTop: 3, fontSize: 'var(--font-sm)', display: 'flex', gap: compact ? 4 : 8,
                 }}>
                   <span style={{ color: '#2980b9' }}>З<strong style={{ marginLeft: 2 }}>{w.pickups || 0}</strong></span>
                   <span style={{ color: '#27ae60' }}>Д<strong style={{ marginLeft: 2 }}>{w.deliveries || 0}</strong></span>
@@ -1393,35 +1414,10 @@ export default function LogisticsPage() {
       {/* Фильтры. Фильтр района — в боковой сводке (клик по строке).
           Стрелки навигации недель убраны: переключение через полосу обзора недель сверху. */}
       <div className="filters">
-        <div className="form-group">
-          <label>Тип</label>
-          {/* Спринт D, фидбэк 11 мая: вместо двухпозиционного дроп-дауна —
-              две кнопки-toggle. Активная подсвечена; повторный клик — выключить. */}
-          <div style={{ display: 'inline-flex', gap: 6 }}>
-            {[
-              { v: 'pickup'   as CardType, label: 'Заборы',   color: '#3498db' },
-              { v: 'delivery' as CardType, label: 'Доставки', color: '#27ae60' },
-            ].map(b => {
-              const on = typeFilters.includes(b.v)
-              return (
-                <button
-                  key={b.v}
-                  type="button"
-                  onClick={() =>
-                    setTypeFilters(prev => prev.includes(b.v) ? prev.filter(x => x !== b.v) : [...prev, b.v])
-                  }
-                  style={{
-                    padding: '6px 14px', borderRadius: 6,
-                    border: on ? `2px solid ${b.color}` : '1px solid #bdc3c7',
-                    background: on ? b.color : '#fff',
-                    color: on ? '#fff' : '#2c3e50',
-                    fontWeight: on ? 600 : 500, fontSize: 13, cursor: 'pointer',
-                  }}
-                >{b.label}</button>
-              )
-            })}
-          </div>
-        </div>
+        {/* Спринт D, фидбэк 11 мая: вместо двухпозиционного дроп-дауна —
+            две кнопки-toggle. Активная подсвечена; повторный клик — выключить.
+            Группа переехала в строку режима: пять групп фильтров в одну полосу
+            уже не помещались. */}
         <div className="form-group">
           <label>Временной слот</label>
           <MultiSelectFilter
@@ -1432,8 +1428,82 @@ export default function LogisticsPage() {
             value={timeSlotFilters}
             onChange={setTimeSlotFilters}
             placeholder="Все"
-            width={180}
+            width={150}
           />
+        </div>
+        {/* Фильтр секции «Без даты». Стоял под ней и уезжал вправо; здесь он
+            в общем ряду и выровнен по левому краю с остальными фильтрами. */}
+        <div className="form-group">
+          <label>Без даты</label>
+          <div className="segmented">
+            {/* Подписи короткие — группа уже подписана «Без даты», и в полном
+                виде («Лиды без забора») ряд фильтров не помещался в строку.
+                Расшифровка — в подсказке. */}
+            {[
+              { v: 'all'   as NoDateFilter, label: 'Все',    hint: 'Все заказы без назначенной даты' },
+              { v: 'leads' as NoDateFilter, label: 'Лиды',   hint: 'Лиды, которым не назначен забор' },
+              { v: 'ready' as NoDateFilter, label: 'Готовы', hint: 'Готовые заказы без назначенной доставки' },
+              { v: 'old'   as NoDateFilter, label: '> 7 дн', hint: 'Висят дольше недели без даты' },
+            ].map(f => (
+              <button
+                key={f.v}
+                className={noDateFilter === f.v ? 'active' : undefined}
+                title={f.hint}
+                onClick={() => setNoDateFilter(f.v)}
+              >{f.label}</button>
+            ))}
+          </div>
+        </div>
+        {/* V19 (#6): печать маршрутного листа и массовое завершение развозки —
+            в том же ряду, что фильтры: раньше блок занимал собственную строку. */}
+        <div className="form-group">
+          <label>Развозка</label>
+          <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            {/* Водитель фильтрует всё разом — доску дней, карту и маршрутный
+                лист. Раньше их было два независимых, и выбор в одном месте не
+                отражался в другом. */}
+            <StyledSelect<string>
+              value={routeDriverId === null ? '' : String(routeDriverId)}
+              width={150}
+              ariaLabel="Фильтр по водителю"
+              options={[
+                { value: '', label: 'Все водители' },
+                { value: '0', label: 'Без водителя' },
+                ...employees.map(d => ({ value: String(d.id), label: d.name })),
+              ]}
+              onChange={v => setRouteDriverId(v === '' ? null : Number(v))}
+            />
+            <StyledSelect<string>
+              value={routeDay}
+              onChange={setRouteDay}
+              width={135}
+              ariaLabel="День маршрутного листа"
+              options={weekDays.map(d => ({
+                value: d,
+                label: formatDayHeader(d),
+                hint: (() => {
+                  const n = filteredCards.filter(c => c.date === d).length
+                  return n > 0 ? String(n) : undefined
+                })(),
+              }))}
+            />
+            <button
+              className="btn-secondary"
+              title={routeDriverId
+                ? 'Напечатать маршрутный лист выбранного водителя'
+                : 'Напечатать маршрутный лист на выбранный день'}
+              onClick={() => printRouteSheet(routeDay, routeCards, routeDriverName)}
+            >🖨</button>
+            {/* Правка №2: массовое завершение развозки — оператор закрывает все
+                доставки дня из одного окна, без захода в каждую карточку. */}
+            {!isReadonly && (
+              <button
+                className="btn-success"
+                title="Оплатить и завершить доставки этого дня, не открывая каждый заказ"
+                onClick={() => setShowComplete(true)}
+              >✓ Завершить</button>
+            )}
+          </div>
         </div>
         {districtFilters.length > 0 && (
           <div className="form-group" style={{ flex: '1 1 100%' }}>
@@ -1446,7 +1516,7 @@ export default function LogisticsPage() {
                   onClick={() => toggleDistrict(d)}
                   style={{
                     padding: '4px 10px', borderRadius: 14, border: '1px solid #f1c40f',
-                    background: '#fef9e7', cursor: 'pointer', fontSize: 13,
+                    background: '#fef9e7', cursor: 'pointer', fontSize: 'var(--font-sm)',
                   }}
                   title="Снять фильтр по этому району"
                 >
@@ -1458,7 +1528,7 @@ export default function LogisticsPage() {
                 onClick={() => setDistrictFilters([])}
                 style={{
                   padding: '4px 10px', borderRadius: 4, border: 'none',
-                  background: 'transparent', color: '#7f8c8d', cursor: 'pointer', fontSize: 12,
+                  background: 'transparent', color: '#7f8c8d', cursor: 'pointer', fontSize: 'var(--font-sm)',
                 }}
               >
                 Снять все
@@ -1468,68 +1538,65 @@ export default function LogisticsPage() {
         )}
       </div>
 
-      {/* Навигация недели — только подпись и сводка. Переключение неделей — через полосу обзора. */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'wrap' }}>
-        {/* Правка №1 (21.08): Неделя / День. Недельный режим оставлен как был. */}
-        <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
+      {/* Период и сводка — тонкой строкой под фильтрами. Блок развозки
+          переехал в общий ряд фильтров: отдельной строкой он читался как
+          ещё один уровень управления. */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12, flexWrap: 'nowrap' }}>
+        {/* Режим просмотра и тип точек — здесь же: оба отвечают на вопрос
+            «что показываем», и в ряду фильтров для них не осталось места. */}
+        <div className="segmented" style={{ flexShrink: 0 }}>
           {([['week', 'Неделя'], ['day', 'День']] as const).map(([v, label]) => (
             <button
               key={v}
+              className={viewMode === v ? 'active' : undefined}
               onClick={() => setViewMode(v)}
-              style={{
-                padding: '4px 12px', border: 'none', cursor: 'pointer', fontSize: '0.85em',
-                background: viewMode === v ? '#3498db' : '#fff',
-                color: viewMode === v ? '#fff' : '#555',
-                fontWeight: viewMode === v ? 600 : 400,
-              }}
             >{label}</button>
           ))}
         </div>
-        <span style={{ fontWeight: 600, fontSize: '1.05em' }}>
-          {viewMode === 'day'
-            ? formatDayHeader(routeDay)
-            : `${formatDayHeader(weekDays[0])} — ${formatDayHeader(weekDays[6])}`}
-        </span>
-        {(weekSummary.pickups > 0 || weekSummary.deliveries > 0) && (
-          <span style={{ fontSize: '0.85em', color: '#7f8c8d' }}>
-            · {weekSummary.pickups} заборов · {weekSummary.deliveries} доставок
-            {weekSummary.busiest && (
-              <> · загруженный день — {formatDayHeader((weekSummary.busiest as { day: string }).day)} ({(weekSummary.busiest as { count: number }).count})</>
-            )}
+            <div style={{ display: 'inline-flex', gap: 6 }}>
+              {[
+                { v: 'pickup'   as CardType, label: 'Заборы',   color: '#3498db' },
+                { v: 'delivery' as CardType, label: 'Доставки', color: '#27ae60' },
+              ].map(b => {
+                const on = typeFilters.includes(b.v)
+                return (
+                  <button
+                    key={b.v}
+                    type="button"
+                    onClick={() =>
+                      setTypeFilters(prev => prev.includes(b.v) ? prev.filter(x => x !== b.v) : [...prev, b.v])
+                    }
+                    className="chip"
+                    style={{
+                      height: 'var(--control-h)', borderRadius: 6,
+                      border: `2px solid ${on ? b.color : '#bdc3c7'}`,
+                      background: on ? b.color : '#fff',
+                      color: on ? '#fff' : '#2c3e50',
+                      fontWeight: on ? 600 : 500,
+                    }}
+                  >{b.label}</button>
+                )
+              })}
+            </div>
+        <div style={{
+          display: 'flex', alignItems: 'baseline', gap: 8,
+          minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap',
+        }}>
+          <span style={{ fontWeight: 600 }}>
+            {viewMode === 'day'
+              ? formatDayHeader(routeDay)
+              : `${formatDayHeader(weekDays[0])} — ${formatDayHeader(weekDays[6])}`}
           </span>
-        )}
-        {/* V19 (#6): печать маршрутного листа на конкретный день. */}
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-          <label style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Маршрутный лист на:</label>
-          <StyledSelect<string>
-            value={routeDay}
-            onChange={setRouteDay}
-            width={190}
-            ariaLabel="День маршрутного листа"
-            options={weekDays.map(d => ({
-              value: d,
-              label: formatDayHeader(d),
-              hint: (() => {
-                const n = filteredCards.filter(c => c.date === d).length
-                return n > 0 ? String(n) : undefined
-              })(),
-            }))}
-          />
-          <button
-            className="btn-secondary btn-sm"
-            title={routeDriverId
-              ? 'Напечатать маршрутный лист выбранного водителя'
-              : 'Напечатать маршрутный лист на выбранный день'}
-            onClick={() => printRouteSheet(routeDay, routeCards, routeDriverName)}
-          >🖨 Печать</button>
-          {/* Правка №2: массовое завершение развозки — оператор закрывает все
-              доставки дня из одного окна, без захода в каждую карточку. */}
-          {!isReadonly && (
-            <button
-              className="btn-success btn-sm"
-              title="Оплатить и завершить доставки этого дня, не открывая каждый заказ"
-              onClick={() => setShowComplete(true)}
-            >✓ Завершить развозку</button>
+          {(weekSummary.pickups > 0 || weekSummary.deliveries > 0) && (
+            <span style={{
+              fontSize: 'var(--font-sm)', color: '#7f8c8d',
+              overflow: 'hidden', textOverflow: 'ellipsis',
+            }}>
+              · {weekSummary.pickups} заборов · {weekSummary.deliveries} доставок
+              {weekSummary.busiest && (
+                <> · загруженный день — {formatDayHeader((weekSummary.busiest as { day: string }).day)} ({(weekSummary.busiest as { count: number }).count})</>
+              )}
+            </span>
           )}
         </div>
       </div>
@@ -1543,7 +1610,7 @@ export default function LogisticsPage() {
            между несколькими и печатать каждому свой лист. */
         <div className="card" style={{ padding: 12 }}>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 10, alignItems: 'center' }}>
-            <span style={{ fontSize: '0.85em', color: '#7f8c8d' }}>Водитель:</span>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>Водитель:</span>
             {([
               { id: null as number | null, label: `Все · ${driversOfDay.total}` },
               ...driversOfDay.list.map((d: Employee) => ({
@@ -1560,7 +1627,7 @@ export default function LogisticsPage() {
                   key={String(tab.id)}
                   onClick={() => setRouteDriverId(tab.id)}
                   style={{
-                    padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: '0.82em',
+                    padding: '4px 10px', borderRadius: 4, cursor: 'pointer', fontSize: 'var(--font-sm)',
                     border: `1px solid ${active ? '#3498db' : '#ddd'}`,
                     background: active ? '#3498db' : '#fff',
                     color: active ? '#fff' : '#2c3e50',
@@ -1577,7 +1644,7 @@ export default function LogisticsPage() {
             </div>
           ) : (
             <div style={{ overflowX: 'auto' }}>
-              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.88em' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-sm)' }}>
                 <thead>
                   <tr>
                     <th style={{ width: 34 }}>#</th>
@@ -1633,7 +1700,7 @@ export default function LogisticsPage() {
                                   await reload()
                                 } catch { /* ошибку покажет общий обработчик загрузки */ }
                               }}
-                              style={{ width: '100%', fontSize: '0.9em', padding: '2px 4px' }}
+                              style={{ width: '100%', fontSize: 'var(--font-sm)', padding: '2px 4px' }}
                             >
                               <option value="">— не назначен —</option>
                               {employees.map(d => (
@@ -1667,7 +1734,7 @@ export default function LogisticsPage() {
               display: 'flex', alignItems: 'center', justifyContent: 'space-between',
               marginBottom: 4, padding: '0 4px', flexWrap: 'wrap', gap: 8,
             }}>
-              <strong style={{ fontSize: '0.95em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.5 }}>
+              <strong style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                 Без даты ({(cardsByDay.get('no-date')?.length ?? 0)})
                 {/* Явно говорим, что список сокращён поиском — иначе оператор
                     решит, что заказы пропали. */}
@@ -1677,24 +1744,6 @@ export default function LogisticsPage() {
                   </span>
                 )}
               </strong>
-              <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
-                {[
-                  { v: 'all'   as NoDateFilter, label: 'Все' },
-                  { v: 'leads' as NoDateFilter, label: 'Лиды без забора' },
-                  { v: 'ready' as NoDateFilter, label: 'Готовы без доставки' },
-                  { v: 'old'   as NoDateFilter, label: 'Старше 7 дней' },
-                ].map(f => (
-                  <button
-                    key={f.v}
-                    onClick={() => setNoDateFilter(f.v)}
-                    style={{
-                      padding: '4px 10px', border: 'none', cursor: 'pointer', fontSize: '0.82em',
-                      background: noDateFilter === f.v ? '#3498db' : '#fff',
-                      color: noDateFilter === f.v ? '#fff' : '#555',
-                    }}
-                  >{f.label}</button>
-                ))}
-              </div>
             </div>
             {renderDaySection(
               'no-date',
@@ -1708,72 +1757,26 @@ export default function LogisticsPage() {
 
         </div>
         {/* Sticky-сводка по районам справа. На узких экранах — переезжает вниз через CSS. */}
-        <aside className={'logistics-aside' + (asideExpanded ? ' expanded' : '')}>
+        <aside className="logistics-aside">
           {(() => {
             const totalAll = districtStats.reduce((a,s) => a + s.pickups + s.deliveries, 0)
             const maxLoad = districtStats.reduce((a,s) => Math.max(a, s.pickups + s.deliveries), 0)
             return (
               <div className="card" style={{ padding: '10px 12px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                  <strong style={{ fontSize: '0.85em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
-                    Районы за неделю
-                  </strong>
-                  <button
-                    onClick={() => setAsideExpanded(s => !s)}
-                    className="btn-secondary btn-sm"
-                    title={asideExpanded ? 'Свернуть' : 'Развернуть — детали по заборам, доставкам и сумме'}
-                    style={{ padding: '2px 8px', fontSize: '0.85em' }}
-                  >
-                    {asideExpanded ? '⇥' : '⇤'}
-                  </button>
-                </div>
+                {/* Кнопка «развернуть панель» убрана: у страницы было три
+                    состояния (узкая панель / широкая / полноэкранная карта),
+                    и оператор не понимал, в каком он находится. Осталось два —
+                    обычный вид и развёрнутая карта. Числа заборов и доставок,
+                    ради которых разворачивали панель, показаны прямо здесь. */}
+                <strong style={{
+                  display: 'block', marginBottom: 8,
+                  fontSize: 'var(--font-sm)', color: '#7f8c8d',
+                  textTransform: 'uppercase', letterSpacing: 0.6,
+                }}>
+                  Районы за неделю
+                </strong>
                 {districtStats.length === 0 ? (
-                  <div className="empty" style={{ fontSize: '0.85em', padding: '12px 0' }}>На этой неделе данных нет</div>
-                ) : asideExpanded ? (
-                  <table style={{ width: '100%', fontSize: '0.85em' }}>
-                    <thead>
-                      <tr>
-                        <th style={{ textAlign: 'left' }}>Район</th>
-                        <th style={{ width: 40, textAlign: 'right', color: '#2980b9' }}>Заб.</th>
-                        <th style={{ width: 40, textAlign: 'right', color: '#27ae60' }}>Дос.</th>
-                        <th style={{ width: 50, textAlign: 'right' }}>Всего</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {districtStats.map(s => {
-                        const isActive = districtFilters.includes(s.district)
-                        return (
-                        <tr
-                          key={s.district}
-                          style={{
-                            cursor: 'pointer',
-                            background: isActive ? '#fef9e7' : undefined,
-                            outline: isActive ? '1px solid #f1c40f' : undefined,
-                          }}
-                          onClick={() => {
-                            // Спринт D: клик по району — toggle. Второй клик по тому же
-                            // району снимает фильтр; клик по другому — добавляет к выбранным.
-                            // «(без района)» сейчас не фильтрабелен — игнорируем.
-                            if (s.district === '(без района)') return
-                            toggleDistrict(s.district)
-                          }}
-                          title={isActive ? 'Клик — снять этот район' : 'Клик — добавить район к фильтру'}
-                        >
-                          <td><strong>{s.district}</strong></td>
-                          <td style={{ textAlign: 'right' }}>{s.pickups || '—'}</td>
-                          <td style={{ textAlign: 'right' }}>{s.deliveries || '—'}</td>
-                          <td style={{ textAlign: 'right' }}><strong>{s.pickups + s.deliveries}</strong></td>
-                        </tr>
-                        )
-                      })}
-                      <tr style={{ background: '#f4f6f7', fontWeight: 700 }}>
-                        <td>Итого</td>
-                        <td style={{ textAlign: 'right' }}>{districtStats.reduce((a,s) => a+s.pickups, 0)}</td>
-                        <td style={{ textAlign: 'right' }}>{districtStats.reduce((a,s) => a+s.deliveries, 0)}</td>
-                        <td style={{ textAlign: 'right' }}>{totalAll}</td>
-                      </tr>
-                    </tbody>
-                  </table>
+                  <div className="empty" style={{ fontSize: 'var(--font-sm)', padding: '12px 0' }}>На этой неделе данных нет</div>
                 ) : (
                   // Компактный режим: район + цифра + бар нагрузки
                   <div>
@@ -1799,12 +1802,17 @@ export default function LogisticsPage() {
                           }}
                           title={isActive ? 'Клик — снять этот район' : `${s.pickups} заборов · ${s.deliveries} доставок · клик — фильтр`}
                         >
-                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85em' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', gap: 6, fontSize: 'var(--font-sm)' }}>
                             <span style={{
                               overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: '1 1 auto', minWidth: 0,
                               fontWeight: isActive ? 700 : 400,
                             }}>{s.district}</span>
-                            <strong style={{ marginLeft: 6 }}>{load}</strong>
+                            <span style={{ whiteSpace: 'nowrap', flexShrink: 0 }}>
+                              <span style={{ color: '#2980b9' }} title="Заборы">{s.pickups}</span>
+                              <span style={{ color: '#bbb' }}> / </span>
+                              <span style={{ color: '#27ae60' }} title="Доставки">{s.deliveries}</span>
+                              <strong style={{ marginLeft: 6 }}>{load}</strong>
+                            </span>
                           </div>
                           <div style={{
                             height: 4, background: '#ecf0f1', borderRadius: 2, overflow: 'hidden', marginTop: 2,
@@ -1820,7 +1828,7 @@ export default function LogisticsPage() {
                     })}
                     <div style={{
                       marginTop: 10, paddingTop: 8, borderTop: '1px solid #ecf0f1',
-                      fontSize: '0.85em', color: '#7f8c8d',
+                      fontSize: 'var(--font-sm)', color: '#7f8c8d',
                     }}>
                       Всего точек: <strong style={{ color: '#2c3e50' }}>{totalAll}</strong>
                     </div>
@@ -1833,18 +1841,19 @@ export default function LogisticsPage() {
           {/* Карта недели — всегда видна. По умолчанию маленькая (240px),
               клик по карте/кнопке — разворачивается на всю ширину окна (модально). */}
           <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
-            <div style={{
-              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-              marginBottom: 8,
-            }}>
-              <strong style={{ fontSize: '0.85em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+            <div style={{ marginBottom: 8 }}>
+              <strong style={{
+                display: 'block', marginBottom: 6,
+                fontSize: 'var(--font-sm)', color: '#7f8c8d',
+                textTransform: 'uppercase', letterSpacing: 0.6,
+              }}>
                 {mapDay ? 'Карта дня' : 'Карта недели'} {mapPoints.length > 0 && <span style={{ color: '#3498db' }}>· {mapPoints.length}</span>}
               </strong>
               {mapPoints.length > 0 && (
                 <button
                   onClick={() => setMapExpanded(true)}
                   className="btn-secondary btn-sm"
-                  style={{ padding: '2px 8px', fontSize: '0.85em' }}
+                  style={{ width: '100%' }}
                   title="Открыть карту в полноэкранном виде"
                 >
                   ⛶ Развернуть
@@ -1853,7 +1862,7 @@ export default function LogisticsPage() {
             </div>
             {renderMapDayStrip(false)}
             {mapPoints.length === 0 ? (
-              <div style={{ fontSize: '0.85em', color: '#888', textAlign: 'center', padding: '12px 0' }}>
+              <div style={{ fontSize: 'var(--font-sm)', color: '#888', textAlign: 'center', padding: '12px 0' }}>
                 {mapDay
                   ? 'Нет заказов с координатами на этот день.'
                   : 'Нет заказов с координатами на этой неделе.'}
@@ -1861,6 +1870,9 @@ export default function LogisticsPage() {
             ) : (
               <>
                 {renderMapLegend(false)}
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)', marginBottom: 8 }}>
+                  цвет точки — день недели
+                </div>
                 {/* Разворачиваем по ДВОЙНОМУ клику: одиночный click срабатывал
                     и после перетаскивания карты — оператор двигал её вбок, отпускал
                     мышь и получал полноэкранный режим вместо нужного участка. */}
@@ -1890,7 +1902,7 @@ export default function LogisticsPage() {
                 title={slotsPanelOpen ? 'Свернуть' : 'Показать слоты недели'}
                 style={{
                   background: 'none', border: 'none', padding: 0, cursor: 'pointer',
-                  fontSize: '0.85em', color: '#7f8c8d', textTransform: 'uppercase',
+                  fontSize: 'var(--font-sm)', color: '#7f8c8d', textTransform: 'uppercase',
                   letterSpacing: 0.6, fontWeight: 700,
                 }}
               >
@@ -1899,6 +1911,7 @@ export default function LogisticsPage() {
               {!isReadonly && (
                 <button
                   className="btn-secondary btn-sm"
+                  style={{ width: 62 }}
                   onClick={() => setAddSlotFor(routeDay)}
                   title="Добавить слот на выбранный день"
                 >+ Слот</button>
@@ -1906,7 +1919,7 @@ export default function LogisticsPage() {
             </div>
             {slotsPanelOpen && (
             <>
-            <div style={{ fontSize: '0.78em', color: 'var(--c-text-secondary)', margin: '8px 0' }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', margin: '8px 0' }}>
               Постоянные слоты недели и разовые на конкретную дату. Разовый действует
               только в свой день.
             </div>
@@ -1918,17 +1931,17 @@ export default function LogisticsPage() {
                   padding: '4px 0', borderBottom: '1px solid var(--c-bg-hover)',
                 }}>
                   <span style={{
-                    minWidth: 74, fontSize: '0.8em', fontWeight: 600,
+                    minWidth: 74, fontSize: 'var(--font-sm)', fontWeight: 600,
                     color: d === today ? 'var(--c-primary-dark)' : 'var(--c-text)',
                   }}>
                     {DAY_NAMES[new Date(d).getDay()]} {formatShortDate(d)}
                   </span>
                   {zones.length === 0 ? (
-                    <span style={{ fontSize: '0.78em', color: 'var(--c-text-muted)' }}>выходной</span>
+                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)' }}>выходной</span>
                   ) : zones.map(z => (
                     <span key={z.value} style={{
                       display: 'inline-flex', alignItems: 'center', gap: 4,
-                      padding: '2px 7px', borderRadius: 10, fontSize: '0.76em',
+                      padding: '2px 7px', borderRadius: 10, fontSize: 'var(--font-sm)',
                       // Разовый слот выделяем оранжевым: видно, что он только на эту дату.
                       background: z.oneOffId ? '#fdf2e9' : 'var(--c-primary-light)',
                       color: z.oneOffId ? '#7e5109' : '#1b4f72',
@@ -1953,7 +1966,7 @@ export default function LogisticsPage() {
                       title={`Добавить слот только на ${d}`}
                       style={{
                         border: '1px solid #ddd', background: '#fff', borderRadius: 4,
-                        cursor: 'pointer', fontSize: '0.72em', padding: '1px 6px',
+                        cursor: 'pointer', fontSize: 'var(--font-sm)', padding: '1px 6px',
                         color: 'var(--c-primary)', marginLeft: 'auto',
                       }}
                     >+</button>
@@ -1972,27 +1985,31 @@ export default function LogisticsPage() {
             <div
               className="modal-overlay"
               onClick={() => setMapExpanded(false)}
-              style={{ zIndex: 1000 }}
+              style={{ zIndex: 1000, left: 'var(--sidebar-w, 0px)' }}
             >
               <div
                 onClick={e => e.stopPropagation()}
                 style={{
                   background: '#fff', borderRadius: 8, padding: 12,
-                  width: '90vw', maxWidth: 1400, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
+                  width: '94%', maxWidth: 1400, maxHeight: '90vh', display: 'flex', flexDirection: 'column',
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                  <strong style={{ fontSize: '1.05em' }}>
+                  <strong>
                     {mapDay ? `Карта дня · ${formatDayHeader(mapDay)}` : 'Карта недели'}
                     <span style={{ color: '#3498db', marginLeft: 8 }}>· {mapPoints.length}</span>
                   </strong>
                   <button className="btn-secondary" onClick={() => setMapExpanded(false)}>Закрыть</button>
                 </div>
-                {/* Панель дней доступна и на полном экране, крупными кнопками:
-                    развернув карту, оператор должен переключать развозки, не
-                    закрывая её. */}
-                {renderMapDayStrip(true)}
-                {renderMapLegend(true)}
+                {/* Одна строка, два блока: слева дни недели, справа тип точек и
+                    водитель. Тремя этажами над картой это занимало треть окна. */}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 12 }}>
+                  <div style={{ flex: '1 1 auto', minWidth: 0 }}>{renderMapDayStrip(true)}</div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0 }}>
+                    {renderMapLegend(true)}
+                    {renderMapDriverSelect()}
+                  </div>
+                </div>
                 <div style={{ flex: 1, minHeight: 0 }}>
                   {mapPoints.length === 0 ? (
                     <div style={{
@@ -2029,7 +2046,7 @@ export default function LogisticsPage() {
             style={{ maxWidth: 480, padding: 16 }}
           >
             <h3 style={{ marginTop: 0, marginBottom: 4 }}>Назначить водителя</h3>
-            <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 14 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 14 }}>
               Заказ #{driverPickerFor.orderId}. Можно назначить любого сотрудника.
             </div>
             <div style={{
@@ -2052,7 +2069,7 @@ export default function LogisticsPage() {
                       border: isCurrent ? `2px solid ${c.text}` : '1px solid #d6dbdf',
                       borderRadius: 8,
                       cursor: 'pointer',
-                      fontSize: 13, fontWeight: 600,
+                      fontSize: 'var(--font-sm)', fontWeight: 600,
                       textAlign: 'center',
                       boxShadow: isCurrent ? `0 0 0 3px ${c.bg}` : 'none',
                     }}
@@ -2069,7 +2086,7 @@ export default function LogisticsPage() {
                 style={{
                   flex: 1, padding: '8px',
                   background: '#fdf2e9', color: '#a04000', border: '1px solid #f5cba7',
-                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                  borderRadius: 6, cursor: 'pointer', fontSize: 'var(--font-sm)',
                 }}
               >Снять назначение</button>
               <button
@@ -2078,7 +2095,7 @@ export default function LogisticsPage() {
                 style={{
                   flex: 1, padding: '8px',
                   background: '#fff', color: '#2c3e50', border: '1px solid #d6dbdf',
-                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                  borderRadius: 6, cursor: 'pointer', fontSize: 'var(--font-sm)',
                 }}
               >Отмена</button>
             </div>

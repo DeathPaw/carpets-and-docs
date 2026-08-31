@@ -96,21 +96,21 @@ export default function ItemDetailPage() {
       <div className="card">
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginBottom: 12 }}>
           <div>
-            <div style={{ color: '#666', fontSize: '0.85em', marginBottom: 4 }}>Тип</div>
+            <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 4 }}>Тип</div>
             <div style={{ fontSize: '1.1em' }}>{item.item_type_name || `Тип #${item.item_type_id}`}</div>
           </div>
           <div>
-            <div style={{ color: '#666', fontSize: '0.85em', marginBottom: 4 }}>Размеры</div>
+            <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 4 }}>Размеры</div>
             <div style={{ fontSize: '1.1em' }}>{dimensions.length > 0 ? dimensions.join(' · ') : '(не указаны)'}</div>
           </div>
           {order && (
             <>
               <div>
-                <div style={{ color: '#666', fontSize: '0.85em', marginBottom: 4 }}>Клиент</div>
+                <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 4 }}>Клиент</div>
                 <div style={{ fontSize: '1.1em' }}>{order.client_name}</div>
               </div>
               <div>
-                <div style={{ color: '#666', fontSize: '0.85em', marginBottom: 4 }}>Заказ создан</div>
+                <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 4 }}>Заказ создан</div>
                 <div style={{ fontSize: '1.1em' }}>{new Date(order.created_at).toLocaleDateString('ru')}</div>
               </div>
             </>
@@ -181,7 +181,7 @@ export default function ItemDetailPage() {
             ))}
           </div>
         )}
-        <div style={{ marginTop: 8, color: '#888', fontSize: '0.85em' }}>
+        <div style={{ marginTop: 8, color: '#888', fontSize: 'var(--font-sm)' }}>
           Добавление и удаление фото — в карточке заказа.
         </div>
       </div>

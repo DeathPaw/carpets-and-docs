@@ -98,10 +98,13 @@ export default function ProfitabilityPage() {
             key={t}
             onClick={() => setTab(t)}
             style={{
-              padding: '8px 16px', border: 'none', cursor: 'pointer',
-              background: tab === t ? '#fff' : '#f4f6f7',
+              // Единая высота с остальными контролами; неактивная вкладка белая,
+              // а не серая — серый фон читался как «недоступно».
+              height: 'var(--control-h)', padding: '0 16px', border: 'none', cursor: 'pointer',
+              background: '#fff',
+              color: tab === t ? 'var(--c-primary-dark)' : 'var(--c-text)',
               borderBottom: tab === t ? '3px solid #3498db' : '3px solid transparent',
-              fontWeight: tab === t ? 600 : 400, fontSize: '0.95em',
+              fontWeight: tab === t ? 600 : 400, fontSize: 'var(--font-sm)',
             }}
           >{TAB_LABELS[t]}</button>
         ))}

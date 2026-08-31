@@ -283,7 +283,7 @@ export default function ProductionPage() {
         search={searchText}
         onSearchChange={setSearchText}
         right={
-          <div data-tour="production-modes" style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 6, overflow: 'hidden' }}>
+          <div data-tour="production-modes" className="segmented">
             {([
               { v: 'orders' as Mode,   label: 'По заказам' },
               { v: 'items' as Mode,    label: 'По позициям' },
@@ -291,12 +291,8 @@ export default function ProductionPage() {
             ]).map(m => (
               <button
                 key={m.v}
+                className={mode === m.v ? 'active' : undefined}
                 onClick={() => setMode(m.v)}
-                style={{
-                  padding: '6px 14px', cursor: 'pointer', border: 'none',
-                  background: mode === m.v ? '#3498db' : '#fff',
-                  color: mode === m.v ? '#fff' : '#333',
-                }}
               >{m.label}</button>
             ))}
           </div>
@@ -305,7 +301,7 @@ export default function ProductionPage() {
         // и услуга есть только у услуг, тип позиции — у позиций и услуг.
         // Район и № заказа общие и живут в центральной панели выше.
         extra={
-        <div className="filters" style={{ marginBottom: 0 }}>
+        <div className="filters" style={{ marginBottom: 4 }}>
           {mode === 'services' && (
           <>
           <div className="form-group">
@@ -331,7 +327,7 @@ export default function ProductionPage() {
                 border: onlyUnassigned ? '2px solid #c0392b' : '1px solid #bdc3c7',
                 background: onlyUnassigned ? '#c0392b' : '#fff',
                 color: onlyUnassigned ? '#fff' : '#2c3e50',
-                fontWeight: onlyUnassigned ? 600 : 500, fontSize: 13, cursor: 'pointer',
+                fontWeight: onlyUnassigned ? 600 : 500, fontSize: 'var(--font-sm)', cursor: 'pointer',
               }}
               title="Показать только услуги без назначенного исполнителя"
             >
@@ -355,12 +351,13 @@ export default function ProductionPage() {
                     onClick={() =>
                       setItemTypeFilters(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id])
                     }
+                    className="chip"
                     style={{
-                      padding: '5px 12px', borderRadius: 5,
-                      border: on ? '2px solid #3498db' : '1px solid #bdc3c7',
+                      borderRadius: 5,
+                      border: `2px solid ${on ? '#3498db' : '#bdc3c7'}`,
                       background: on ? '#3498db' : '#fff',
                       color: on ? '#fff' : '#2c3e50',
-                      fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                      fontWeight: on ? 600 : 500,
                     }}
                   >{t.name}</button>
                 )
@@ -381,12 +378,13 @@ export default function ProductionPage() {
                     onClick={() =>
                       setServiceNameFilter(prev => prev.includes(n) ? prev.filter(x => x !== n) : [...prev, n])
                     }
+                    className="chip"
                     style={{
-                      padding: '5px 12px', borderRadius: 5,
-                      border: on ? '2px solid #16a085' : '1px solid #bdc3c7',
+                      borderRadius: 5,
+                      border: `2px solid ${on ? '#16a085' : '#bdc3c7'}`,
                       background: on ? '#16a085' : '#fff',
                       color: on ? '#fff' : '#2c3e50',
-                      fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                      fontWeight: on ? 600 : 500,
                     }}
                   >{n}</button>
                 )
@@ -412,7 +410,7 @@ export default function ProductionPage() {
 
       {/* Подсказка про drag-n-drop статуса услуг — единственный режим где это активно. */}
       {mode === 'services' && (
-        <div style={{ color: '#7f8c8d', fontSize: '0.85em', marginBottom: 8 }}>
+        <div style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
           Перетащите карточку в нужный столбец — статус услуги изменится. Если переход
           невозможен (нет исполнителя, не заполнены размеры) — снизу появится подсказка с причиной.
         </div>
@@ -421,7 +419,9 @@ export default function ProductionPage() {
       {loading ? (
         <div className="loading">Загрузка...</div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, alignItems: 'flex-start' }}>
+        // Отступ сверху: чипы «Тип позиции» вплотную упирались в шапки колонок,
+        // и фильтры читались как часть доски.
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, alignItems: 'flex-start', marginTop: 16 }}>
           {columns.map(status => {
             const colData = mode === 'orders'
               ? filteredOrders.filter(o => o.status === status).sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
@@ -443,7 +443,7 @@ export default function ProductionPage() {
                 <div style={{
                   background: COLUMN_COLORS[status] || '#7f8c8d',
                   color: '#fff', padding: '10px 16px',
-                  borderRadius: '8px 8px 0 0', fontWeight: 700, fontSize: 15,
+                  borderRadius: '8px 8px 0 0', fontWeight: 700, fontSize: 14,
                   display: 'flex', justifyContent: 'space-between',
                 }}>
                   <span>{labels[status] || status}</span>
@@ -474,10 +474,10 @@ export default function ProductionPage() {
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                           <strong style={{ fontSize: 14 }}>#{String(item.order_id).padStart(5, '0')}</strong>
-                          <span style={{ fontSize: 12, color: '#888' }}>{new Date(item.created_at).toLocaleDateString('ru')}</span>
+                          <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>{new Date(item.created_at).toLocaleDateString('ru')}</span>
                         </div>
-                        <div style={{ fontSize: 13, marginBottom: 4 }}>{item.client_name}</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
+                        <div style={{ fontSize: 'var(--font-sm)', marginBottom: 4 }}>{item.client_name}</div>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#666' }}>
                           <span>{item.items_count} поз.</span>
                           <span style={{
                             color: item.services_done === item.services_count ? '#27ae60' : '#f39c12',
@@ -487,7 +487,7 @@ export default function ProductionPage() {
                           </span>
                         </div>
                         {item.pickup_district && (
-                          <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{item.pickup_district}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{item.pickup_district}</div>
                         )}
                       </div>
                     ))
@@ -506,13 +506,13 @@ export default function ProductionPage() {
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                           <strong style={{ fontSize: 14 }}>Поз. #{it.item_id}</strong>
-                          <span style={{ fontSize: 12, color: '#888' }}>заказ #{String(it.order_id).padStart(5, '0')}</span>
+                          <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>заказ #{String(it.order_id).padStart(5, '0')}</span>
                         </div>
-                        <div style={{ fontSize: 13, marginBottom: 2 }}>{it.item_type_name || `Тип`}</div>
+                        <div style={{ fontSize: 'var(--font-sm)', marginBottom: 2 }}>{it.item_type_name || `Тип`}</div>
                         {it.description && (
-                          <div style={{ fontSize: 12, color: '#666', marginBottom: 4 }}>{it.description}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#666', marginBottom: 4 }}>{it.description}</div>
                         )}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#666' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#666' }}>
                           <span>{it.client_name}</span>
                           <span style={{
                             color: it.services_done === it.services_count ? '#27ae60' : '#f39c12',
@@ -522,7 +522,7 @@ export default function ProductionPage() {
                           </span>
                         </div>
                         {it.pickup_district && (
-                          <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{it.pickup_district}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{it.pickup_district}</div>
                         )}
                       </div>
                     ))
@@ -546,24 +546,24 @@ export default function ProductionPage() {
                       >
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
                           <strong style={{ fontSize: 14 }}>{s.service_name}</strong>
-                          <span style={{ fontSize: 12, color: '#888', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 'var(--font-sm)', color: '#888', whiteSpace: 'nowrap' }}>
                             {Number(s.price).toFixed(0)} ₽
                           </span>
                         </div>
-                        <div style={{ fontSize: 12, color: '#555', marginBottom: 2 }}>
+                        <div style={{ fontSize: 'var(--font-sm)', color: '#555', marginBottom: 2 }}>
                           {s.item_type_name || 'позиция'}
                           {s.item_description ? ` · ${s.item_description}` : ''}
                         </div>
-                        <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 2 }}>
+                        <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 2 }}>
                           Заказ #{String(s.order_id).padStart(5, '0')} · поз. #{s.position_in_order} · {s.client_name}
                         </div>
                         {s.employee_names ? (
-                          <div style={{ fontSize: 11, color: '#27ae60' }}>👤 {s.employee_names}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#27ae60' }}>👤 {s.employee_names}</div>
                         ) : (
-                          <div style={{ fontSize: 11, color: '#e67e22' }}>исполнитель не назначен</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22' }}>исполнитель не назначен</div>
                         )}
                         {s.pickup_district && (
-                          <div style={{ fontSize: 11, color: '#999', marginTop: 2 }}>{s.pickup_district}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{s.pickup_district}</div>
                         )}
                       </div>
                     ))
@@ -583,7 +583,7 @@ export default function ProductionPage() {
         <div className="modal-overlay" onClick={() => setAssigneePicker(null)} style={{ zIndex: 1300 }}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 480, padding: 16 }}>
             <h3 style={{ marginTop: 0, marginBottom: 4 }}>Выберите исполнителя</h3>
-            <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 14 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 14 }}>
               {assigneePicker.svc.service_name} на {assigneePicker.svc.item_type_name} ·
               заказ #{assigneePicker.svc.order_id}. Показаны только сотрудники с подходящей ролью.
             </div>
@@ -609,7 +609,7 @@ export default function ProductionPage() {
                         padding: '10px 12px',
                         background: c.bg, color: c.text,
                         border: '1px solid #d6dbdf', borderRadius: 8,
-                        cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                        cursor: 'pointer', fontSize: 'var(--font-sm)', fontWeight: 600,
                         textAlign: 'center',
                       }}
                     >{e.name}</button>
@@ -624,7 +624,7 @@ export default function ProductionPage() {
                 style={{
                   padding: '8px 16px',
                   background: '#fff', border: '1px solid #bdc3c7',
-                  borderRadius: 6, cursor: 'pointer', fontSize: 13,
+                  borderRadius: 6, cursor: 'pointer', fontSize: 'var(--font-sm)',
                 }}
               >Отмена</button>
             </div>

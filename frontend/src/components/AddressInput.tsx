@@ -195,7 +195,7 @@ export default function AddressInput({
         style={{ width: '100%' }}
       />
       {noToken && (
-        <div style={{ fontSize: '0.75em', color: '#888', marginTop: 2 }}>
+        <div style={{ fontSize: 'var(--font-sm)', color: '#888', marginTop: 2 }}>
           Подсказки адреса отключены: не задан VITE_DADATA_TOKEN. Поле работает как обычный ввод.
         </div>
       )}
@@ -206,7 +206,7 @@ export default function AddressInput({
       {!noToken && value.trim().length > 0 && !isResolved && !externallyConfirmed && (
         <div style={{
           display: 'inline-block', marginTop: 4, padding: '1px 8px', borderRadius: 3,
-          fontSize: '0.78em', fontWeight: 500,
+          fontSize: 'var(--font-sm)', fontWeight: 500,
           background: '#fef5e7', color: '#d35400',
         }}
         title="Адрес не выбран из подсказок DaData — координат нет, на карте точка не отобразится. Выберите вариант из списка для подтверждения.">
@@ -226,14 +226,14 @@ export default function AddressInput({
               onMouseDown={e => { e.preventDefault(); select(s) }}
               onMouseEnter={() => setHighlight(i)}
               style={{
-                padding: '8px 12px', cursor: 'pointer', fontSize: '0.92em',
+                padding: '8px 12px', cursor: 'pointer', fontSize: 'var(--font-sm)',
                 background: i === highlight ? '#f0f6ff' : '#fff',
                 borderBottom: i < suggestions.length - 1 ? '1px solid #f0f0f0' : 'none',
               }}
             >
               <div>{s.value}</div>
               {s.data.city_district && (
-                <div style={{ fontSize: '0.85em', color: '#888', marginTop: 2 }}>
+                <div style={{ fontSize: 'var(--font-sm)', color: '#888', marginTop: 2 }}>
                   Район: {s.data.city_district_with_type || s.data.city_district}
                 </div>
               )}
@@ -245,7 +245,7 @@ export default function AddressInput({
         <div style={{
           position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
           background: '#fff', border: '1px solid #ddd', borderRadius: 4,
-          padding: '8px 12px', fontSize: '0.85em', color: '#888',
+          padding: '8px 12px', fontSize: 'var(--font-sm)', color: '#888',
           marginTop: 2,
         }}>
           Загрузка подсказок...

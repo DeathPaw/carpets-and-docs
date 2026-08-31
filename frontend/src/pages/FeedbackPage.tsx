@@ -79,7 +79,7 @@ export default function FeedbackPage() {
     <div>
       <div className="page-header">
         <h1>Обращения</h1>
-        <div style={{ color: '#7f8c8d', fontSize: '0.9em' }}>
+        <div style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)' }}>
           Всего: {items.length}{topicFilter.length > 0 && ` (показано: ${filtered.length})`}
         </div>
       </div>
@@ -128,13 +128,13 @@ export default function FeedbackPage() {
                       <span className={`badge ${FEEDBACK_STATUS_BADGES[f.status] || 'badge-lead'}`}>
                         {FEEDBACK_STATUS_LABELS[f.status] || f.status}
                       </span>
-                      <span style={{ color: '#7f8c8d', fontSize: '0.85em' }}>
+                      <span style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)' }}>
                         #{f.id} · {formatDate(f.created_at)}
                         {f.submitted_by && ` · ${f.submitted_by}`}
                       </span>
                     </div>
                     <div style={{
-                      fontSize: '0.85em', marginBottom: 8,
+                      fontSize: 'var(--font-sm)', marginBottom: 8,
                       padding: '4px 10px', background: 'var(--c-primary-light)',
                       borderRadius: 4, display: 'inline-block', color: 'var(--c-primary-dark)',
                     }}>
@@ -143,7 +143,7 @@ export default function FeedbackPage() {
                         📍 {path.label}
                       </Link>
                       {Object.keys(path.params).length > 0 && (
-                        <span style={{ marginLeft: 6, fontSize: '0.85em', opacity: 0.85 }}>
+                        <span style={{ marginLeft: 6, fontSize: 'var(--font-sm)', opacity: 0.85 }}>
                           ({Object.entries(path.params).map(([k, v]) => `${k}=${v}`).join(', ')})
                         </span>
                       )}
@@ -184,7 +184,7 @@ export default function FeedbackPage() {
                     <select
                       value={f.status}
                       onChange={e => void handleStatusChange(f, e.target.value as FeedbackStatus)}
-                      style={{ width: 'auto', minWidth: 180, fontSize: '0.85em' }}
+                      style={{ width: 'auto', minWidth: 180, fontSize: 'var(--font-sm)' }}
                     >
                       {ALL_FEEDBACK_STATUSES.map(s => (
                         <option key={s} value={s}>{FEEDBACK_STATUS_LABELS[s]}</option>

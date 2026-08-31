@@ -107,20 +107,22 @@ export default function AnalyticsPage() {
     <div>
       <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
         <h1>Аналитика</h1>
-        {/* V8: переключатель периода. Пресеты + ручной диапазон c/по. */}
+        {/* V8: переключатель периода. Пресеты + ручной диапазон c/по.
+            Кнопки-пресеты той же высоты, что поля даты рядом (--control-h):
+            btn-sm давал заметно более низкую кнопку, и строка выглядела рваной. */}
         <div className="card" style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', padding: '8px 12px', margin: 0 }}>
-          <strong style={{ fontSize: '0.9em', color: '#7f8c8d' }}>Период:</strong>
-          <button className="btn-secondary btn-sm" onClick={() => setPreset('all')} style={{ fontWeight: !dateFrom && !dateTo ? 700 : 400 }}>Всё время</button>
-          <button className="btn-secondary btn-sm" onClick={() => setPreset('current_month')}>Текущий месяц</button>
-          <button className="btn-secondary btn-sm" onClick={() => setPreset('last_7')}>7 дней</button>
-          <button className="btn-secondary btn-sm" onClick={() => setPreset('last_30')}>30 дней</button>
-          <button className="btn-secondary btn-sm" onClick={() => setPreset('last_90')}>3 месяца</button>
-          <span style={{ borderLeft: '1px solid #ddd', height: 24, margin: '0 6px' }} />
-          <label style={{ fontSize: '0.85em', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            с <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 140 }} />
+          <strong style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>Период:</strong>
+          <button className="btn-secondary btn-sm btn-control-h" onClick={() => setPreset('all')} style={{ fontWeight: !dateFrom && !dateTo ? 700 : 400 }}>Всё время</button>
+          <button className="btn-secondary btn-sm btn-control-h" onClick={() => setPreset('current_month')}>Текущий месяц</button>
+          <button className="btn-secondary btn-sm btn-control-h" onClick={() => setPreset('last_7')}>7 дней</button>
+          <button className="btn-secondary btn-sm btn-control-h" onClick={() => setPreset('last_30')}>30 дней</button>
+          <button className="btn-secondary btn-sm btn-control-h" onClick={() => setPreset('last_90')}>3 месяца</button>
+          <span style={{ borderLeft: '1px solid #ddd', height: 'var(--control-h)', margin: '0 6px' }} />
+          <label style={{ fontSize: 'var(--font-sm)', display: 'inline-flex', gap: 4, alignItems: 'center', height: 'var(--control-h)' }}>
+            с <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)} style={{ width: 140, height: 'var(--control-h)' }} />
           </label>
-          <label style={{ fontSize: '0.85em', display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-            по <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ width: 140 }} />
+          <label style={{ fontSize: 'var(--font-sm)', display: 'inline-flex', gap: 4, alignItems: 'center', height: 'var(--control-h)' }}>
+            по <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)} style={{ width: 140, height: 'var(--control-h)' }} />
           </label>
         </div>
       </div>
@@ -175,13 +177,13 @@ export default function AnalyticsPage() {
         {/* Производительность сотрудников */}
         <div className="card">
           <h2 style={{ marginTop: 0 }}>
-            Производительность сотрудников <span style={{ fontSize: '0.7em', color: '#7f8c8d', fontWeight: 'normal' }}>(клик — карточка услуг)</span>
+            Производительность сотрудников <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', fontWeight: 'normal' }}>(клик — карточка услуг)</span>
           </h2>
           {employeeData.length === 0 ? <div className="empty">Нет данных</div> : (
             <ResponsiveContainer width="100%" height={Math.max(200, employeeData.length * 40)}>
               <BarChart data={employeeData} layout="vertical" margin={{ left: 80 }}>
                 <XAxis type="number" />
-                <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 12 }} />
+                <YAxis type="category" dataKey="name" width={80} tick={{ fontSize: 'var(--font-sm)' }} />
                 <Tooltip formatter={(value, name) => [name === 'services_done' ? `${value} услуг` : `${value} ₽`, name === 'services_done' ? 'Выполнено' : 'Заработано']} />
                 <Bar
                   dataKey="services_done"
@@ -216,7 +218,7 @@ export default function AnalyticsPage() {
 
       {/* Выручка по месяцам — полная ширина. V6: клик по месяцу → заказы за этот месяц. */}
       <div className="card" data-tour="analytics-revenue" style={{ marginBottom: 16 }}>
-        <h2 style={{ marginTop: 0 }}>Выручка по месяцам <span style={{ fontSize: '0.7em', color: '#7f8c8d', fontWeight: 'normal' }}>(клик по столбцу — заказы за месяц)</span></h2>
+        <h2 style={{ marginTop: 0 }}>Выручка по месяцам <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', fontWeight: 'normal' }}>(клик по столбцу — заказы за месяц)</span></h2>
         {revenueChartData.length === 0 ? <div className="empty">Нет данных</div> : (
           <ResponsiveContainer width="100%" height={300}>
             <BarChart data={revenueChartData}>
@@ -320,7 +322,7 @@ export default function AnalyticsPage() {
                   const margin = revenue - cost
                   return (
                     <div key={i} style={{ marginBottom: 12 }}>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.9em', marginBottom: 2 }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', marginBottom: 2 }}>
                         <span><strong>{m.service_name}</strong> ({m.count} шт.)</span>
                         <span style={{ color: margin >= 0 ? '#27ae60' : '#e74c3c', fontWeight: 600 }}>
                           Маржа: {margin.toFixed(0)} ₽
@@ -346,7 +348,7 @@ export default function AnalyticsPage() {
                           title={`Себестоимость: ${cost.toFixed(0)} ₽`}
                         />
                       </div>
-                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75em', color: '#888' }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#888' }}>
                         <span style={{ color: '#27ae60' }}>Выручка: {revenue.toFixed(0)} ₽</span>
                         <span style={{ color: '#e74c3c' }}>Себест.: {cost.toFixed(0)} ₽</span>
                       </div>
@@ -364,7 +366,7 @@ export default function AnalyticsPage() {
         <div className="modal-overlay" onClick={() => setEmployeeCard(null)}>
           <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 800, maxHeight: '85vh', overflow: 'auto' }}>
             <h2 style={{ marginTop: 0 }}>{employeeCard.name}</h2>
-            <div style={{ fontSize: '0.85em', color: '#7f8c8d', marginBottom: 12 }}>
+            <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 12 }}>
               Услуги в статусе «Готова» за {dateFrom || dateTo ? `${dateFrom || '…'} — ${dateTo || '…'}` : 'текущий месяц'}
             </div>
             {employeeCardLoading ? (
@@ -393,7 +395,7 @@ export default function AnalyticsPage() {
                         <td>{s.sku_name || `#${s.sku_id}`}</td>
                         <td>#{String(s.order_id || '').padStart(5, '0')}</td>
                         <td style={{ textAlign: 'right' }}>{Number(s.price).toFixed(0)} ₽</td>
-                        <td style={{ fontSize: '0.85em', color: '#7f8c8d' }}>{new Date(s.updated_at).toLocaleDateString('ru')}</td>
+                        <td style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>{new Date(s.updated_at).toLocaleDateString('ru')}</td>
                       </tr>
                     ))}
                   </tbody>

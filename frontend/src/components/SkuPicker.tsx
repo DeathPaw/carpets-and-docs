@@ -120,8 +120,8 @@ export default function SkuPicker({
                       {r.matches ? '✓' : ''}
                     </td>
                     <td>{r.sku.name}</td>
-                    <td style={{ fontSize: '0.85em', color: '#7f8c8d' }}>{r.sku.group_name || '—'}</td>
-                    <td style={{ fontSize: '0.85em', color: '#7f8c8d' }}>
+                    <td style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>{r.sku.group_name || '—'}</td>
+                    <td style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>
                       {PRICING_LABEL[r.sku.pricing_type] || r.sku.pricing_type}
                     </td>
                     <td style={{ textAlign: 'right' }}>
@@ -140,7 +140,7 @@ export default function SkuPicker({
           )}
         </div>
 
-        <div style={{ marginTop: 12, fontSize: '0.85em', color: '#7f8c8d' }}>
+        <div style={{ marginTop: 12, fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>
           Параметры позиции: тип #{item.item_type_id}
           {item.weight != null && ` · вес ${item.weight} кг`}
           {item.area != null && ` · S ${item.area} м²`}

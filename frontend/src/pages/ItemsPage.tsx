@@ -212,14 +212,14 @@ export default function ItemsPage() {
                 <button
                   key={s}
                   type="button"
-                  className={`badge badge-${s.toLowerCase()}`}
+                  className={`badge chip badge-${s.toLowerCase()}`}
                   onClick={() => {
                     setStatusFilters(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s])
                     setPage(0)
                   }}
                   style={{
-                    cursor: 'pointer', padding: '5px 12px', fontSize: 13,
-                    border: on ? '2px solid #2c3e50' : '1px solid transparent',
+                    // Рамка всегда 2px — иначе чип подрастал при выборе.
+                    border: `2px solid ${on ? '#2c3e50' : 'transparent'}`,
                     opacity: statusFilters.length === 0 || on ? 1 : 0.4,
                     fontWeight: on ? 700 : 500,
                   }}
@@ -229,7 +229,7 @@ export default function ItemsPage() {
             {statusFilters.length > 0 && (
               <button type="button"
                 onClick={() => { setStatusFilters([]); setPage(0) }}
-                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 12, padding: '5px 8px' }}
+                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 'var(--font-sm)', padding: '5px 8px' }}
               >Снять все</button>
             )}
           </div>
@@ -247,12 +247,13 @@ export default function ItemsPage() {
                     setItemTypeFilters(prev => prev.includes(t.id) ? prev.filter(x => x !== t.id) : [...prev, t.id])
                     setPage(0)
                   }}
+                  className="chip"
                   style={{
-                    padding: '5px 12px', borderRadius: 5,
-                    border: on ? '2px solid #3498db' : '1px solid #bdc3c7',
+                    borderRadius: 5,
+                    border: `2px solid ${on ? '#3498db' : '#bdc3c7'}`,
                     background: on ? '#3498db' : '#fff',
                     color: on ? '#fff' : '#2c3e50',
-                    fontSize: 13, cursor: 'pointer', fontWeight: on ? 600 : 500,
+                    fontWeight: on ? 600 : 500,
                   }}
                 >{t.name}</button>
               )
@@ -260,7 +261,7 @@ export default function ItemsPage() {
             {itemTypeFilters.length > 0 && (
               <button type="button"
                 onClick={() => { setItemTypeFilters([]); setPage(0) }}
-                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 12, padding: '5px 8px' }}
+                style={{ background: 'transparent', border: 'none', color: '#7f8c8d', cursor: 'pointer', fontSize: 'var(--font-sm)', padding: '5px 8px' }}
               >Снять все</button>
             )}
           </div>

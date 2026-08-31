@@ -103,7 +103,7 @@ export default function Tiles<V extends string | number>(props: TilesProps<V>) {
                     >
                         <div>{opt.label}</div>
                         {opt.hint && (
-                            <div style={{ fontSize: '0.75em', opacity: 0.75, marginTop: 2 }}>
+                            <div style={{ fontSize: 'var(--font-sm)', opacity: 0.75, marginTop: 2 }}>
                                 {opt.hint}
                             </div>
                         )}

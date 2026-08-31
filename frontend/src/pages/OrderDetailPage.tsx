@@ -115,6 +115,22 @@ function formatPriceBreakdown(svc: OrderItemService, item: OrderItem): string | 
 }
 
 // ---- Services Panel ----
+/** Подкарточка внутри развёрнутой позиции: «Фото» и «Услуги». Белый фон и
+ *  рамка отделяют их от серой подложки строки и друг от друга — раньше это
+ *  были два заголовка с кнопками, висящие в пустоте. */
+const subCard: React.CSSProperties = {
+  background: '#fff',
+  border: '1px solid var(--c-border)',
+  borderRadius: 'var(--radius)',
+  padding: '10px 12px',
+  marginBottom: 0,
+}
+
+/** Ширина главной кнопки секции: «+ Добавить позицию», «+ Добавить услугу»,
+ *  «Добавить фото». Они стоят столбиком друг под другом, и разная ширина
+ *  бросалась в глаза сильнее, чем экономия места. */
+const sectionActionBtn: React.CSSProperties = { width: 190, whiteSpace: 'nowrap' }
+
 function ServicesPanel({
   orderId, item, itemTypeId, employees, roles, onRefresh, isEditable, onOpenDimensions, isDefaultType,
 }: {
@@ -301,16 +317,18 @@ function ServicesPanel({
   }
 
   return (
-    <div style={{ marginTop: 8 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8, gap: 12, flexWrap: 'wrap' }}>
+    <div style={subCard}>
+      <div style={{
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        minHeight: 34, marginBottom: 8, gap: 12, flexWrap: 'wrap',
+      }}>
         <h4 style={{ margin: 0 }}>Услуги</h4>
         <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
           {/* V19 (#1): тумблер видимости отменённых услуг. По дефолту скрыты. */}
           {services.some(s => s.status === 'CANCELLED') && (
-            <label style={{ display: 'flex', gap: 4, alignItems: 'center', fontSize: '0.85em', color: '#7f8c8d', cursor: 'pointer' }}>
+            <label className="toggle-box">
               <input
                 type="checkbox"
-                style={{ width: 'auto' }}
                 checked={!hideCancelledServices}
                 onChange={e => setHideCancelledServices(!e.target.checked)}
               />
@@ -321,7 +339,8 @@ function ServicesPanel({
             <button
               type="button"
               onClick={() => setSkuPickerOpen(true)}
-              className="btn-primary btn-sm"
+              className="btn-primary"
+              style={sectionActionBtn}
             >+ Добавить услугу</button>
           )}
         </div>
@@ -334,18 +353,17 @@ function ServicesPanel({
       ) : (
         <table className="services-table">
           <thead>
+            {/* Колонок было пять, и две из них назывались «Статус»: бейдж и селект
+                смены. Бейдж убран — селект и так показывает текущий статус,
+                а причина отмены переехала под название услуги. */}
             <tr>
               <th>Услуга</th>
-              <th style={{ width: 110 }}>Статус</th>
-              {/* Колонка «Стоимость» — только для НЕ дефолтных типов. У доставки/оформления
-                  стоимость задаётся самой позицией (default_price), услуги её не определяют.
-                  Шире (190), потому что внутри ещё бывает «(ручная) А» + разбивка формулы,
-                  а с nowrap они выпирали в соседнюю колонку «Статус». */}
-              {!isDefaultType && <th style={{ width: 190, textAlign: 'right' }}>Стоимость</th>}
-              <th style={{ width: 170 }}>Исполнители</th>
-              {/* 280 вместо 220 — раньше кнопка «Исполнители» обрезалась справа,
-                  потому что select(115) + gap + button(~120px) ≈ 250px не помещались. */}
-              {isEditable && <th style={{ width: 280, textAlign: 'right' }}>Действия</th>}
+              {/* «Стоимость» — только для НЕ дефолтных типов. У доставки/оформления
+                  стоимость задаётся самой позицией (default_price). Шире обычного:
+                  внутри бывает «(ручная) А» и разбивка формулы. */}
+              {!isDefaultType && <th style={{ width: 170, textAlign: 'right' }}>Стоимость</th>}
+              <th style={{ width: 150, textAlign: 'center' }}>Исполнители</th>
+              <th style={{ width: 160, textAlign: 'right' }}>Статус</th>
             </tr>
           </thead>
           <tbody>
@@ -354,7 +372,10 @@ function ServicesPanel({
               const noAssignees = !s.assignees || s.assignees.length === 0
               // Подсказку «Назначьте исполнителя» помещаем в колонку «Исполнители» —
               // чтобы колонка «Действия» во всех строках имела одинаковый layout (select + кнопка).
-              const showAssignHint = noAssignees && s.status === 'CREATED' && !blocked
+              // V37: самовывозу исполнитель не нужен — вещи везёт клиент.
+              // Ни подсказки, ни блокировки статусов для него быть не должно.
+              const selfService = (s.sku_name || '').toLowerCase().includes('самовывоз')
+              const showAssignHint = !selfService && noAssignees && s.status === 'CREATED' && !blocked
               // V18/V20/V21: свап «платная услуга» ↔ «Самовывоз».
               // По умолчанию (V20) у заказа 3 услуги: Приём, Доставка, Оформление.
               // Свапаются Приём и Доставка — обе с одноимённым Самовывозом.
@@ -379,8 +400,19 @@ function ServicesPanel({
                 <tr key={s.id} style={blocked ? { background: '#fff3cd' } : undefined}>
                   <td>
                     {s.sku_name ?? `Услуга #${s.sku_id}`}
+                    {s.status === 'CANCELLED' && s.cancellation_reason && (
+                      <div
+                        style={{
+                          fontSize: 'var(--font-sm)', color: '#888', marginTop: 2,
+                          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                        }}
+                        title={s.cancellation_reason}
+                      >
+                        {s.cancellation_reason}
+                      </div>
+                    )}
                     {blocked && (
-                      <div style={{ fontSize: '0.8em', color: '#e67e22', fontWeight: 600 }}>
+                      <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22', fontWeight: 600 }}>
                         Не заполнены размеры
                       </div>
                     )}
@@ -388,7 +420,7 @@ function ServicesPanel({
                     {isEditable && swapTargetName && s.status !== 'CANCELLED' && (
                       <button
                         className="btn-secondary btn-sm"
-                        style={{ marginTop: 4, padding: '2px 8px', fontSize: '0.78em' }}
+                        style={{ display: 'block', marginTop: 6, width: 130, textAlign: 'center' }}
                         title={`Заменить на «${swapTargetName}»`}
                         onClick={async () => {
                           try {
@@ -404,17 +436,6 @@ function ServicesPanel({
                           }
                         }}
                       >↔ {isSelfPickup ? 'Платная' : 'Самовывоз'}</button>
-                    )}
-                  </td>
-                  <td>
-                    <Badge status={s.status} labels={SERVICE_STATUS_LABELS} />
-                    {s.status === 'CANCELLED' && s.cancellation_reason && (
-                      <div
-                        style={{ fontSize: '0.78em', color: '#888', marginTop: 2, lineHeight: 1.3, whiteSpace: 'normal' }}
-                        title={s.cancellation_reason}
-                      >
-                        {s.cancellation_reason}
-                      </div>
                     )}
                   </td>
                   {/* Колонка «Стоимость» — только для НЕ дефолтных. Для дефолтов <td> вообще
@@ -434,55 +455,79 @@ function ServicesPanel({
                           <button className="btn-success btn-sm" onClick={savePriceEdit} title="Сохранить">&#10003;</button>
                           <button className="btn-secondary btn-sm" onClick={() => { setEditingPrice(null); setPriceValue('') }} title="Отмена">&#10005;</button>
                         </div>
-                        <span style={{ fontSize: '0.7em', color: '#888' }}>пусто = авто-расчёт</span>
+                        <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>пусто = авто-расчёт</span>
                       </div>
                     ) : (() => {
                       const breakdown = formatPriceBreakdown(s, item)
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
-                          {/* Цена + ✏️ — в одну строку. */}
                           <span
-                            style={{ cursor: isEditable ? 'pointer' : 'default' }}
+                            className={isEditable ? 'inline-edit' : undefined}
+                            title={isEditable ? 'Нажмите, чтобы задать цену вручную' : undefined}
                             onClick={() => isEditable && openPriceEdit(s.id)}
                           >
-                            {Number(s.price).toFixed(2)} &#8381;{isEditable ? ' ✏️' : ''}
+                            {Number(s.price).toFixed(2)} &#8381;
                           </span>
                           {/* (ручная) + кнопка «А» — отдельной строкой ниже, чтобы не вылезали
                               в соседнюю колонку «Статус» (была проблема наложения текста). */}
                           {s.is_manual_price && (
-                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: '0.78em', color: '#666' }}>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, fontSize: 'var(--font-sm)', color: '#666' }}>
                               (ручная)
                               {isEditable && (
                                 <button
                                   className="btn-secondary btn-sm"
                                   onClick={() => void resetServicePriceToAuto(s.id)}
                                   title="Авто-расчёт цены (SKU × параметр позиции)"
-                                  style={{ padding: '1px 6px', fontSize: '0.9em', lineHeight: 1 }}
+                                  style={{ padding: '1px 6px', fontSize: 'var(--font-sm)', lineHeight: 1 }}
                                 >А</button>
                               )}
                             </span>
                           )}
                           {breakdown && (
-                            <span style={{ fontSize: '0.72em', color: '#888' }}>{breakdown}</span>
+                            <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>{breakdown}</span>
                           )}
                         </div>
                       )
                     })()}
                   </td>
                   )}
-                  <td>
-                    {!noAssignees ? (
-                      s.assignees!.map(e => e.name).join(', ')
-                    ) : showAssignHint ? (
-                      <span style={{ color: '#e67e22', fontSize: '0.85em', fontWeight: 600 }}>
-                        Назначьте исполнителя
-                      </span>
+                  <td style={{ textAlign: 'center' }}>
+                    {/* Кнопка ровно та же, что в строке позиции: тот же класс,
+                        та же ширина и тот же оранжевый контур, когда исполнителя
+                        нет. Раньше здесь был голый оранжевый текст — одно и то
+                        же действие выглядело в двух местах по-разному. */}
+                    {selfService ? (
+                      <span style={{ color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)' }}
+                            title="Клиент везёт сам — сотрудник не нужен">не требуется</span>
+                    ) : !isEditable ? (
+                      !noAssignees ? s.assignees!.map(e => e.name).join(', ') : <span style={{ color: '#aaa' }}>—</span>
                     ) : (
-                      <span style={{ color: '#aaa' }}>—</span>
+                      <button
+                        type="button"
+                        className="btn-secondary btn-sm"
+                        disabled={s.status === 'CANCELLED'}
+                        onClick={() => openAssign(s.id, s.assignees ?? [])}
+                        title={s.status === 'CANCELLED'
+                          ? 'Услуга отменена — исполнителя не назначают'
+                          : noAssignees
+                            ? 'Исполнитель не назначен — нажмите, чтобы назначить'
+                            : `Исполнители: ${s.assignees!.map(e => e.name).join(', ')}`}
+                        style={{
+                          width: 130, textAlign: 'center',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                          ...(noAssignees && s.status !== 'CANCELLED'
+                            ? { borderColor: 'var(--c-warning-strong)', color: 'var(--c-warning-strong)' }
+                            : {}),
+                        }}
+                      >
+                        {!noAssignees ? s.assignees!.map(e => e.name).join(', ') : 'Исполнители'}
+                      </button>
                     )}
                   </td>
-                  {isEditable && (
-                    <td style={{ textAlign: 'right' }}>
+                  <td style={{ textAlign: 'right' }}>
+                    {!isEditable ? (
+                      <Badge status={s.status} labels={SERVICE_STATUS_LABELS} />
+                    ) : (
                       <div style={{ display: 'inline-flex', gap: 6, alignItems: 'center', justifyContent: 'flex-end' }}>
                         {/* Селект показываем всегда. Если размеры не заполнены — попытка перевести
                             в IN_PROGRESS/DONE откроет модалку «Заполните размеры», а не молча
@@ -503,12 +548,9 @@ function ServicesPanel({
                           ]}
                           onChange={v => changeStatus(s.id, v as ServiceStatus)}
                         />
-                        <button className="btn-secondary btn-sm" onClick={() => openAssign(s.id, s.assignees ?? [])}>
-                          Исполнители
-                        </button>
                       </div>
-                    </td>
-                  )}
+                    )}
+                  </td>
                 </tr>
               )
             })}
@@ -552,7 +594,7 @@ function ServicesPanel({
           <div className="modal-overlay" onClick={() => setAssignModal(null)}>
             <div className="modal" onClick={e => e.stopPropagation()}>
               <h2>Назначить исполнителей</h2>
-              <div className="notice notice-info" style={{ fontSize: '0.85em' }}>
+              <div className="notice notice-info" style={{ fontSize: 'var(--font-sm)' }}>
                 <div><strong>Тип позиции:</strong> {itemTypeName}</div>
                 <div style={{ marginTop: 4 }}>
                   <strong>Видны исполнители:</strong>{' '}
@@ -591,10 +633,10 @@ function ServicesPanel({
                       {/* Бейдж роли — оператор сразу видит, почему именно этот исполнитель подходит. */}
                       {role
                         ? <span style={{
-                            fontSize: '0.78em', padding: '1px 6px', borderRadius: 8,
+                            fontSize: 'var(--font-sm)', padding: '1px 6px', borderRadius: 8,
                             background: '#ecf0f1', color: '#7f8c8d',
                           }}>{role.name}</span>
-                        : <span style={{ fontSize: '0.78em', color: '#aaa', fontStyle: 'italic' }}>универсал</span>
+                        : <span style={{ fontSize: 'var(--font-sm)', color: '#aaa', fontStyle: 'italic' }}>универсал</span>
                       }
                     </label>
                   )
@@ -845,12 +887,13 @@ function ItemRow({
             </div>
           ) : (
             <div
-              style={{ cursor: isEditable ? 'pointer' : 'default' }}
+              className={isEditable ? 'inline-edit' : undefined}
+              title={isEditable ? 'Нажмите, чтобы изменить описание и дефекты' : undefined}
               onClick={() => isEditable && setEditDesc(true)}
             >
-              <div>{item.description || '—'}{isEditable ? ' ✏️' : ''}</div>
+              <div>{item.description || '—'}</div>
               {item.defects && (
-                <div style={{ fontSize: '0.85em', color: '#e67e22', marginTop: 2 }}>
+                <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22', marginTop: 2 }}>
                   Дефекты: {item.defects}
                 </div>
               )}
@@ -923,14 +966,14 @@ function ItemRow({
             </div>
           ) : (
             <span
-              style={{ cursor: isEditable ? 'pointer' : 'default' }}
+              className={isEditable ? 'inline-edit' : undefined}
+              title={isEditable ? 'Нажмите, чтобы изменить размеры' : undefined}
               onClick={() => isEditable && setEditDimensions(true)}
             >
               {item.length ? `${item.length}×${item.width || 0}` : '—'}
               {item.weight ? ` (${item.weight}кг)` : ''}
               {item.area ? ` S=${item.area}` : ''}
               {item.running_meters ? ` ${item.running_meters}п.м.` : ''}
-              {isEditable ? ' ✏️' : ''}
             </span>
           )}
         </td>
@@ -946,24 +989,26 @@ function ItemRow({
                 больше не нужно раскрывать каждую позицию, чтобы назначить
                 исполнителя или сдвинуть статус. «Дубль»/«Отменить» ужаты до
                 иконок, чтобы освободить место. */}
-            {/* Фиксированные ширины: без них «Назначить» и «Исполнители» разной
-                длины, и кнопки соседних строк не попадали в одну колонку. */}
+            {/* Подпись кнопки одна и та же в обоих состояниях — «Исполнители».
+                Раньше она называлась то «Назначить», то «Исполнители» в
+                зависимости от того, назначен кто-то или нет, и глаз каждый раз
+                искал её заново. Разницу показывает оранжевый контур и подсказка. */}
             <div style={{ display: 'inline-flex', gap: 4, justifyContent: 'flex-end', alignItems: 'center', whiteSpace: 'nowrap' }}>
               {item.status !== 'CANCELLED' && activeServices.length > 0 && (
                 <>
                   <button
                     className="btn-secondary btn-sm"
-                    title={needsAssignee ? 'Назначить исполнителя' : `Исполнители: ${assigneeSummary}`}
+                    title={needsAssignee ? 'Исполнитель не назначен — нажмите, чтобы назначить' : `Исполнители: ${assigneeSummary}`}
                     // Пока исполнителя нет — подсвечиваем оранжевым контуром: это
                     // блокирует смену статуса, оператор должен начать отсюда.
                     style={{
-                      width: 100, textAlign: 'center',
+                      width: 130, textAlign: 'center',
                       ...(needsAssignee
                         ? { borderColor: 'var(--c-warning-strong)', color: 'var(--c-warning-strong)' }
                         : {}),
                     }}
                     onClick={() => onQuickAssign(item)}
-                  >{needsAssignee ? 'Назначить' : 'Исполнители'}</button>
+                  >Исполнители</button>
                   {/* Статус недоступен без исполнителя — бэк всё равно откажет
                       («Невозможно сменить статус: не назначен исполнитель»),
                       поэтому кнопку гасим, а не даём напороться на ошибку. */}
@@ -1009,15 +1054,43 @@ function ItemRow({
       </tr>
       {expanded && (
         <tr>
-          <td colSpan={isEditable ? 7 : 6} style={{ background: '#f8f9fa', padding: '12px 20px' }}>
-            {/* Photo section */}
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                <h4 style={{ margin: 0 }}>Фото</h4>
+          <td colSpan={isEditable ? 7 : 6} style={{ background: '#f8f9fa', padding: '12px 0 12px 20px' }}>
+            {/* Раскладка развёрнутой позиции: слева услуги — с ними работают,
+                справа фото — на них смотрят. Раньше блоки шли друг под другом,
+                и таблица услуг занимала половину ширины, а вторая половина
+                пустовала. */}
+            <div className="item-expanded">
+            <ServicesPanel orderId={orderId} item={item} itemTypeId={item.item_type_id} employees={employees} roles={roles} onRefresh={onRefresh} isEditable={isEditable} onOpenDimensions={() => setEditDimensions(true)} isDefaultType={isDefaultType} />
+            <div style={{ ...subCard, marginBottom: 0 }}>
+              {/* В узкой правой колонке заголовок и кнопки не помещаются в строку,
+                  поэтому кнопки идут под ним и во всю ширину колонки: так они
+                  одинаковой ширины между собой и упираются в тот же правый край,
+                  что «+ Добавить позицию» в шапке блока. */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', minHeight: 34, gap: 8 }}>
+                  <h4 style={{ margin: 0 }}>Фото</h4>
+                  {/* Без этой подписи между заголовком и кнопкой зияла пустая
+                      полоса, и было непонятно — фото нет или они не загрузились. */}
+                  {photos.length === 0 && (
+                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)' }}>
+                      не загружены
+                    </span>
+                  )}
+                </div>
                 {isEditable && (
-                  <>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {photos.length > 0 && (
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={() => setPhotosEditMode(m => !m)}
+                        style={photosEditMode ? { background: '#e67e22', color: '#fff', borderColor: '#e67e22' } : undefined}
+                      >
+                        {photosEditMode ? 'Готово' : 'Редактировать фото'}
+                      </button>
+                    )}
                     <button
-                      className="btn-secondary btn-sm"
+                      className="btn-secondary"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={uploadingPhoto}
                     >
@@ -1034,26 +1107,14 @@ function ItemRow({
                         e.target.value = ''
                       }}
                     />
-                  </>
+                  </div>
                 )}
               </div>
               {photos.length > 0 && (
                 <>
-                  {isEditable && (
-                    <div style={{ marginBottom: 6 }}>
-                      <button
-                        type="button"
-                        className="btn-secondary btn-sm"
-                        onClick={() => setPhotosEditMode(m => !m)}
-                        style={photosEditMode ? { background: '#e67e22', color: '#fff' } : undefined}
-                      >
-                        {photosEditMode ? 'Готово' : '✏️ Редактировать фото'}
-                      </button>
-                      {photosEditMode && (
-                        <span style={{ marginLeft: 8, color: '#e67e22', fontSize: '0.85em' }}>
-                          Нажмите ✕ на фото — удалит. Нажмите «Готово» когда закончили.
-                        </span>
-                      )}
+                  {isEditable && photosEditMode && (
+                    <div style={{ marginBottom: 6, color: '#e67e22', fontSize: 'var(--font-sm)' }}>
+                      Нажмите ✕ на фото — удалит. Нажмите «Готово» когда закончили.
                     </div>
                   )}
                   <div style={{ display: 'flex', gap: 8, overflowX: 'auto', paddingBottom: 4 }}>
@@ -1077,7 +1138,7 @@ function ItemRow({
                               position: 'absolute', top: -6, right: -6,
                               width: 22, height: 22, borderRadius: '50%',
                               background: '#e74c3c', color: '#fff', border: '2px solid #fff',
-                              cursor: 'pointer', fontSize: 13, lineHeight: '18px',
+                              cursor: 'pointer', fontSize: 'var(--font-sm)', lineHeight: '18px',
                               padding: 0, textAlign: 'center',
                               boxShadow: '0 1px 3px rgba(0,0,0,0.3)',
                             }}
@@ -1107,7 +1168,7 @@ function ItemRow({
                 </div>
               </div>
             )}
-            <ServicesPanel orderId={orderId} item={item} itemTypeId={item.item_type_id} employees={employees} roles={roles} onRefresh={onRefresh} isEditable={isEditable} onOpenDimensions={() => setEditDimensions(true)} isDefaultType={isDefaultType} />
+            </div>
           </td>
         </tr>
       )}
@@ -1186,7 +1247,7 @@ function QuickItemActionsModal({
         <h2 style={{ marginTop: 0 }}>
           {item.item_type_name || `Позиция #${item.id}`}
         </h2>
-        <div style={{ color: '#7f8c8d', fontSize: '0.9em', marginTop: -8, marginBottom: 14 }}>
+        <div style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)', marginTop: -8, marginBottom: 14 }}>
           {item.description || 'без описания'}
         </div>
 
@@ -1206,7 +1267,7 @@ function QuickItemActionsModal({
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
                 <div style={{ minWidth: 0 }}>
                   <strong>{svc.sku_name || `Услуга #${svc.id}`}</strong>
-                  <div style={{ fontSize: '0.85em', color: '#7f8c8d', marginTop: 2 }}>
+                  <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 2 }}>
                     Исполнители: {assignees.length > 0 ? assignees.map(a => a.name).join(', ') : 'не назначены'}
                   </div>
                 </div>
@@ -1244,7 +1305,7 @@ function QuickItemActionsModal({
                 <div style={{ marginTop: 10, borderTop: '1px solid #eee', paddingTop: 10 }}>
                   <div style={{ maxHeight: 190, overflowY: 'auto', marginBottom: 8 }}>
                     {suitable.length === 0 ? (
-                      <div style={{ color: '#999', fontSize: '0.9em' }}>Нет подходящих сотрудников</div>
+                      <div style={{ color: '#999', fontSize: 'var(--font-sm)' }}>Нет подходящих сотрудников</div>
                     ) : suitable.map(emp => (
                       <label key={emp.id} style={{
                         display: 'flex', alignItems: 'center', gap: 8, padding: '4px 2px', cursor: 'pointer',
@@ -1337,10 +1398,22 @@ export default function OrderDetailPage() {
   const [clientCardMods, setClientCardMods] = useState<PriceModifier[]>([])
   const [clientEvents, setClientEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
   const [newEventNote, setNewEventNote] = useState('')
-  const [editComment, setEditComment] = useState(false)
   const [commentValue, setCommentValue] = useState('')
-  const [editDetails, setEditDetails] = useState(false)
+  const [commentSaved, setCommentSaved] = useState(false)
+  /** Есть ли несохранённая правка в комментарии — чтобы перезагрузка её не стёрла. */
+  const commentDirtyRef = useRef(false)
+
+  /** Компактная метка слева от строки «Логистики и деталей». */
+  const detailsRowLabel: React.CSSProperties = {
+    flex: '0 0 74px', fontWeight: 600, fontSize: 'var(--font-sm)', color: 'var(--c-text)',
+  }
+  const [detailsSaved, setDetailsSaved] = useState(false)
   const [mapVisible, setMapVisible] = useState(false)
+
+  // Карта сворачивается по Esc — как модалки. Подписка активна только пока
+  // карта развёрнута, поэтому Esc в других местах страницы ничего не задевает.
+  useEscapeClose(mapVisible, () => setMapVisible(false))
+
   const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void} | null>(null)
   const [details, setDetails] = useState({
     pickup_address: '',
@@ -1402,8 +1475,10 @@ export default function OrderDetailPage() {
         setClientModifierIds(new Set())
         setClientIsProblem(false)
       }
-      setCommentValue(o.comment ?? '')
-      setDetails({
+      // Не затираем недописанную заметку: loadOrder дёргается после любой мутации
+      // на странице (добавили позицию, сменили статус), а поле теперь открыто всегда.
+      if (!commentDirtyRef.current) setCommentValue(o.comment ?? '')
+      const fresh = {
         pickup_address: o.pickup_address ?? '',
         delivery_address: o.delivery_address ?? '',
         pickup_apartment: o.pickup_apartment ?? '',
@@ -1419,7 +1494,11 @@ export default function OrderDetailPage() {
         pickup_lon: o.pickup_lon,
         delivery_lat: o.delivery_lat,
         delivery_lon: o.delivery_lon,
-      })
+      }
+      // Снимок для сравнения на blur — обновляем вместе с самими полями,
+      // иначе первый же уход фокуса после перезагрузки слал бы данные заново.
+      savedDetailsRef.current = JSON.stringify(fresh)
+      setDetails(fresh)
     } catch {
       setError('Ошибка загрузки заказа')
     }
@@ -1584,28 +1663,22 @@ export default function OrderDetailPage() {
   /**
    * Автосохранение блока «Логистика и детали».
    *
-   * Оператору неудобно жать «Сохранить» после каждой правки, поэтому сохраняем
-   * сами, когда фокус уходит с поля (onBlur) и данные реально изменились.
-   * Форма при этом НЕ закрывается (silent=true) — иначе она схлопывалась бы
-   * посреди редактирования. Кнопка «Сохранить» остаётся как явное завершение.
+   * Поля активны всегда, кнопки «Редактировать»/«Сохранить» нет: пишем на
+   * сервер, когда фокус уходит с поля и данные реально изменились. Снимок для
+   * сравнения обновляется при каждой загрузке заказа — иначе после фонового
+   * обновления первый же blur слал бы на бэк неизменённые данные.
    */
   const savedDetailsRef = useRef<string>('')
-  useEffect(() => {
-    // Запоминаем состояние на момент открытия формы — с ним сравниваем на blur.
-    if (editDetails) savedDetailsRef.current = JSON.stringify(details)
-    // details намеренно не в зависимостях: нужен снимок ровно при открытии.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editDetails])
 
   const autoSaveDetails = () => {
-    if (!editDetails) return
+    if (!isEditable) return
     const now = JSON.stringify(details)
     if (now === savedDetailsRef.current) return   // ничего не меняли — не дёргаем бэк
     savedDetailsRef.current = now
-    void saveDetails(true)
+    void saveDetails()
   }
 
-  const saveDetails = async (silent = false) => {
+  const saveDetails = async () => {
     // Валидация дат: забор не в прошлом, доставка >= забора.
     const today = new Date().toISOString().slice(0, 10)
     if (details.pickup_date && details.pickup_date < today) {
@@ -1635,18 +1708,27 @@ export default function OrderDetailPage() {
         delivery_lon: details.delivery_lon,
       })
       setOrder(updated)
-      // При автосохранении форму не закрываем — оператор продолжает править.
-      if (!silent) setEditDetails(false)
+      setDetailsSaved(true)
     } catch {
       setError('Ошибка сохранения деталей')
     }
   }
 
-  const saveComment = async () => {
+  /**
+   * Автосохранение комментария по уходу фокуса.
+   *
+   * Сравниваем с тем, что лежит в заказе: фоновое обновление статусов тянет
+   * заказ каждые несколько секунд, и без этой проверки любой клик по странице
+   * дёргал бы бэк без изменений. «Сохранено» показываем ненавязчиво и гасим,
+   * как только оператор снова начал печатать.
+   */
+  const autoSaveComment = async () => {
+    if (commentValue === (order?.comment ?? '')) { commentDirtyRef.current = false; return }
     try {
       const updated = await updateOrderComment(orderId, commentValue)
       setOrder(updated)
-      setEditComment(false)
+      commentDirtyRef.current = false
+      setCommentSaved(true)
     } catch {
       setError('Ошибка сохранения комментария')
     }
@@ -1928,7 +2010,9 @@ ${renderCopy('Экземпляр организации')}
     <div>
       <div className="page-header">
         <div>
-          <button className="btn-secondary btn-sm" onClick={() => navigate('/orders')} style={{ marginBottom: 8 }}>
+          {/* Полная высота, как у остальных кнопок системы: btn-sm давал 28px
+              и кнопка выглядела мельче всего, что рядом. */}
+          <button className="btn-secondary" onClick={() => navigate('/orders')} style={{ marginBottom: 8 }}>
             &#8592; Назад к заказам
           </button>
           <h1>Заказ {formatOrderNumber(order.id, order.created_at)} — {order.client_name}</h1>
@@ -1939,57 +2023,43 @@ ${renderCopy('Экземпляр организации')}
 
       {/* Order Info */}
       <div className="card" data-tour="order-info">
-        <div style={{ display: 'flex', gap: 32, flexWrap: 'wrap', alignItems: 'flex-start' }}>
-          <div>
-            <div style={{ marginBottom: 8 }}>
-              <strong>Статус:</strong> <Badge status={order.status} labels={ORDER_STATUS_LABELS} />
-              <StatusLegend />
-              {order.status === 'CANCELLED' && order.cancellation_reason && (
-                <div style={{ fontSize: '0.85em', color: '#888', marginTop: 4 }}>
-                  <strong style={{ color: '#c0392b' }}>Причина отмены:</strong> {order.cancellation_reason}
-                </div>
-              )}
-            </div>
-            <div style={{ marginBottom: 8 }}><strong>Сумма:</strong> {Number(order.total_amount).toFixed(2)} &#8381;</div>
-            {order.discount_percent > 0 && (
-              <div style={{ marginBottom: 8 }}><strong>Скидка:</strong> {order.discount_percent}%</div>
-            )}
-            <div style={{ marginBottom: 8 }}><strong>Оплачен:</strong> {order.paid ? `Да (${order.payment_type ? PAYMENT_LABELS[order.payment_type] : ''})` : 'Нет'}</div>
-            {/* V30: предварительный тип оплаты. Оператор ставит заранее — водитель
-                видит его в маршрутном листе. Это намерение, не факт оплаты. */}
-            <div style={{ marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-              <strong>Оплата (предв.):</strong>
-              <StyledSelect<string>
-                value={order.preliminary_payment_type ?? ''}
-                width={210}
-                disabled={order.status === 'CANCELLED'}
-                ariaLabel="Предварительный тип оплаты"
-                placeholder="— не указан —"
-                options={[
-                  { value: '', label: '— не указан —' },
-                  ...ALL_PRELIMINARY_PAYMENTS.map(v => ({ value: v as string, label: PRELIMINARY_PAYMENT_LABELS[v] })),
-                ]}
-                onChange={async raw => {
-                  const v = raw ? (raw as PreliminaryPaymentType) : null
-                  try {
-                    await setPreliminaryPayment(orderId, v)
-                    await loadOrder()
-                  } catch (err: unknown) {
-                    showToast((err as any)?.response?.data?.message || 'Ошибка сохранения', 'error')
-                  }
-                }}
-              />
-            </div>
-            <div style={{ marginBottom: 8, display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+        {/* Шапка заказа — одной лентой в строку, а не столбиком из шести строк.
+            Столбик занимал 180px и вместе с остальными блоками уводил таблицу
+            позиций за нижний край экрана, хотя позиции — основное, с чем
+            работает оператор. */}
+        <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap', alignItems: 'center', rowGap: 6 }}>
+          {/* Статус — главное на карточке, поэтому крупнее остального и без
+              подписи «Статус:»: бейдж и так читается однозначно. Памятка по
+              статусам всплывает при наведении на сам бейдж. */}
+          <StatusLegend>
+            <span className={`badge badge-${order.status.toLowerCase()}`}
+                  style={{ fontSize: 16, fontWeight: 700, padding: '5px 14px' }}>
+              {ORDER_STATUS_LABELS[order.status] ?? order.status}
+            </span>
+          </StatusLegend>
+          {order.status === 'CANCELLED' && order.cancellation_reason && (
+            <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>
+              <strong style={{ color: '#c0392b' }}>Причина отмены:</strong> {order.cancellation_reason}
+            </span>
+          )}
+            <div style={{ display: 'inline-flex', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
               <strong>Клиент:</strong>{' '}
-              <button className="btn-secondary btn-sm" onClick={openClientCard} style={{ marginLeft: 4 }}>
+              {/* Ширина и высота — как у «Оплаты (предв.)» ниже: два соседних
+                  контрола шапки должны читаться одним столбцом, а не ступенькой
+                  из кнопки 28px и селекта 34px. */}
+              <button
+                className="btn-secondary"
+                onClick={openClientCard}
+                style={{ width: 210, justifyContent: 'flex-start', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'ellipsis' }}
+                title={`Карточка клиента: ${order.client_name}`}
+              >
                 {order.client_name}
               </button>
               {/* V19: быстрое переименование клиента прямо из заказа. Меняет имя у самого
                   клиента (и у всех его заказов — это уже бэк делает в ClientController.update). */}
               {isEditable && order.client_id && (
                 <button
-                  className="btn-secondary btn-sm"
+                  className="btn-secondary"
                   title="Переименовать клиента (обновится во всех его заказах)"
                   onClick={async () => {
                     const newName = prompt('Новое имя клиента:', order.client_name)?.trim()
@@ -2031,7 +2101,7 @@ ${renderCopy('Экземпляр организации')}
               )}
               {isEditable && order.client_id && (
                 <button
-                  className="btn-secondary btn-sm"
+                  className="btn-secondary"
                   title="Пометить клиента как проблемного / снять метку"
                   onClick={async () => {
                     try {
@@ -2070,198 +2140,268 @@ ${renderCopy('Экземпляр организации')}
                 >⚠</button>
               )}
             </div>
-            {clientIsProblem && (
-              <div style={{
-                marginBottom: 8, padding: '6px 10px', background: '#fdecea',
-                border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21',
-                fontWeight: 600, fontSize: '0.9em',
-              }}>
-                ⚠ Проблемный клиент
-              </div>
-            )}
-            {order.client_address && <div style={{ marginBottom: 8 }}><strong>Адрес клиента:</strong> {order.client_address}</div>}
-            {order.is_warranty && (
-              <div style={{ marginBottom: 8 }}>
-                <strong>Гарантийный заказ</strong>
-                {order.parent_order_id && (
-                  <>
-                    {' — '}
-                    <button className="btn-secondary btn-sm" onClick={() => navigate(`/orders/${order.parent_order_id}`)}>
-                      Родительский заказ {String(order.parent_order_id).padStart(5, '0')}
-                    </button>
-                  </>
-                )}
-              </div>
-            )}
-          </div>
-          <div>
-            <div style={{ marginBottom: 8 }}><strong>Создан:</strong> {new Date(order.created_at).toLocaleString('ru')}</div>
-            {order.payment_date && (
-              <div style={{ marginBottom: 8 }}><strong>Дата оплаты:</strong> {new Date(order.payment_date).toLocaleString('ru')}</div>
-            )}
-          </div>
+          <span><strong>Сумма:</strong> {Number(order.total_amount).toFixed(2)} &#8381;</span>
+          {order.discount_percent > 0 && (
+            <span><strong>Скидка:</strong> {order.discount_percent}%</span>
+          )}
+            {/* Факт оплаты. Раньше это была просто строка «Оплачен: Нет», и
+                оператор шёл искать кнопку приёма оплаты в самом низу карточки.
+                Теперь действие стоит рядом со статусом, а когда оно недоступно —
+                подсказка объясняет, чего не хватает: оплата закрывает заказ,
+                поэтому доступна только после того, как ковры готовы. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+              <strong>Оплачен:</strong>
+              {order.paid ? (
+                <span style={{ color: 'var(--c-success)', fontWeight: 600 }}>
+                  Да{order.payment_type ? ` (${PAYMENT_LABELS[order.payment_type]})` : ''}
+                </span>
+              ) : (
+                <>
+                  {/* Пояснение, почему оплата недоступна, живёт в подсказке:
+                      отдельной надписью оно занимало треть самой ценной строки
+                      карточки, хотя нужно один раз и не всем. */}
+                  <span
+                    style={{ color: 'var(--c-text-secondary)', cursor: 'help' }}
+                    title="Оплата закрывает заказ, поэтому принять её можно, когда заказ готов или доставлен"
+                  >Нет</span>
+                  {!isReadonly && (order.status === 'DONE' || order.status === 'DELIVERED') && (
+                    <button
+                      className="btn-success btn-sm"
+                      onClick={() => order.status === 'DONE' ? setShowDeliverAndPay(true) : setShowPay(true)}
+                      title={order.status === 'DONE'
+                        ? 'Отметить доставку и принять оплату — заказ будет завершён'
+                        : 'Принять оплату — заказ будет завершён'}
+                    >Принять оплату</button>
+                  )}
+                </>
+              )}
+            </div>
+            {/* V30: предварительный тип оплаты. Оператор ставит заранее — водитель
+                видит его в маршрутном листе. Это намерение, не факт оплаты. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <strong>Оплата (предв.):</strong>
+              <StyledSelect<string>
+                value={order.preliminary_payment_type ?? ''}
+                width={210}
+                disabled={order.status === 'CANCELLED'}
+                ariaLabel="Предварительный тип оплаты"
+                placeholder="— не указан —"
+                options={[
+                  { value: '', label: '— не указан —' },
+                  ...ALL_PRELIMINARY_PAYMENTS.map(v => ({ value: v as string, label: PRELIMINARY_PAYMENT_LABELS[v] })),
+                ]}
+                onChange={async raw => {
+                  const v = raw ? (raw as PreliminaryPaymentType) : null
+                  try {
+                    await setPreliminaryPayment(orderId, v)
+                    await loadOrder()
+                  } catch (err: unknown) {
+                    showToast((err as any)?.response?.data?.message || 'Ошибка сохранения', 'error')
+                  }
+                }}
+              />
+            </div>
+          {clientIsProblem && (
+            <span style={{
+              padding: '2px 8px', background: '#fdecea',
+              border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21',
+              fontWeight: 600, fontSize: 'var(--font-sm)',
+            }}>
+              ⚠ Проблемный клиент
+            </span>
+          )}
+          {order.is_warranty && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <strong>Гарантийный</strong>
+              {order.parent_order_id && (
+                <button className="btn-secondary btn-sm" onClick={() => navigate(`/orders/${order.parent_order_id}`)}>
+                  Родительский {String(order.parent_order_id).padStart(5, '0')}
+                </button>
+              )}
+            </span>
+          )}
+          {/* «Создан» и «Дата оплаты» — в конец ленты: справочная информация,
+              ради которой держать отдельную колонку было незачем. */}
+          <span style={{ marginLeft: 'auto', fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', textAlign: 'right' }}>
+            Создан {new Date(order.created_at).toLocaleString('ru')}
+            {order.payment_date && ` · оплачен ${new Date(order.payment_date).toLocaleString('ru')}`}
+          </span>
         </div>
 
-        {/* Editable details: addresses, dates, legacy_id */}
-        <div style={{ marginTop: 12, padding: 12, background: '#f8f9fa', borderRadius: 6 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        {/* Логистика и детали — поля активны всегда, без кнопки «Редактировать».
+            Раньше блок жил в двух видах: компактный просмотр и высокая форма
+            правки в четыре ряда подписанных полей. Оператор всё равно правил
+            почти каждый заказ, а форма отодвигала «Позиции заказа» за экран.
+            Теперь один вид: две строки (забор / доставка) плюс строка мелочей,
+            подписи заменены метками слева и подсказками внутри полей.
+            Сохранение — по уходу фокуса, как у комментария. */}
+        <div style={{ marginTop: 10, padding: 8, background: '#f8f9fa', borderRadius: 6 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
             <strong>Логистика и детали</strong>
-            {isEditable && !editDetails && (
-              <button className="btn-secondary btn-sm" onClick={() => setEditDetails(true)}>Редактировать</button>
+            {detailsSaved && (
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-success)' }}>сохранено</span>
             )}
+            {/* Legacy ID стоял отдельной третьей строкой в самом центре блока,
+                хотя он опционален и нужен редко. Убран вправо, в заголовок. */}
+            <span style={{
+              marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 6,
+              fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)',
+            }}>
+              Legacy ID
+              <input
+                type="number" style={{ width: 90 }}
+                value={details.legacy_id}
+                disabled={!isEditable}
+                onChange={e => setDetails(d => ({...d, legacy_id: e.target.value}))}
+                placeholder="—"
+                title="ID из старой системы"
+              />
+            </span>
           </div>
           {/* Подсветка: для перевода в DELIVERED обязательна фактическая дата доставки.
               Если её ещё нет — даём подсказку с понятным следующим шагом. */}
           {order.status === 'DONE' && !order.actual_delivery_date && (
             <div style={{
               marginBottom: 10, padding: '8px 12px', borderRadius: 5,
-              background: '#fef5e7', borderLeft: '4px solid #e67e22', fontSize: '0.9em',
+              background: '#fef5e7', borderLeft: '4px solid #e67e22', fontSize: 'var(--font-sm)',
             }}>
               <strong style={{ color: '#d35400' }}>Дата доставки (факт) не указана.</strong>
               {' '}Чтобы перевести заказ в «Доставлен» — отметьте дату в Логистике (drag&nbsp;and&nbsp;drop)
               или нажмите «Принять оплату» — там можно сделать обе операции сразу.
             </div>
           )}
-          {editDetails ? (
-            /* onBlur всплывает от вложенных полей — ловим уход фокуса с любого
-               из них и сохраняем, если что-то поменялось. relatedTarget внутри
-               этого же блока означает переход между полями формы: там сохранять
-               на каждый шаг незачем, но и вреда нет — autoSaveDetails сам
-               сравнивает с последним сохранённым снимком. */
-            <div onBlur={autoSaveDetails}>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-                <div className="form-group" style={{ flex: '1 1 250px', marginBottom: 4 }}>
-                  <label>Адрес забора</label>
-                  <AddressInput
-                    value={details.pickup_address}
-                    onChange={v => setDetails(d => ({...d, pickup_address: v, pickup_lat: null, pickup_lon: null}))}
-                    onResolved={(r) => setDetails(d => ({
-                      ...d,
-                      pickup_address: r.address,
-                      pickup_district: r.district || d.pickup_district,
-                      pickup_lat: r.lat,
-                      pickup_lon: r.lon,
-                    }))}
-                    externallyConfirmed={details.pickup_lat != null && details.pickup_lon != null}
-                  />
-                </div>
-                {/* V18: квартира отдельно — не идёт в геокодирование, но видна водителю. */}
-                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
-                  <label>Кв./офис</label>
-                  <input
-                    value={details.pickup_apartment}
-                    onChange={e => setDetails(d => ({...d, pickup_apartment: e.target.value}))}
-                    placeholder="25"
-                  />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
-                  <label>Район забора</label>
-                  <DistrictSelect
-                    value={details.pickup_district}
-                    onChange={v => setDetails(d => ({...d, pickup_district: v}))}
-                    width="100%"
-                  />
-                </div>
+          {/* onBlur всплывает от вложенных полей — ловим уход фокуса с любого
+              из них и сохраняем, если что-то реально поменялось. */}
+          <div onBlur={autoSaveDetails} onFocus={() => setDetailsSaved(false)}>
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+              <span style={detailsRowLabel}>Забор</span>
+              <div style={{ flex: '1 1 220px', minWidth: 160 }}>
+                <AddressInput
+                  value={details.pickup_address}
+                  placeholder="Адрес забора"
+                  disabled={!isEditable}
+                  onChange={v => setDetails(d => ({...d, pickup_address: v, pickup_lat: null, pickup_lon: null}))}
+                  onResolved={(r) => setDetails(d => ({
+                    ...d,
+                    pickup_address: r.address,
+                    pickup_district: r.district || d.pickup_district,
+                    pickup_lat: r.lat,
+                    pickup_lon: r.lon,
+                  }))}
+                  externallyConfirmed={details.pickup_lat != null && details.pickup_lon != null}
+                />
               </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-                <div className="form-group" style={{ flex: '1 1 250px', marginBottom: 4 }}>
-                  <label>Адрес доставки</label>
-                  <AddressInput
-                    value={details.delivery_address}
-                    onChange={v => setDetails(d => ({...d, delivery_address: v, delivery_lat: null, delivery_lon: null}))}
-                    onResolved={(r) => setDetails(d => ({
-                      ...d,
-                      delivery_address: r.address,
-                      delivery_district: r.district || d.delivery_district,
-                      delivery_lat: r.lat,
-                      delivery_lon: r.lon,
-                    }))}
-                    externallyConfirmed={details.delivery_lat != null && details.delivery_lon != null}
-                  />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 120px', marginBottom: 4 }}>
-                  <label>Кв./офис</label>
-                  <input
-                    value={details.delivery_apartment}
-                    onChange={e => setDetails(d => ({...d, delivery_apartment: e.target.value}))}
-                    placeholder="25"
-                  />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 220px', marginBottom: 4 }}>
-                  <label>Район доставки</label>
-                  <DistrictSelect
-                    value={details.delivery_district}
-                    onChange={v => setDetails(d => ({...d, delivery_district: v}))}
-                    width="100%"
-                  />
-                </div>
+              {/* V18: квартира отдельно — не идёт в геокодирование, но видна водителю. */}
+              <input
+                style={{ flex: '0 0 78px' }}
+                value={details.pickup_apartment}
+                disabled={!isEditable}
+                onChange={e => setDetails(d => ({...d, pickup_apartment: e.target.value}))}
+                placeholder="кв."
+                title="Квартира или офис"
+              />
+              <div style={{ flex: '0 0 190px' }}>
+                <DistrictSelect
+                  value={details.pickup_district}
+                  onChange={v => setDetails(d => ({...d, pickup_district: v}))}
+                  disabled={!isEditable}
+                  width="100%"
+                />
               </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-                <div className="form-group" style={{ flex: '0 0 160px', marginBottom: 4 }}>
-                  <label>Дата забора</label>
-                  <input type="date" value={details.pickup_date} onChange={e => setDetails(d => ({...d, pickup_date: e.target.value}))} />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 200px', marginBottom: 4 }}>
-                  <label>Время забора</label>
-                  <TimeSlotSelect
-                    value={details.pickup_time_slot}
-                    onChange={v => setDetails(d => ({...d, pickup_time_slot: v}))}
-                    date={details.pickup_date}
-                  />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 160px', marginBottom: 4 }}>
-                  <label>Дата доставки</label>
-                  <input type="date" value={details.delivery_date} onChange={e => setDetails(d => ({...d, delivery_date: e.target.value}))} />
-                </div>
-                <div className="form-group" style={{ flex: '0 0 200px', marginBottom: 4 }}>
-                  <label>Время доставки</label>
-                  <TimeSlotSelect
-                    value={details.delivery_time_slot}
-                    onChange={v => setDetails(d => ({...d, delivery_time_slot: v}))}
-                    date={details.delivery_date}
-                  />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginBottom: 8 }}>
-                <div className="form-group" style={{ flex: '0 0 160px', marginBottom: 4 }}>
-                  <label>ID из старой системы</label>
-                  <input type="number" value={details.legacy_id} onChange={e => setDetails(d => ({...d, legacy_id: e.target.value}))} placeholder="Legacy ID" />
-                </div>
-              </div>
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" onClick={() => void saveDetails()}>Готово</button>
-                <button className="btn-secondary btn-sm" onClick={() => setEditDetails(false)}>Закрыть</button>
+              <input
+                type="date" style={{ flex: '0 0 145px' }}
+                value={details.pickup_date}
+                disabled={!isEditable}
+                onChange={e => setDetails(d => ({...d, pickup_date: e.target.value}))}
+                title="Дата забора (план)"
+              />
+              <div style={{ flex: '0 0 175px' }}>
+                <TimeSlotSelect
+                  value={details.pickup_time_slot}
+                  onChange={v => setDetails(d => ({...d, pickup_time_slot: v}))}
+                  date={details.pickup_date}
+                  disabled={!isEditable}
+                />
               </div>
             </div>
-          ) : (
-            <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
-              <div>
-                <div style={{ marginBottom: 4 }}>
-                  <strong>Адрес забора:</strong> {order.pickup_address || '(не указан)'}
-                  {order.pickup_apartment && <span style={{ marginLeft: 6, padding: '1px 6px', background: '#ecf0f1', borderRadius: 4, fontSize: '0.9em' }}>кв. {order.pickup_apartment}</span>}
-                </div>
-                {order.pickup_district && <div style={{ marginBottom: 4, fontSize: '0.9em', color: '#666' }}>Район: {order.pickup_district}</div>}
-                <div style={{ marginBottom: 4 }}><strong>Дата забора (план):</strong> {order.pickup_date ? `${order.pickup_date}` : '(не назначена)'} {order.pickup_time_slot ? `(${order.pickup_time_slot})` : ''}</div>
-                {order.actual_pickup_date && order.actual_pickup_date !== order.pickup_date && (
-                  <div style={{ marginBottom: 4, color: '#e67e22' }}><strong>Дата забора (факт):</strong> {order.actual_pickup_date} {order.actual_pickup_time_slot ? `(${order.actual_pickup_time_slot})` : ''}</div>
-                )}
+            {/* Фактическая дата — подстрокой под своей плановой. В самой строке
+                она отъедала ширину у поля адреса, и строки забора и доставки
+                получались разной длины. Только текст: её ставит логистика. */}
+            {order.actual_pickup_date && order.actual_pickup_date !== order.pickup_date && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+                <span style={{ ...detailsRowLabel, fontWeight: 400 }} />
+                <span style={{ color: '#e67e22', fontSize: 'var(--font-sm)' }}
+                      title="Фактическая дата — проставлена в Логистике">
+                  факт: {order.actual_pickup_date}{order.actual_pickup_time_slot ? ` (${order.actual_pickup_time_slot})` : ''}
+                </span>
               </div>
-              <div>
-                <div style={{ marginBottom: 4 }}>
-                  <strong>Адрес доставки:</strong> {order.delivery_address || '(не указан)'}
-                  {order.delivery_apartment && <span style={{ marginLeft: 6, padding: '1px 6px', background: '#ecf0f1', borderRadius: 4, fontSize: '0.9em' }}>кв. {order.delivery_apartment}</span>}
-                </div>
-                {order.delivery_district && <div style={{ marginBottom: 4, fontSize: '0.9em', color: '#666' }}>Район: {order.delivery_district}</div>}
-                <div style={{ marginBottom: 4 }}><strong>Дата доставки (план):</strong> {order.delivery_date ? `${order.delivery_date}` : '(не назначена)'} {order.delivery_time_slot ? `(${order.delivery_time_slot})` : ''}</div>
-                {order.actual_delivery_date && order.actual_delivery_date !== order.delivery_date && (
-                  <div style={{ marginBottom: 4, color: '#e67e22' }}><strong>Дата доставки (факт):</strong> {order.actual_delivery_date} {order.actual_delivery_time_slot ? `(${order.actual_delivery_time_slot})` : ''}</div>
-                )}
+            )}
+
+            <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 4 }}>
+              <span style={detailsRowLabel}>Доставка</span>
+              <div style={{ flex: '1 1 220px', minWidth: 160 }}>
+                <AddressInput
+                  value={details.delivery_address}
+                  placeholder="Адрес доставки"
+                  disabled={!isEditable}
+                  onChange={v => setDetails(d => ({...d, delivery_address: v, delivery_lat: null, delivery_lon: null}))}
+                  onResolved={(r) => setDetails(d => ({
+                    ...d,
+                    delivery_address: r.address,
+                    delivery_district: r.district || d.delivery_district,
+                    delivery_lat: r.lat,
+                    delivery_lon: r.lon,
+                  }))}
+                  externallyConfirmed={details.delivery_lat != null && details.delivery_lon != null}
+                />
               </div>
-              <div>
-                <div style={{ marginBottom: 4 }}><strong>ID из старой системы:</strong> {order.legacy_id ?? '(нет)'}</div>
+              <input
+                style={{ flex: '0 0 78px' }}
+                value={details.delivery_apartment}
+                disabled={!isEditable}
+                onChange={e => setDetails(d => ({...d, delivery_apartment: e.target.value}))}
+                placeholder="кв."
+                title="Квартира или офис"
+              />
+              <div style={{ flex: '0 0 190px' }}>
+                <DistrictSelect
+                  value={details.delivery_district}
+                  onChange={v => setDetails(d => ({...d, delivery_district: v}))}
+                  disabled={!isEditable}
+                  width="100%"
+                />
+              </div>
+              <input
+                type="date" style={{ flex: '0 0 145px' }}
+                value={details.delivery_date}
+                disabled={!isEditable}
+                onChange={e => setDetails(d => ({...d, delivery_date: e.target.value}))}
+                title="Дата доставки (план)"
+              />
+              <div style={{ flex: '0 0 175px' }}>
+                <TimeSlotSelect
+                  value={details.delivery_time_slot}
+                  onChange={v => setDetails(d => ({...d, delivery_time_slot: v}))}
+                  date={details.delivery_date}
+                  disabled={!isEditable}
+                />
               </div>
             </div>
-          )}
+            {/* Фактическая дата — подстрокой под своей плановой. В самой строке
+                она отъедала ширину у поля адреса, и строки забора и доставки
+                получались разной длины. Только текст: её ставит логистика. */}
+            {order.actual_delivery_date && order.actual_delivery_date !== order.delivery_date && (
+              <div style={{ display: 'flex', gap: 6, marginBottom: 4 }}>
+                <span style={{ ...detailsRowLabel, fontWeight: 400 }} />
+                <span style={{ color: '#e67e22', fontSize: 'var(--font-sm)' }}
+                      title="Фактическая дата — проставлена в Логистике">
+                  факт: {order.actual_delivery_date}{order.actual_delivery_time_slot ? ` (${order.actual_delivery_time_slot})` : ''}
+                </span>
+              </div>
+            )}
+
+
+          </div>
         </div>
 
         {/* Карта забора и доставки — по умолчанию свёрнута, разворачивается по клику. */}
@@ -2290,61 +2430,53 @@ ${renderCopy('Экземпляр организации')}
           }
           if (points.length === 0) return null
           return (
-            <div style={{ marginTop: 12 }}>
-              {!mapVisible ? (
+            // Свёрнутая карта — компактная ссылка без своей строки: развёрнутая
+            // получает нормальный отступ, свёрнутая не отъедает высоту у позиций.
+            <div style={{ marginTop: mapVisible ? 12 : 2 }}>
+              {/* Одна кнопка на одном месте вместо двух в разных углах: «Свернуть»
+                  раньше жила над картой справа, и после разворота оператор искал
+                  её заново. Карта сворачивается и по Esc. */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: mapVisible ? 6 : 0 }}>
                 <button
                   className="btn-secondary"
-                  onClick={() => setMapVisible(true)}
-                  title="Показать адреса на карте"
+                  onClick={() => setMapVisible(v => !v)}
+                  title={mapVisible ? 'Свернуть карту (Esc)' : 'Показать адреса забора и доставки на карте'}
                 >
-                  Показать карту
+                  {mapVisible ? 'Свернуть карту' : 'Показать карту'}
                 </button>
-              ) : (
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <div style={{ color: '#666', fontSize: '0.9em' }}>
-                      <span style={{ display: 'inline-block', width: 10, height: 10, background: '#2980b9', borderRadius: 5, marginRight: 4 }} /> Забор
-                      <span style={{ display: 'inline-block', width: 10, height: 10, background: '#27ae60', borderRadius: 5, marginLeft: 16, marginRight: 4 }} /> Доставка
-                    </div>
-                    <button
-                      onClick={() => setMapVisible(false)}
-                      className="btn-secondary btn-sm"
-                    >Свернуть карту</button>
+                {mapVisible && (
+                  <div style={{ color: '#666', fontSize: 'var(--font-sm)' }}>
+                    <span style={{ display: 'inline-block', width: 10, height: 10, background: '#2980b9', borderRadius: 5, marginRight: 4 }} /> Забор
+                    <span style={{ display: 'inline-block', width: 10, height: 10, background: '#27ae60', borderRadius: 5, marginLeft: 16, marginRight: 4 }} /> Доставка
                   </div>
-                  <MapMarkers points={points} height={280} />
-                </div>
-              )}
+                )}
+              </div>
+              {mapVisible && <MapMarkers points={points} height={280} />}
             </div>
           )
         })()}
 
-        {/* Comment section - always visible */}
-        <div style={{ marginTop: 12, marginBottom: 12 }}>
-          <strong>Комментарий:</strong>
-          {editComment ? (
-            <div style={{ marginTop: 4 }}>
-              <textarea
-                rows={3}
-                value={commentValue}
-                onChange={e => setCommentValue(e.target.value)}
-                style={{ marginBottom: 4 }}
-              />
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button className="btn-success btn-sm" onClick={saveComment}>Сохранить</button>
-                <button className="btn-secondary btn-sm" onClick={() => { setEditComment(false); setCommentValue(order.comment ?? '') }}>Отмена</button>
-              </div>
-            </div>
+        {/* Комментарий — всегда открытое поле с автосохранением.
+            Раньше требовалось нажать «Изменить», напечатать и нажать «Сохранить»:
+            два лишних клика вокруг каждой заметки. Теперь оператор просто пишет,
+            а текст уходит на сервер, когда фокус покидает поле. */}
+        <div style={{ marginTop: 10, marginBottom: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+            <strong>Комментарий:</strong>
+            {commentSaved && (
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-success)' }}>сохранено</span>
+            )}
+          </div>
+          {order.status === 'CANCELLED' ? (
+            <div>{order.comment || '(нет)'}</div>
           ) : (
-            <div style={{ marginTop: 4 }}>
-              <span>{order.comment || '(нет)'}</span>
-              {/* Комментарий редактируется всегда — это единственное поле,
-                  которое не блокируется в COMPLETED/CANCELLED. */}
-              {order.status !== 'CANCELLED' && (
-                <button className="btn-secondary btn-sm" onClick={() => setEditComment(true)} style={{ marginLeft: 8 }}>
-                  Изменить
-                </button>
-              )}
-            </div>
+            <textarea
+              rows={2}
+              value={commentValue}
+              onChange={e => { setCommentValue(e.target.value); commentDirtyRef.current = true; setCommentSaved(false) }}
+              onBlur={autoSaveComment}
+              placeholder="Заметка по заказу — сохранится сама"
+            />
           )}
         </div>
 
@@ -2356,12 +2488,12 @@ ${renderCopy('Экземпляр организации')}
             const transitions = ALLOWED_TRANSITIONS[order.status] || []
             return (
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-                <span style={{ fontSize: '0.9em', color: '#7f8c8d' }}>Перевести в:</span>
+                <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>Перевести в:</span>
                 {transitions.map(s => (
                   <button
                     key={s}
                     type="button"
-                    className="btn-primary btn-sm"
+                    className="btn-primary"
                     onClick={() => changeOrderStatus(s as OrderStatus)}
                     title={`Перевести в «${ORDER_STATUS_LABELS[s]}»`}
                   >
@@ -2381,6 +2513,15 @@ ${renderCopy('Экземпляр организации')}
               onClick={() => setShowRollbackModal(true)}
             >↶ Откатить статус</button>
           )}
+
+          {/* Деньги — отдельная группа: перевод статуса и приём оплаты слишком
+              разные действия, чтобы стоять вплотную. Разделитель рисуем только
+              когда в группе действительно есть кнопки, иначе на экране
+              оказывались две черты подряд. */}
+          {!isReadonly && (
+            (!order.paid && (order.status === 'DELIVERED' || order.status === 'DONE'))
+            || order.status === 'DELIVERED' || order.status === 'COMPLETED'
+          ) && <span className="actions-divider" />}
           {/* Оплата возможна только когда заказ доставлен. После оплаты заказ становится «Завершённым». */}
           {!isReadonly && !order.paid && order.status === 'DELIVERED' && (
             <button className="btn-success" onClick={() => setShowPay(true)}>Оплатить и завершить</button>
@@ -2396,6 +2537,23 @@ ${renderCopy('Экземпляр организации')}
           {!isReadonly && (order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
           )}
+          {/* Документы для печати — своя группа. */}
+          <span className="actions-divider" />
+          {/* Две накладные под разные этапы: забор ковров у клиента и выдача готовых.
+              Каждая печатается на горизонтальном листе в двух экземплярах. */}
+          <button
+            className="btn-secondary"
+            onClick={() => void handlePrintPdf('pickup')}
+            title="Накладная на приём ковров у клиента (размеры и стоимость предварительные)"
+          >🖨 Накладная: забор</button>
+          <button
+            className="btn-secondary"
+            onClick={() => void handlePrintPdf('delivery')}
+            title="Накладная на выдачу готовых ковров клиенту"
+          >🖨 Накладная: отвоз</button>
+
+          {/* Прочие действия над заказом. */}
+          <span className="actions-divider" />
           <button className="btn-secondary" onClick={() => {
             setConfirmAction({
               title: 'Дублировать заказ',
@@ -2408,18 +2566,6 @@ ${renderCopy('Экземпляр организации')}
               }
             })
           }}>Дублировать заказ</button>
-          {/* Две накладные под разные этапы: забор ковров у клиента и выдача готовых.
-              Каждая печатается на горизонтальном листе в двух экземплярах. */}
-          <button
-            className="btn-secondary"
-            onClick={() => void handlePrintPdf('pickup')}
-            title="Накладная на приём ковров у клиента (размеры и стоимость предварительные)"
-          >Накладная: забор</button>
-          <button
-            className="btn-secondary"
-            onClick={() => void handlePrintPdf('delivery')}
-            title="Накладная на выдачу готовых ковров клиенту"
-          >Накладная: отвоз</button>
           {/* V17: проблемный заказ. Поднятый флаг шлёт уведомление админам и виден в UI. */}
           {!isReadonly && (
             order.is_problem ? (
@@ -2474,18 +2620,17 @@ ${renderCopy('Экземпляр организации')}
           <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
             {/* V19 (#1): отменённые позиции скрыты по дефолту. Снять галку — показать. */}
             {items.some(i => i.status === 'CANCELLED') && (
-              <label style={{ display: 'flex', gap: 6, alignItems: 'center', cursor: 'pointer', fontSize: '0.9em', color: '#7f8c8d' }}>
+              <label className="toggle-box">
                 <input
                   type="checkbox"
                   checked={!hideCanceledItems}
                   onChange={e => setHideCanceledItems(!e.target.checked)}
-                  style={{ width: 'auto' }}
                 />
                 Показать отменённые
               </label>
             )}
             {isEditable && (
-              <button className="btn-primary" onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
+              <button className="btn-primary" style={sectionActionBtn} onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
             )}
           </div>
         </div>
@@ -2567,7 +2712,7 @@ ${renderCopy('Экземпляр организации')}
                         <button
                           className="btn-secondary btn-sm"
                           title="Сохранить именно этот модификатор в клиента"
-                          style={{ padding: '2px 8px', fontSize: '0.8em' }}
+                          style={{ padding: '2px 8px', fontSize: 'var(--font-sm)' }}
                           onClick={async () => {
                             try {
                               await addClientModifier(order.client_id!, m.modifier_id)
@@ -2581,7 +2726,7 @@ ${renderCopy('Экземпляр организации')}
                       )}
                       {alreadyOnClient && (
                         <span title="Этот модификатор уже привязан к клиенту"
-                          style={{ fontSize: '0.75em', color: '#27ae60' }}>✓ у клиента</span>
+                          style={{ fontSize: 'var(--font-sm)', color: '#27ae60' }}>✓ у клиента</span>
                       )}
                       {isEditable && (
                         <button className="btn-danger btn-sm" onClick={() => handleRemoveModifier(m.modifier_id)} style={{ padding: '2px 6px' }}>&times;</button>
@@ -2623,14 +2768,16 @@ ${renderCopy('Экземпляр организации')}
             const diff = beforeRounding - Number(order.total_amount)
             if (diff < 0.005) return null
             return (
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: '#7f8c8d', fontSize: '0.9em' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', color: '#7f8c8d', fontSize: 'var(--font-sm)' }}>
                 <span>Округление до 100 &#8381;:</span>
                 <span>&minus;{diff.toFixed(2)} &#8381;</span>
               </div>
             )
           })()}
 
-          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '2px solid #333', marginTop: 8, fontSize: '1.1em' }}>
+          {/* Итог выделяем жирностью и линией, а не третьим размером шрифта:
+              в карточке ровно два кегля — основной и мелкий. */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', padding: '12px 0', borderTop: '2px solid #333', marginTop: 8 }}>
             <strong>ИТОГО:</strong>
             <strong>{Number(order.total_amount).toFixed(2)} &#8381;</strong>
           </div>
@@ -2773,7 +2920,7 @@ ${renderCopy('Экземпляр организации')}
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
               <div>
                 <h2 style={{ margin: 0 }}>{showClientCard.name}</h2>
-                <div style={{ color: '#888', fontSize: '0.9em', marginTop: 4 }}>
+                <div style={{ color: '#888', fontSize: 'var(--font-sm)', marginTop: 4 }}>
                   {showClientCard.client_type === 'LEGAL_ENTITY' ? 'Юридическое лицо' : 'Физическое лицо'} &middot; #{showClientCard.id}
                 </div>
               </div>
@@ -2821,7 +2968,7 @@ ${renderCopy('Экземпляр организации')}
                 <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 4 }}>
                   {clientCardMods.map(m => (
                     <span key={m.id} style={{
-                      padding: '3px 8px', borderRadius: 4, fontSize: '0.85em', fontWeight: 600,
+                      padding: '3px 8px', borderRadius: 4, fontSize: 'var(--font-sm)', fontWeight: 600,
                       color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
                       background: m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
                     }}>
@@ -2864,11 +3011,11 @@ ${renderCopy('Экземпляр организации')}
               </div>
               <div style={{ maxHeight: 200, overflowY: 'auto' }}>
                 {clientEvents.length === 0 ? (
-                  <div style={{ color: '#999', fontSize: '0.9em' }}>Нет событий</div>
+                  <div style={{ color: '#999', fontSize: 'var(--font-sm)' }}>Нет событий</div>
                 ) : clientEvents.map(ev => {
                   const typeColors: Record<string, string> = { NOTE: '#888', CALL: '#3498db', COMPLAINT: '#e74c3c', ORDER_CREATED: '#27ae60', WARRANTY: '#f39c12' }
                   return (
-                    <div key={ev.id} style={{ display: 'flex', gap: 8, padding: '4px 0', borderBottom: '1px solid #f0f0f0', fontSize: '0.85em' }}>
+                    <div key={ev.id} style={{ display: 'flex', gap: 8, padding: '4px 0', borderBottom: '1px solid #f0f0f0', fontSize: 'var(--font-sm)' }}>
                       <span style={{ color: typeColors[ev.event_type] || '#888', fontWeight: 600, minWidth: 60 }}>
                         {ev.event_type === 'NOTE' ? 'Заметка' : ev.event_type === 'CALL' ? 'Звонок' : ev.event_type === 'COMPLAINT' ? 'Жалоба' : ev.event_type === 'ORDER_CREATED' ? 'Заказ' : ev.event_type === 'WARRANTY' ? 'Гарантия' : ev.event_type}
                       </span>

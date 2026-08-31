@@ -81,7 +81,7 @@ function EmployeeServicesModal({
 
         <div style={{ marginBottom: '16px', padding: '12px', backgroundColor: '#f8f9fa', borderRadius: '4px' }}>
           <strong>Принёс прибыли: {earnings.toFixed(2)} &#8381;</strong>
-          <span style={{ marginLeft: 8, fontSize: '0.85em', color: '#7f8c8d' }}>
+          <span style={{ marginLeft: 8, fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>
             (доля от выручки выполненных услуг с делением на число исполнителей)
           </span>
         </div>
@@ -196,7 +196,7 @@ function RoleEditorModal({
             placeholder="Не выбрано — роль ничего не разрешает"
             width="100%"
           />
-          <div style={{ fontSize: '0.8em', color: '#7f8c8d', marginTop: 4 }}>
+          <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 4 }}>
             Сотрудник с этой ролью сможет выполнять услуги только для выбранных типов позиций.
           </div>
         </div>
@@ -413,7 +413,7 @@ export default function EmployeesPage() {
               <div className="form-group" style={{ alignSelf: 'flex-end' }}>
                 <span style={{
                   display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '4px 10px', borderRadius: 12, fontSize: '0.85em',
+                  padding: '4px 10px', borderRadius: 12, fontSize: 'var(--font-sm)',
                   background: 'var(--c-primary-light)', color: 'var(--c-primary-dark)',
                 }}>
                   Роль: {roleFilter === 'none' ? 'без роли' : (roles.find(r => r.id === roleFilter)?.name || '—')}
@@ -522,7 +522,7 @@ export default function EmployeesPage() {
               onClick={() => setRoleFilter('all')}
               style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                width: '100%', padding: '6px 10px', marginBottom: 4,
+                width: '100%', height: 28, padding: '0 10px', marginBottom: 4,
                 background: roleFilter === 'all' ? 'var(--c-primary-light)' : 'transparent',
                 color: roleFilter === 'all' ? 'var(--c-primary-dark)' : 'var(--c-text)',
                 border: 'none', borderRadius: 4, cursor: 'pointer', textAlign: 'left',
@@ -530,14 +530,14 @@ export default function EmployeesPage() {
               }}
             >
               <span>Все сотрудники</span>
-              <span style={{ fontSize: '0.85em', color: 'var(--c-text-muted)' }}>{employees.length}</span>
+              <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)' }}>{employees.length}</span>
             </button>
             {/* «Без роли» — фильтр по сотрудникам без role_id. */}
             <button
               onClick={() => setRoleFilter('none')}
               style={{
                 display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                width: '100%', padding: '6px 10px', marginBottom: 6,
+                width: '100%', height: 28, padding: '0 10px', marginBottom: 6,
                 background: roleFilter === 'none' ? 'var(--c-primary-light)' : 'transparent',
                 color: roleFilter === 'none' ? 'var(--c-primary-dark)' : 'var(--c-text-muted)',
                 border: 'none', borderRadius: 4, cursor: 'pointer', textAlign: 'left',
@@ -546,11 +546,11 @@ export default function EmployeesPage() {
               }}
             >
               <span>Без роли</span>
-              <span style={{ fontSize: '0.85em' }}>{noRoleCount}</span>
+              <span style={{ fontSize: 'var(--font-sm)' }}>{noRoleCount}</span>
             </button>
 
             {roles.length === 0 && (
-              <div style={{ color: '#aaa', fontSize: '0.85em', padding: '8px 4px', fontStyle: 'italic' }}>
+              <div style={{ color: '#aaa', fontSize: 'var(--font-sm)', padding: '8px 4px', fontStyle: 'italic' }}>
                 Ролей пока нет
               </div>
             )}
@@ -564,7 +564,7 @@ export default function EmployeesPage() {
                     onClick={() => setRoleFilter(isSelected ? 'all' : r.id)}
                     style={{
                       display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                      width: '100%', padding: '6px 10px',
+                      width: '100%', height: 28, padding: '0 10px',
                       background: isSelected ? 'var(--c-primary-light)' : 'transparent',
                       color: isSelected ? 'var(--c-primary-dark)' : 'var(--c-text)',
                       border: 'none', borderRadius: 4, cursor: 'pointer', textAlign: 'left',
@@ -572,10 +572,10 @@ export default function EmployeesPage() {
                     }}
                   >
                     <span>{r.name}</span>
-                    <span style={{ fontSize: '0.85em', color: 'var(--c-text-muted)' }}>{empCount}</span>
+                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)' }}>{empCount}</span>
                   </button>
                   {asideExpanded && (
-                    <div style={{ padding: '4px 10px 8px', fontSize: '0.85em' }}>
+                    <div style={{ padding: '4px 10px 8px', fontSize: 'var(--font-sm)' }}>
                       <div style={{ color: '#7f8c8d', marginBottom: 4 }}>
                         Типы: {r.item_type_ids.length === 0
                           ? <em>не выбраны</em>

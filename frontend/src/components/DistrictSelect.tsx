@@ -130,15 +130,15 @@ export default function DistrictSelect({
         }}
       />
       {autoDetected && !isUnknown && (
-        <div style={{ fontSize: '0.75em', color: '#27ae60', marginTop: 2 }}>определён автоматически</div>
+        <div style={{ fontSize: 'var(--font-sm)', color: '#27ae60', marginTop: 2 }}>определён автоматически</div>
       )}
       {isUnknown && (
-        <div style={{ fontSize: '0.75em', color: '#e67e22', marginTop: 2 }}>
+        <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22', marginTop: 2 }}>
           Нет в справочнике — добавьте через «Справочники → Районы»
         </div>
       )}
       {warning && !isUnknown && (
-        <div style={{ fontSize: '0.75em', color: '#e67e22', marginTop: 2 }}>{warning}</div>
+        <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22', marginTop: 2 }}>{warning}</div>
       )}
       {open && filtered.length > 0 && (
         <div style={{
@@ -155,7 +155,7 @@ export default function DistrictSelect({
               style={{
                 padding: '6px 10px', cursor: 'pointer',
                 background: i === highlight ? '#f0f6ff' : '#fff',
-                fontSize: '0.9em',
+                fontSize: 'var(--font-sm)',
               }}
             >
               {d.name}
@@ -167,7 +167,7 @@ export default function DistrictSelect({
         <div style={{
           position: 'absolute', top: '100%', left: 0, right: 0, zIndex: 30,
           background: '#fff', border: '1px solid #ddd', borderRadius: 4,
-          padding: '8px 10px', fontSize: '0.85em', color: '#888',
+          padding: '8px 10px', fontSize: 'var(--font-sm)', color: '#888',
           boxShadow: '0 4px 12px rgba(0,0,0,0.15)', marginTop: 2,
         }}>
           Ничего не найдено

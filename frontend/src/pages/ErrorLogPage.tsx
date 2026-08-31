@@ -51,9 +51,9 @@ export default function ErrorLogPage() {
               ) : entries.map(e => (
                 <tr key={e.id}>
                   <td>{e.id}</td>
-                  <td><code style={{ fontSize: 12 }}>{e.error_type}</code></td>
+                  <td><code style={{ fontSize: 'var(--font-sm)' }}>{e.error_type}</code></td>
                   <td style={{ maxWidth: 400, wordBreak: 'break-word' }}>{e.message}</td>
-                  <td><code style={{ fontSize: 12 }}>{e.request_path || '—'}</code></td>
+                  <td><code style={{ fontSize: 'var(--font-sm)' }}>{e.request_path || '—'}</code></td>
                   <td style={{ whiteSpace: 'nowrap' }}>{new Date(e.occurred_at).toLocaleString('ru')}</td>
                 </tr>
               ))}

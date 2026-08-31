@@ -192,7 +192,7 @@ export default function ClientFormFields({ value, onChange, phoneExtra, onPhoneV
                 style={v.inn && !isValidInn(v.inn) ? { borderColor: '#e67e22' } : undefined}
               />
               {v.inn && !isValidInn(v.inn) && (
-                <div style={{ color: '#e67e22', fontSize: '0.8em', marginTop: 2 }}>
+                <div style={{ color: '#e67e22', fontSize: 'var(--font-sm)', marginTop: 2 }}>
                   Контрольная сумма ИНН не сходится
                 </div>
               )}

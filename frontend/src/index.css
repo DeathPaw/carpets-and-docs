@@ -28,6 +28,22 @@
   --radius-sm: 4px;
   --radius:    6px;
   --radius-lg: 8px;
+
+  /* Единая высота элементов управления в шапках страниц: поля фильтров,
+     мульти-селект, сегментные переключатели, кнопки-пресеты. Раньше каждый
+     считал высоту от своих паддингов, и соседние контролы отличались на
+     несколько пикселей — панель «По заказам / По позициям» была ниже полей,
+     а пресеты периода в Аналитике заметно ниже полей даты. */
+  --control-h: 34px;
+
+  /* Ширина бокового меню. Нужна не только меню: полноэкранная карта в
+     Логистике центруется по области контента, а не по всему окну. */
+  --sidebar-w: 220px;
+
+  /* Ровно два кегля на весь интерфейс: основной (14px из body) и мелкий.
+     Раньше подписи набирались чем придётся — 10.9, 11.9, 12, 13 в соседних
+     блоках, и текст выглядел рваным. Заголовки h1/h2 — отдельная иерархия. */
+  --font-sm: 12px;
 }
 
 *, *::before, *::after {
@@ -62,7 +78,7 @@ th, td {
 th {
   background: #f8f9fa;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-sm);
   color: #555;
 }
 
@@ -74,7 +90,7 @@ button {
   border: none;
   border-radius: 4px;
   padding: 6px 14px;
-  font-size: 13px;
+  font-size: 14px;
   font-family: inherit;
   transition: opacity 0.15s;
 }
@@ -99,7 +115,51 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--c-text-muted);
   border-color: var(--c-border);
 }
-.btn-sm { padding: 4px 10px; font-size: 12px; }
+/* Полноразмерная кнопка — той же высоты, что поле ввода рядом.
+   Раньше высоту задавал только padding, и она разъезжалась от страницы к
+   странице: 24 в карточке заказа, 27 у пользователей, 31 в логах, 35 в расходах.
+   inline-flex — чтобы текст центрировался по вертикали при фиксированной высоте. */
+.btn-primary, .btn-secondary, .btn-success, .btn-danger, .btn-warning {
+  min-height: var(--control-h);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Компактная кнопка — единые 28px везде (иконки в таблицах, действия в строках).
+   Объявлена после цветных классов: её min-height перебивает их. */
+.btn-sm {
+  padding: 0 10px;
+  font-size: var(--font-sm);
+  min-height: 28px;
+  height: 28px;
+}
+
+/* Контрол «в рост фильтра» — ровно та же высота, что у полей ввода рядом.
+   Вешается на кнопки-пресеты и прочие элементы, стоящие в одну строку с input. */
+.btn-control-h { height: var(--control-h); padding: 0 12px; }
+
+/* Сегментный переключатель («По заказам / По позициям / По услугам»).
+   Одна рамка на группу, кнопки внутри без своих границ и радиусов, высота —
+   общая с полями фильтров. Раньше собирался inline-стилями на каждой странице
+   и везде получался чуть разной высоты. */
+.segmented {
+  display: inline-flex;
+  height: var(--control-h);
+  border: 1px solid #ddd;
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.segmented > button {
+  height: 100%;
+  border: none;
+  border-radius: 0;
+  padding: 0 14px;
+  background: #fff;
+  color: var(--c-text);
+}
+.segmented > button.active { background: var(--c-primary); color: #fff; }
+.segmented > button.active:hover { opacity: 1; }
 
 input, select, textarea {
   border: 1px solid #ddd;
@@ -110,6 +170,14 @@ input, select, textarea {
   width: 100%;
   outline: none;
   transition: border-color 0.15s;
+}
+
+/* Все текстовые поля и списки — одной высоты во всей системе.
+   Чекбоксы, радио и выбор файла исключены: у них своя метрика.
+   textarea тоже не трогаем — её высота задаётся числом строк. */
+input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+select {
+  height: var(--control-h);
 }
 
 input:focus, select:focus, textarea:focus {
@@ -142,7 +210,7 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   display: block;
   margin-bottom: 5px;
   font-weight: 500;
-  font-size: 13px;
+  font-size: var(--font-sm);
   color: #555;
 }
 
@@ -165,11 +233,13 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   display: inline-block;
   padding: 2px 8px;
   border-radius: 12px;
-  font-size: 12px;
+  font-size: var(--font-sm);
   font-weight: 500;
 }
 
-.badge-lead { background: #ecf0f1; color: #7f8c8d; }
+/* «Лид» раньше был серым — единственный серый бейдж в системе, читался как
+   «выключено». Теперь бледно-голубой: тот же смысл «ещё не в работе», но в палитре. */
+.badge-lead { background: #eaf4fd; color: #2471a3; }
 .badge-created { background: #d5e8d4; color: #27ae60; }
 .badge-in_progress { background: #dae8fc; color: #2980b9; }
 .badge-partially_done { background: #fff3cd; color: #856404; }
@@ -181,6 +251,85 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 .badge-completed { background: #2c3e50; color: #fff; }
 .badge-cancelled { background: #f8d7da; color: #721c24; }
 .badge-for_pickup { background-color: #17a2b8; color: white; }
+
+/* Переключатель-галка в ряду кнопок: «Показать отменённые» и подобные.
+   Раньше это был голый checkbox с мелкой подписью — он висел в строке кнопок
+   без рамки и высоты, ряд выглядел рваным. Теперь это контрол в рост кнопки. */
+.toggle-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: var(--control-h);
+  padding: 0 12px;
+  border: 1px solid #ddd;
+  border-radius: var(--radius-sm);
+  background: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--c-text);
+  white-space: nowrap;
+}
+.toggle-box:hover { border-color: var(--c-primary); }
+.toggle-box input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--c-primary);
+  cursor: pointer;
+}
+
+/* Прямые дети сетки — колонки: тянем их содержимое на всю высоту ячейки. */
+.item-expanded > * { display: flex; flex-direction: column; }
+
+/* Развёрнутая позиция заказа: слева услуги (основная работа), справа фото.
+   Раньше блоки шли друг под другом на всю ширину, и таблица услуг занимала
+   половину строки, а вторая половина пустовала. Фото — четверть ширины: там
+   только превью, им столько и нужно. На узких экранах возвращаемся в столбик. */
+.item-expanded {
+  display: grid;
+  grid-template-columns: minmax(0, 3fr) minmax(240px, 1fr);
+  gap: 8px;
+  /* stretch, а не start: блоки «Услуги» и «Фото» тянутся до высоты большего
+     из них — иначе короткий блок обрывался посреди строки и раскладка
+     выглядела рваной. */
+  align-items: stretch;
+  /* Компенсируем внутренний отступ карточки: так кнопка внутри правой колонки
+     встаёт ровно под «+ Добавить позицию» в шапке блока. */
+  margin-right: -13px;
+}
+@media (max-width: 1100px) {
+  .item-expanded { grid-template-columns: 1fr; margin-right: 0; }
+}
+
+/* Кнопка-чип фильтра: статусы заказов и позиций, типы позиций, роли сотрудников.
+   Единая высота 28px, как у .btn-sm. Раньше каждая группа считала высоту от
+   своих паддингов — 20, 27, 29, 35 в соседних блоках одного экрана.
+   Объявлен после .badge: чипы статусов используют оба класса сразу. */
+/* Значение, которое правится кликом по нему самому: описание и размеры позиции,
+   цена услуги. Раньше рядом со значением рисовался эмодзи ✏️ — он читался как
+   часть данных и всё равно не объяснял, что кликабельна вся строка. Теперь
+   намёк даёт наведение: подсветка и пунктир снизу. */
+.inline-edit {
+  cursor: pointer;
+  border-radius: 3px;
+  border-bottom: 1px dashed transparent;
+  transition: background 0.12s, border-color 0.12s;
+}
+.inline-edit:hover {
+  background: var(--c-primary-light);
+  border-bottom-color: var(--c-primary);
+}
+
+.chip {
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 12px;
+  font-size: var(--font-sm);
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+}
 
 .modal-overlay {
   position: fixed;
@@ -223,7 +372,7 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 
 .error-msg {
   color: #e74c3c;
-  font-size: 13px;
+  font-size: var(--font-sm);
   margin-top: 8px;
 }
 
@@ -242,6 +391,11 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   margin-bottom: 16px;
   align-items: flex-end;
 }
+
+/* Центральная группа фильтров в шапке страницы — все поля одной высоты. */
+.page-filters > input,
+.page-filters > label,
+.page-filters > button { height: var(--control-h); }
 
 .filters .form-group {
   margin-bottom: 0;
@@ -264,12 +418,22 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   line-height: 1;
 }
 
+/* Разделитель групп в ряду действий: статусы, деньги, печать и прочее раньше
+   читались одним сплошным списком из шести разнородных кнопок. */
+.actions-divider {
+  width: 1px;
+  align-self: stretch;
+  min-height: 26px;
+  background: var(--c-border);
+  margin: 0 4px;
+}
+
 /* Универсальный блок-уведомление: используется для подсказок, варнингов и инфо.
    Раньше дублировался inline в OrderDetailPage / OrdersPage / DashboardPage. */
 .notice {
   padding: 10px 14px;
   border-radius: var(--radius);
-  font-size: 0.9em;
+  font-size: var(--font-sm);
   border-left: 4px solid var(--c-text-muted);
   background: var(--c-bg-hover);
   color: var(--c-text);
@@ -293,7 +457,10 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 
 /* Таблица услуг внутри развёрнутой позиции — фиксированные ширины и middle-выравнивание,
    чтобы строки выглядели одинаково независимо от количества назначенных исполнителей. */
-.services-table { table-layout: fixed; width: 100%; }
+/* overflow: visible — иначе раскрытый список «Статус» обрезался границей
+   таблицы (у table в базовых стилях overflow: hidden ради border-radius),
+   и выбрать статус было невозможно. */
+.services-table { table-layout: fixed; width: 100%; overflow: visible; }
 .services-table td,
 .services-table th { vertical-align: middle; }
 
@@ -328,18 +495,16 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 }
 .logistics-main { flex: 1 1 auto; min-width: 0; }
 .logistics-aside {
-  flex: 0 0 200px;
+  flex: 0 0 220px;
   position: sticky;
   top: 16px;
   max-height: calc(100vh - 32px);
   overflow-y: auto;
   transition: flex-basis 0.2s ease;
 }
-.logistics-aside.expanded { flex: 0 0 360px; }
 @media (max-width: 1100px) {
   .logistics-layout { flex-direction: column; }
-  .logistics-aside,
-  .logistics-aside.expanded { position: static; flex: 1 1 auto; max-height: none; }
+  .logistics-aside { position: static; flex: 1 1 auto; max-height: none; }
 }
 
 /* Круговая диаграмма Recharts: при наведении сектор слегка увеличивается и подсвечивается. */
@@ -359,11 +524,65 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   border-radius: 6px;
   padding: 6px 10px;
   font-family: inherit;
-  font-size: 0.9em;
+  font-size: var(--font-sm);
   color: #333;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
   white-space: nowrap;
 }
 .leaflet-tooltip.map-tooltip::before {
   border-top-color: #ddd;
+}
+
+/* Верх Главной: «На сегодня» и «По статусам» в одной строке.
+   «На сегодня» — всего две плитки, отдельной строкой они съедали высоту, и
+   страница переставала помещаться в экран. Пропорция 1 : 2.4 даёт двум
+   сегодняшним плиткам их привычную ширину, а статусам — четыре в ряд.
+   Ниже 1200px возвращаемся к двум строкам: в одну уже не влезает. */
+.dashboard-top {
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) minmax(0, 2.4fr);
+  gap: 18px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .dashboard-top { grid-template-columns: 1fr; gap: 14px; }
+}
+
+/* Доска закупок: Отменено / Создано / В работе / Готово.
+   «Отменено» — полноценный столбец, а не скрытая по галке корзина: отменённая
+   заявка раньше просто исчезала с экрана. На средних экранах — 2×2, на узких — стек. */
+.supply-board {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  align-items: start;
+}
+@media (max-width: 1200px) {
+  .supply-board { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .supply-board { grid-template-columns: 1fr; }
+}
+
+/* Карточка заявки — фиксированной высоты.
+   Высота «по содержимому» делала колонку рваной: у одной заявки есть срок и
+   комментарий, у другой нет. Теперь строки присутствуют всегда (пустые просто
+   не заполнены), а длинный текст обрезается многоточием.
+   Кнопок на карточке нет: правка — клик, смена статуса и отмена — перетаскивание. */
+.supply-card {
+  height: 132px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Однострочная строка карточки: постоянная высота независимо от наличия текста. */
+.supply-line {
+  height: 16px;
+  line-height: 16px;
+  margin-top: 4px;
+  font-size: var(--font-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

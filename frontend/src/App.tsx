@@ -11,6 +11,7 @@ import ItemDetailPage from './pages/ItemDetailPage'
 import ReferencesPage from './pages/ReferencesPage'
 import EmployeesPage from './pages/EmployeesPage'
 import ClientsPage from './pages/ClientsPage'
+import SupplyRequestsPage from './pages/SupplyRequestsPage'
 import ErrorLogPage from './pages/ErrorLogPage'
 import AuditLogPage from './pages/AuditLogPage'
 import LogisticsPage from './pages/LogisticsPage'
@@ -91,6 +92,8 @@ export default function App() {
               <Route path="expenses"   element={<RequireSupervisor><ExpensesPage /></RequireSupervisor>} />
               {/* Все операторы и выше */}
               <Route path="clients"    element={<ClientsPage />} />
+              {/* V33: заявки на закупку ведёт обычный оператор — не админский раздел. */}
+              <Route path="supply"     element={<SupplyRequestsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

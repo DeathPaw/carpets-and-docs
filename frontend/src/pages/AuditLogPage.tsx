@@ -132,7 +132,7 @@ export default function AuditLogPage() {
                       display: 'inline-block',
                       padding: '2px 8px',
                       borderRadius: 4,
-                      fontSize: '0.8em',
+                      fontSize: 'var(--font-sm)',
                       fontWeight: 600,
                       color: '#fff',
                       backgroundColor: ACTION_COLORS[e.action] ?? '#6c757d',

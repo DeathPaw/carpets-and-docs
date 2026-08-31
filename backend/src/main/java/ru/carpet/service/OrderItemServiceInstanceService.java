@@ -148,9 +148,13 @@ public class OrderItemServiceInstanceService {
                 .orElseThrow(() -> new EntityNotFoundException("Service instance not found: " + serviceId));
 
         if (status != ServiceStatus.CREATED && status != ServiceStatus.CANCELLED) {
-            List<Long> assigneeIds = assigneeRepository.findEmployeeIdsByServiceId(serviceId);
-            if (assigneeIds.isEmpty()) {
-                throw new BusinessRuleException("Невозможно сменить статус: не назначен исполнитель");
+            // V37: исполнителя требуем не у всех услуг. У самовывоза его нет и
+            // быть не должно — вещи везёт клиент, а статус двигать всё равно надо.
+            if (skuService.requiresAssignee(instance.skuId())) {
+                List<Long> assigneeIds = assigneeRepository.findEmployeeIdsByServiceId(serviceId);
+                if (assigneeIds.isEmpty()) {
+                    throw new BusinessRuleException("Невозможно сменить статус: не назначен исполнитель");
+                }
             }
             OrderItem orderItem = orderItemRepository.findById(instance.orderItemId()).orElse(null);
             String missing = PricingHelper.checkDimensions(instance.pricingType(), orderItem);

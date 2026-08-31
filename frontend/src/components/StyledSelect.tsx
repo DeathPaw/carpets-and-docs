@@ -81,7 +81,9 @@ export default function StyledSelect<T extends string | number>({
           color: disabled ? 'var(--c-text-muted)' : 'var(--c-text)',
           border: `1px solid ${open ? 'var(--c-primary)' : '#ddd'}`,
           borderRadius: 'var(--radius-sm)',
-          padding: '7px 10px', fontSize: 14,
+          // Высота общая с input и мульти-фильтром (--control-h): раньше
+          // считалась от паддинга и была на пиксель ниже соседей.
+          height: 'var(--control-h)', padding: '0 10px', fontSize: 14,
           cursor: disabled ? 'not-allowed' : 'pointer',
         }}
       >
@@ -91,7 +93,7 @@ export default function StyledSelect<T extends string | number>({
         }}>
           {selected ? selected.label : placeholder}
         </span>
-        <span style={{ color: 'var(--c-primary)', fontSize: 10, flexShrink: 0 }}>▼</span>
+        <span style={{ color: 'var(--c-primary)', fontSize: 'var(--font-sm)', flexShrink: 0 }}>▼</span>
       </button>
 
       {open && (
@@ -107,7 +109,7 @@ export default function StyledSelect<T extends string | number>({
           }}
         >
           {options.length === 0 ? (
-            <div style={{ padding: '8px 10px', color: 'var(--c-text-muted)', fontSize: 13 }}>
+            <div style={{ padding: '8px 10px', color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)' }}>
               Нет вариантов
             </div>
           ) : options.map((o, i) => {
@@ -132,7 +134,7 @@ export default function StyledSelect<T extends string | number>({
                 <span>{o.label}</span>
                 {o.hint && (
                   <span style={{
-                    fontSize: 12,
+                    fontSize: 'var(--font-sm)',
                     color: isSelected ? 'rgba(255,255,255,0.85)' : 'var(--c-text-secondary)',
                   }}>{o.hint}</span>
                 )}

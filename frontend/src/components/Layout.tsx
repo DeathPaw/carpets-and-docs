@@ -41,7 +41,7 @@ export default function Layout() {
       <aside className="app-sidebar">
         <div className="sidebar-brand">
           Учёт заказов
-          {trainingMode && <span style={{ display: 'block', fontSize: 11, color: '#16a085', marginTop: 2 }}>Тренажёр</span>}
+          {trainingMode && <span style={{ display: 'block', fontSize: 'var(--font-sm)', color: '#16a085', marginTop: 2 }}>Тренажёр</span>}
         </div>
 
         {showBack && (
@@ -52,13 +52,17 @@ export default function Layout() {
 
         <div className="sidebar-section-label">Оператор</div>
         <nav className="sidebar-nav">
+          {/* Порядок под рабочий день оператора: сначала ежедневное
+              (заказы → развозка → клиенты → закупки), потом детализация
+              (позиции, производство) и аналитика. */}
           <NavLink to="/dashboard"  className={navClass()} data-tour="nav-dashboard">Главная</NavLink>
           <NavLink to="/orders"     className={navClass()} data-tour="nav-orders">Заказы</NavLink>
-          <NavLink to="/items"      className={navClass()} data-tour="nav-items">Позиции</NavLink>
           <NavLink to="/logistics"  className={navClass()} data-tour="nav-logistics">Логистика</NavLink>
+          <NavLink to="/clients"    className={navClass()} data-tour="nav-clients">Клиенты</NavLink>
+          <NavLink to="/supply"     className={navClass()}>Закупки</NavLink>
+          <NavLink to="/items"      className={navClass()} data-tour="nav-items">Позиции</NavLink>
           <NavLink to="/production" className={navClass()} data-tour="nav-production">Производство</NavLink>
           <NavLink to="/analytics"  className={navClass()} data-tour="nav-analytics">Аналитика</NavLink>
-          <NavLink to="/clients"    className={navClass()} data-tour="nav-clients">Клиенты</NavLink>
         </nav>
 
         {/* Админские разделы: SUPERVISOR + ADMIN */}
@@ -84,7 +88,7 @@ export default function Layout() {
           {/* Информация о пользователе вместо тумблера */}
           {user && (
             <div style={{
-              padding: '6px 12px', fontSize: 12, color: '#95a5a6',
+              padding: '6px 12px', fontSize: 'var(--font-sm)', color: '#95a5a6',
               borderTop: '1px solid rgba(255,255,255,0.1)', marginBottom: 4,
             }}>
               <div style={{ fontWeight: 500, color: '#bdc3c7' }}>{user.display_name}</div>
@@ -106,7 +110,7 @@ export default function Layout() {
         {isReadonly && (
           <div style={{
             background: '#34495e', color: '#fff', padding: '6px 16px',
-            fontSize: 13, fontWeight: 500, letterSpacing: 0.3,
+            fontSize: 'var(--font-sm)', fontWeight: 500, letterSpacing: 0.3,
             display: 'flex', justifyContent: 'center', alignItems: 'center',
           }}>
             👁 Режим просмотра — изменения отключены
