@@ -464,7 +464,29 @@ function SupplyEditModal({ request, authorName, onClose, onSaved }: {
   const [actualAmount, setActualAmount] = useState(request?.actual_amount?.toString() ?? '')
   const [err, setErr] = useState('')
   const [busy, setBusy] = useState(false)
-  useEscapeClose(true, onClose)
+
+  /**
+   * Закрытие с непустыми правками спрашивает подтверждения. Форму открывают
+   * кликом по карточке и часто закрывают машинально — терять при этом введённое
+   * нельзя. Сравниваем с исходным состоянием заявки, а не «трогали ли поле»:
+   * вернул значение обратно — считаем, что менять нечего.
+   */
+  const dirty =
+    title !== (request?.title ?? '') ||
+    quantity !== (request?.quantity?.toString() ?? '') ||
+    unit !== (request?.unit ?? 'шт') ||
+    neededBy !== (request?.needed_by ?? '') ||
+    comment !== (request?.comment ?? '') ||
+    expected !== (request?.expected_amount?.toString() ?? '') ||
+    receivedOn !== (request?.received_on ?? '') ||
+    actualQty !== (request?.actual_quantity?.toString() ?? '') ||
+    actualAmount !== (request?.actual_amount?.toString() ?? '')
+
+  const tryClose = () => {
+    if (dirty && !window.confirm('Закрыть без сохранения? Внесённые изменения пропадут.')) return
+    onClose()
+  }
+  useEscapeClose(true, tryClose)
 
   const submit = async () => {
     if (!title.trim()) { setErr('Укажите, что нужно закупить'); return }
@@ -499,7 +521,7 @@ function SupplyEditModal({ request, authorName, onClose, onSaved }: {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
+    <div className="modal-overlay" onClick={tryClose}>
       <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
         <h2 style={{ marginTop: 0 }}>{request ? 'Изменить заявку' : 'Новая заявка на закупку'}</h2>
 
@@ -576,7 +598,7 @@ function SupplyEditModal({ request, authorName, onClose, onSaved }: {
 
         {err && <div className="error-msg">{err}</div>}
         <div className="modal-actions">
-          <button className="btn-secondary" onClick={onClose}>Отмена</button>
+          <button className="btn-secondary" onClick={tryClose}>Отмена</button>
           <button className="btn-primary" onClick={() => void submit()} disabled={busy}>
             {busy ? 'Сохранение…' : (request ? 'Сохранить' : 'Создать')}
           </button>

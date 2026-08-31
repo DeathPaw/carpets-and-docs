@@ -39,7 +39,7 @@ const STATUS_WIDGETS: Widget[] = [
   { key: 'overdue',            label: 'Просрочено',      link: `/orders?statuses=${ACTIVE_STATUSES}`,
     emphasizeColor: '#c0392b', hideIfZero: true },
   // «Висящие» — заказы старше 7 дней без даты забора. Подсвечиваем оранжевым.
-  { key: 'stuck',              label: 'Висят (>7 дней без даты)',
+  { key: 'stuck',              label: 'Висят > 7 дней',
     // stuck=true — тот же критерий, что у counter'а на бэке. Без него ссылка
     // показывала вообще все LEAD/CREATED: на плитке 2, в списке 6.
     link: `/orders?stuck=true`,
@@ -195,8 +195,11 @@ export default function DashboardPage() {
           <h2 style={SECTION_TITLE}>По статусам</h2>
           <div style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))',
-            gap: 10,
+            // 124px минимума: столько нужно, чтобы все семь плиток (включая
+            // те, что появляются только при ненулевом значении) вставали одной
+            // строкой и не оставляли внизу одинокую карточку.
+            gridTemplateColumns: 'repeat(auto-fit, minmax(124px, 1fr))',
+            gap: 8,
           }}>
             {STATUS_WIDGETS.map(renderCard)}
           </div>
@@ -287,42 +290,51 @@ export default function DashboardPage() {
             ✓ Заявок на ближайшую неделю нет
           </div>
         ) : (
-          <div className="card" style={{ borderLeft: '4px solid #d35400', padding: '6px 10px', marginBottom: 0 }}>
+          // Рамка и отступы — те же, что у колонки проблемных заказов выше,
+          // чтобы блоки на Главной читались как один ряд, а не два разных.
+          <div style={{
+            background: '#fff',
+            border: '1px solid #d3540033',
+            borderLeft: '4px solid #d35400',
+            borderRadius: 10,
+            padding: '10px 12px',
+          }}>
             {supplyUpcoming.slice(0, SUPPLY_ROWS).map(r => {
               const overdue = r.needed_by != null && r.needed_by < new Date().toISOString().slice(0, 10)
               return (
-                <div
+                // Строка заявки оформлена как строка проблемного заказа выше:
+                // та же рамка, фон и подсветка при наведении — оба блока на
+                // Главной ведут себя одинаково.
+                <button
                   key={r.id}
+                  type="button"
+                  className={`dashboard-row${overdue ? ' is-overdue' : ''}`}
+                  style={{ flexDirection: 'column', alignItems: 'stretch', gap: 0 }}
                   onClick={() => navigate(`/supply?id=${r.id}`)}
-                  style={{
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                    gap: 12, padding: '5px 8px', borderRadius: 'var(--radius-sm)',
-                    cursor: 'pointer', background: overdue ? '#fdedec' : 'transparent',
-                    marginBottom: 2,
-                  }}
                   title="Открыть эту заявку"
                 >
-                  <div style={{ minWidth: 0 }}>
-                    <span style={{ fontWeight: 600 }}>{r.title}</span>
-                    {r.quantity != null && (
-                      <span style={{ color: 'var(--c-text-secondary)', marginLeft: 8 }}>
-                        {r.quantity}{r.unit ? ' ' + r.unit : ''}
-                      </span>
-                    )}
-                    <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginLeft: 8 }}>
-                      {SUPPLY_STATUS_LABELS[r.status]}
-                      {r.created_by_name && ` · ${r.created_by_name}`}
+                  {/* Разметка строки — точно как у проблемного заказа: сверху
+                      номер с названием и дата, снизу подробности мелким серым.
+                      Иначе строки двух блоков были разной высоты. */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+                    <span style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: '#2c3e50' }}>
+                      #{r.id} · {r.title}
+                    </span>
+                    <span style={{
+                      whiteSpace: 'nowrap', fontSize: 'var(--font-sm)',
+                      color: overdue ? '#c0392b' : '#7f8c8d',
+                      fontWeight: overdue ? 600 : 400,
+                    }}>
+                      {r.needed_by && new Date(r.needed_by).toLocaleDateString('ru')}
+                      {overdue && ' · просрочена'}
                     </span>
                   </div>
-                  <div style={{
-                    whiteSpace: 'nowrap', fontSize: 'var(--font-sm)',
-                    color: overdue ? '#c0392b' : 'var(--c-text-secondary)',
-                    fontWeight: overdue ? 600 : 400,
-                  }}>
-                    {r.needed_by && new Date(r.needed_by).toLocaleDateString('ru')}
-                    {overdue && ' · просрочена'}
+                  <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginTop: 2, lineHeight: 1.2 }}>
+                    {r.quantity != null ? `${r.quantity}${r.unit ? ' ' + r.unit : ''} · ` : ''}
+                    {SUPPLY_STATUS_LABELS[r.status]}
+                    {r.created_by_name && ` · ${r.created_by_name}`}
                   </div>
-                </div>
+                </button>
               )
             })}
             {supplyUpcoming.length > SUPPLY_ROWS && (
@@ -378,18 +390,9 @@ function renderProblemColumn(
           <button
             key={r.id}
             type="button"
+            className="dashboard-row"
+            style={{ flexDirection: 'column', alignItems: 'stretch', gap: 0, marginBottom: 0 }}
             onClick={() => navigate(`/orders/${r.id}`)}
-            style={{
-              textAlign: 'left',
-              background: '#fafbfc',
-              border: '1px solid #ecf0f1',
-              borderRadius: 6,
-              padding: '4px 8px',
-              cursor: 'pointer',
-              transition: 'background 0.12s',
-            }}
-            onMouseEnter={e => (e.currentTarget.style.background = '#f0f6ff')}
-            onMouseLeave={e => (e.currentTarget.style.background = '#fafbfc')}
           >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
               <span style={{ fontSize: 'var(--font-sm)', fontWeight: 500, color: '#2c3e50' }}>
