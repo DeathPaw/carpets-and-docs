@@ -7,6 +7,8 @@ import MultiSelectFilter from '../components/MultiSelectFilter'
 import CompleteDeliveriesModal from '../components/logistics/CompleteDeliveriesModal'
 import AddOneOffSlotModal from '../components/logistics/AddOneOffSlotModal'
 import StyledSelect from '../components/StyledSelect'
+import PageFilterBar from '../components/PageFilterBar'
+import { getDistricts } from '../api/districts'
 import MissingAddressModal from '../components/logistics/MissingAddressModal'
 import {
   getDeliverySlots, createDeliverySlot, deleteDeliverySlot,
@@ -270,6 +272,19 @@ export default function LogisticsPage() {
   /** Справочник слотов под картой свёрнут по умолчанию — он нужен изредка. */
   const [slotsPanelOpen, setSlotsPanelOpen] = useState(false)
   /**
+   * Правка №1 (31.08): те же три фильтра, что на Заказах/Позициях/Производстве —
+   * № заказа и текстовый поиск. Район уже есть (districtFilters).
+   */
+  const [orderNoFilter, setOrderNoFilter] = useState('')
+  const [searchText, setSearchText] = useState('')
+  /** Идёт ли поиск — от этого зависит, разворачивать ли «Без даты» целиком. */
+  const isSearching = searchText.trim() !== '' || orderNoFilter !== ''
+  /** Районы из справочника — список не зависит от того, что попало в текущую неделю. */
+  const [allDistrictNames, setAllDistrictNames] = useState<string[]>([])
+  useEffect(() => {
+    getDistricts(true).then(ds => setAllDistrictNames(ds.map(d => d.name))).catch(() => setAllDistrictNames([]))
+  }, [])
+  /**
    * Правка №12: какой день показывает карта. '' — вся неделя.
    *
    * По умолчанию показываем неделю целиком: при старте с конкретного дня карта
@@ -492,9 +507,39 @@ export default function LogisticsPage() {
 
   // Apply filters (для дневных секций и карты).
   // timeSlotFilters: пустой = все, может содержать 'none' для «без слота» или конкретные значения.
+  /**
+   * Правка №1 (31.08): поиск по карточкам логистики.
+   *
+   * «Без даты» копится до сотни заказов, и найти нужный глазами долго. Ищем по
+   * номеру заказа, имени клиента, телефону, адресу, району и комментарию —
+   * оператор вводит что помнит. Фильтрация клиентская: все заказы уже загружены,
+   * запрос на бэк не нужен, и drag&drop найденных карточек продолжает работать.
+   */
+  const matchesCardSearch = (c: OrderCard): boolean => {
+    const q = searchText.trim().toLowerCase()
+    if (!q) return true
+    const o = c.order
+    const digits = q.replace(/\D/g, '')
+    if (digits) {
+      // «144» и «00144» — оператор читает номер с бирки, а вводит как придётся.
+      if (String(o.id).includes(digits)) return true
+      if (formatOrderNumber(o.id, o.created_at).replace(/\D/g, '').includes(digits)) return true
+      if (o.client_phone && o.client_phone.replace(/\D/g, '').includes(digits)) return true
+      if (o.legacy_id != null && String(o.legacy_id).includes(digits)) return true
+    }
+    const haystack = [
+      o.client_name, c.address, c.district, o.comment,
+      o.pickup_address, o.delivery_address, o.assigned_driver_name,
+    ]
+    return haystack.some(v => v && v.toLowerCase().includes(q))
+  }
+
   const filteredCards = useMemo(() => {
+    const orderNoTarget = orderNoFilter.replace(/^0+/, '')
     return allCards.filter(c => {
       if (districtFilters.length > 0 && (!c.district || !districtFilters.includes(c.district))) return false
+      if (orderNoTarget && String(c.order.id) !== orderNoTarget) return false
+      if (!matchesCardSearch(c)) return false
       if (timeSlotFilters.length > 0) {
         const noneSelected = timeSlotFilters.includes('none')
         if (!c.timeSlot) {
@@ -505,7 +550,8 @@ export default function LogisticsPage() {
       }
       return true
     })
-  }, [allCards, districtFilters, timeSlotFilters])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allCards, districtFilters, timeSlotFilters, orderNoFilter, searchText])
 
   // Сортировка карточек по началу временного слота (без слота — в конец).
   const slotStartMinutes = (slot: string | null): number => {
@@ -950,9 +996,11 @@ export default function LogisticsPage() {
             <>
               {/* По умолчанию рендерим только первые NO_DATE_PREVIEW карточек.
                   Это критично, потому что «Без даты» накапливается и при 30+ заказах
-                  без даты весь список дней уходил под фолд. */}
-              {(noDateExpanded ? cards : cards.slice(0, NO_DATE_PREVIEW)).map(renderCard)}
-              {cards.length > NO_DATE_PREVIEW && (
+                  без даты весь список дней уходил под фолд.
+                  Исключение — активный поиск: оператор ищет конкретный заказ,
+                  и прятать совпадения за «Показать ещё» бессмысленно. */}
+              {(noDateExpanded || isSearching ? cards : cards.slice(0, NO_DATE_PREVIEW)).map(renderCard)}
+              {cards.length > NO_DATE_PREVIEW && !isSearching && (
                 <button
                   type="button"
                   onClick={() => setNoDateExpanded(v => !v)}
@@ -1244,9 +1292,19 @@ export default function LogisticsPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Логистика</h1>
-      </div>
+      {/* Те же три фильтра и в том же месте, что на Заказах / Позициях /
+          Производстве. Район уже управлял доской раньше — теперь он тут же,
+          а не только в сводке справа. */}
+      <PageFilterBar
+        title="Логистика"
+        districts={allDistrictNames}
+        districtValue={districtFilters}
+        onDistrictChange={setDistrictFilters}
+        orderNo={orderNoFilter}
+        onOrderNoChange={setOrderNoFilter}
+        search={searchText}
+        onSearchChange={setSearchText}
+      />
 
       {/* Полоса-обзор недель: всегда занимает всю ширину.
           4/8 — одна строка с равномерным распределением.
@@ -1611,6 +1669,13 @@ export default function LogisticsPage() {
             }}>
               <strong style={{ fontSize: '0.95em', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.5 }}>
                 Без даты ({(cardsByDay.get('no-date')?.length ?? 0)})
+                {/* Явно говорим, что список сокращён поиском — иначе оператор
+                    решит, что заказы пропали. */}
+                {(searchText.trim() || orderNoFilter) && (
+                  <span style={{ marginLeft: 8, color: 'var(--c-primary)', textTransform: 'none', letterSpacing: 0 }}>
+                    · отфильтровано
+                  </span>
+                )}
               </strong>
               <div style={{ display: 'inline-flex', border: '1px solid #ddd', borderRadius: 4, overflow: 'hidden' }}>
                 {[
