@@ -584,22 +584,26 @@ export default function ClientsPage() {
             + Новый клиент
           </button>
         }
+        extra={
+          /* Вкладки — такой же отбор, как район или поиск, поэтому едут вместе
+             с шапкой: список клиентов длинный, и переключаться, прокручивая
+             наверх, неудобно. */
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              className={tab === 'INDIVIDUAL' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setTab('INDIVIDUAL')}
+            >
+              Физические лица ({clients.filter(c => (c.client_type || 'INDIVIDUAL') === 'INDIVIDUAL').length})
+            </button>
+            <button
+              className={tab === 'LEGAL_ENTITY' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setTab('LEGAL_ENTITY')}
+            >
+              Юридические лица ({clients.filter(c => c.client_type === 'LEGAL_ENTITY').length})
+            </button>
+          </div>
+        }
       />
-
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-        <button
-          className={tab === 'INDIVIDUAL' ? 'btn-primary' : 'btn-secondary'}
-          onClick={() => setTab('INDIVIDUAL')}
-        >
-          Физические лица ({clients.filter(c => (c.client_type || 'INDIVIDUAL') === 'INDIVIDUAL').length})
-        </button>
-        <button
-          className={tab === 'LEGAL_ENTITY' ? 'btn-primary' : 'btn-secondary'}
-          onClick={() => setTab('LEGAL_ENTITY')}
-        >
-          Юридические лица ({clients.filter(c => c.client_type === 'LEGAL_ENTITY').length})
-        </button>
-      </div>
 
       {loading ? (
         <div className="loading">Загрузка...</div>

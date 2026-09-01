@@ -48,11 +48,20 @@ export default function PageFilterBar({
   extra?: ReactNode
 }) {
   return (
-    <div>
+    /* Липнет ВЕСЬ блок — заголовок, три общих фильтра и дополнительные фильтры
+       страницы (extra). Списки длинные, и ради нового отбора оператору
+       приходилось прокручивать обратно наверх.
+
+       Раньше липкой была только верхняя строка, а обёртка оставалась обычной:
+       sticky-элемент не может выйти за пределы своего родителя, поэтому шапка
+       уезжала вверх сразу, как только заканчивался блок фильтров, — «не едет
+       как надо». Теперь sticky стоит на самой обёртке, а её родитель —
+       корневой контейнер страницы во всю высоту. */
+    <div className="page-sticky-head">
       <div style={{
         position: 'relative',
         display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-        gap: 12, minHeight: 46, marginBottom: 16,
+        gap: 12, minHeight: 46,
       }}>
         <h1 style={{ margin: 0 }}>{title}</h1>
 
@@ -99,7 +108,7 @@ export default function PageFilterBar({
           {right}
         </div>
       </div>
-      {extra}
+      {extra && <div className="page-head-extra">{extra}</div>}
     </div>
   )
 }

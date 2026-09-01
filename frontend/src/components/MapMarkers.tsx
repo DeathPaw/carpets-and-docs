@@ -93,6 +93,35 @@ const createClusterIcon = (count: number, kinds: Set<MarkerKind>, dayColors: str
   })
 }
 
+/**
+ * Иконка найденного поиском заказа: та же капля, но крупнее, в оранжевой
+ * обводке и с пульсирующим ореолом. Оператор ищет один заказ среди полусотни
+ * точек — без визуального акцента подсветка в списке слева не помогает понять,
+ * куда этот заказ попал на карте.
+ *
+ * viewBox сдвинут в минус, чтобы ореол не обрезался; остриё капли по-прежнему
+ * в (14, 40) пользовательских координат, отсюда iconAnchor [20, 46].
+ */
+const createHighlightIcon = (color: string, count = 0): L.DivIcon => {
+  const inner = count > 1
+    ? `<circle cx="14" cy="14" r="9" fill="#fff"/>
+       <text x="14" y="14" text-anchor="middle" dominant-baseline="central"
+             font-family="-apple-system,system-ui,sans-serif"
+             font-size="${count >= 10 ? 13 : 14}" font-weight="700" fill="#222">${count}</text>`
+    : `<circle cx="14" cy="14" r="5" fill="#fff"/>`
+  return L.divIcon({
+    className: 'map-marker map-marker-highlight',
+    html: `<svg width="40" height="52" viewBox="-6 -6 40 52" xmlns="http://www.w3.org/2000/svg">
+      <circle class="map-halo" cx="14" cy="14" r="17" fill="#f39c12"/>
+      <path d="M14 0 C6 0 0 6 0 14 C0 24 14 40 14 40 S28 24 28 14 C28 6 22 0 14 0 Z"
+            fill="${color}" stroke="#f39c12" stroke-width="3"/>
+      ${inner}
+    </svg>`,
+    iconSize: [40, 52],
+    iconAnchor: [20, 46],
+  })
+}
+
 const SINGLE_ICON_PICKUP   = createSingleIcon(COLOR_PICKUP)
 const SINGLE_ICON_DELIVERY = createSingleIcon(COLOR_DELIVERY)
 const SINGLE_ICON_NEUTRAL  = createSingleIcon(COLOR_NEUTRAL)
@@ -115,6 +144,8 @@ export interface MapPoint {
   orderNumber?: string  // «#00012»
   address?: string
   clientName?: string
+  /** Заказ найден поиском — рисуем крупной оранжевой меткой поверх остальных. */
+  highlighted?: boolean
 }
 
 interface Props {
@@ -178,11 +209,15 @@ function MapTuning({ points }: { points: MapPoint[] }) {
   }, [map])
   useEffect(() => {
     if (points.length === 0) return
-    if (points.length === 1) {
-      map.setView([points[0].lat, points[0].lon], 14)
+    // Есть найденные поиском точки — показываем их, а не всё облако: искать
+    // оранжевую метку глазами по карте всего города оператор не должен.
+    const found = points.filter(p => p.highlighted)
+    const shown = found.length > 0 ? found : points
+    if (shown.length === 1) {
+      map.setView([shown[0].lat, shown[0].lon], found.length > 0 ? 15 : 14)
       return
     }
-    const bounds = L.latLngBounds(points.map(p => [p.lat, p.lon] as [number, number]))
+    const bounds = L.latLngBounds(shown.map(p => [p.lat, p.lon] as [number, number]))
     map.fitBounds(bounds, { padding: [40, 40], maxZoom: 15 })
   }, [points, map])
   return null
@@ -198,6 +233,9 @@ interface PointGroup {
   points: MapPoint[]
   kinds: Set<MarkerKind>
 }
+
+/** В группе есть найденный заказ — вся метка становится подсвеченной. */
+const groupHighlighted = (g: PointGroup) => g.points.some(p => p.highlighted)
 
 const groupByLocation = (points: MapPoint[]): PointGroup[] => {
   const map = new Map<string, PointGroup>()
@@ -267,9 +305,14 @@ export default function MapMarkers({
         <MapTuning points={valid} />
         {groups.map((g, i) => {
           const isCluster = g.points.length > 1
-          const icon = isCluster
-            ? createClusterIcon(g.points.length, g.kinds, g.points.map(p => p.color || ''))
-            : singleIconFor(g.points[0].kind, g.points[0].color)
+          const hl = groupHighlighted(g)
+          const icon = hl
+            ? createHighlightIcon(
+                g.points.find(p => p.highlighted)?.color || COLOR_NEUTRAL,
+                isCluster ? g.points.length : 0)
+            : isCluster
+              ? createClusterIcon(g.points.length, g.kinds, g.points.map(p => p.color || ''))
+              : singleIconFor(g.points[0].kind, g.points[0].color)
           // Клик по маркеру намеренно не обрабатывается — поведение одинаковое
           // для одиночек и кластеров. Информация показывается в подсказке.
           return (
@@ -277,6 +320,7 @@ export default function MapMarkers({
               key={`${g.lat}-${g.lon}-${i}`}
               position={[g.lat, g.lon]}
               icon={icon}
+              zIndexOffset={hl ? 1000 : 0}
             >
               <Tooltip direction="top" offset={[0, isCluster ? -44 : -36]} opacity={1} className="map-tooltip">
                 {isCluster ? (

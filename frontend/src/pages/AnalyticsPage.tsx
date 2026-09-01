@@ -105,8 +105,8 @@ export default function AnalyticsPage() {
 
   return (
     <div>
-      <div className="page-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
-        <h1>Аналитика</h1>
+      <div className="page-header page-sticky-head" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, marginBottom: 8 }}>
+        <h1 style={{ margin: 0 }}>Аналитика</h1>
         {/* V8: переключатель периода. Пресеты + ручной диапазон c/по.
             Кнопки-пресеты той же высоты, что поля даты рядом (--control-h):
             btn-sm давал заметно более низкую кнопку, и строка выглядела рваной. */}

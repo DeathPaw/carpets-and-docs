@@ -311,10 +311,12 @@ function SupplyFilterBar({
   right?: React.ReactNode
 }) {
   return (
-    <div>
+    /* sticky на самой обёртке — иначе шапка «отлипает» сразу за границей
+       собственного контейнера, как это было на остальных страницах. */
+    <div className="page-sticky-head">
       <div style={{
         position: 'relative', display: 'flex', alignItems: 'center',
-        justifyContent: 'space-between', gap: 12, minHeight: 46, marginBottom: 16,
+        justifyContent: 'space-between', gap: 12, minHeight: 46,
       }}>
         <h1 style={{ margin: 0 }}>{title}</h1>
         <div className="page-filters" style={{

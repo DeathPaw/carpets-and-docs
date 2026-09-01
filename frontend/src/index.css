@@ -392,6 +392,30 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   align-items: flex-end;
 }
 
+/* Шапка страницы (заголовок + три фильтра + кнопки) прилипает к верху окна.
+   z-index выше, чем у липкой панели Логистики: раскрытый список «Район»
+   принадлежит шапке и должен рисоваться поверх неё. */
+.page-sticky-head {
+  position: sticky;
+  top: 0;
+  z-index: 300;
+  background: var(--c-bg);
+  padding: 10px 0 8px;
+  margin-bottom: 8px;
+  /* Мягкая тень — контент, проезжающий под шапкой, не «слипается» с ней. */
+  box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.25);
+}
+
+/* Дополнительные фильтры страницы внутри липкой шапки. Отступ сверху нужен,
+   потому что верхняя строка своих отступов не имеет. */
+.page-head-extra { margin-top: 10px; }
+
+/* Развёрнутая карта Логистики перекрывает всё: свои фильтры у неё внутри,
+   а липкие панели страницы под ней не нужны. sticky создаёт контекст
+   наложения, поэтому спрятать их можно только явно. */
+.map-expanded-lock .page-sticky-head,
+.map-expanded-lock .logistics-sticky-filters { visibility: hidden; }
+
 /* Центральная группа фильтров в шапке страницы — все поля одной высоты. */
 .page-filters > input,
 .page-filters > label,
@@ -469,6 +493,21 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
    Селектор смотрит на потомка — если на странице есть .logistics-layout, родительский
    .main-content становится шире. */
 .main-content:has(.logistics-layout) { max-width: 1500px; }
+
+/* Панель фильтров Логистики прилипает к верху: список дней длинный, и чтобы
+   начать новый поиск, оператору приходилось прокручивать страницу обратно.
+   Фон непрозрачный и тень — иначе карточки просвечивают сквозь неё. */
+.logistics-sticky-filters {
+  position: sticky;
+  /* Ровно под липкой шапкой. Её высота меняется вместе с блоком обзора
+     (4/8 недель — одна строка, 12 — три), поэтому значение приходит из JS. */
+  top: var(--sticky-head-h, 52px);
+  z-index: 200;
+  background: var(--c-bg);
+  padding: 10px 0 8px;
+  margin-bottom: 8px;
+  box-shadow: 0 6px 10px -8px rgba(0, 0, 0, 0.25);
+}
 
 /* Сетка дней недели в Логистике: 7 одинаковых колонок, зазор между ними.
    На узких экранах (< 1100px) переходит в стек — колонка под колонкой. */
@@ -630,4 +669,20 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Найденный поиском заказ на карте: ореол мягко пульсирует, чтобы метку было
+   видно среди десятков соседних. transform-box: fill-box нужен, чтобы scale
+   считался от центра самого круга, а не от начала координат SVG. */
+.map-marker-highlight .map-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: map-halo-pulse 1.6s ease-in-out infinite;
+}
+@keyframes map-halo-pulse {
+  0%, 100% { opacity: 0.18; transform: scale(0.8); }
+  50%      { opacity: 0.42; transform: scale(1.12); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .map-marker-highlight .map-halo { animation: none; opacity: 0.32; }
 }

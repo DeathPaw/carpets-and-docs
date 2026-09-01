@@ -133,6 +133,29 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       let clientId = selectedClientId
       let clientName = ''
 
+      // Район проверяем до создания клиента. Раньше проверка стояла ниже,
+      // после createClient: оператор ошибался с районом, заказ не создавался,
+      // а клиент уже был записан — и при повторной попытке в справочнике
+      // появлялся дубль.
+      {
+        const addr = showNewClient ? newClientForm.address.trim() : (selectedClient?.address || '')
+        const dist = showNewClient ? newClientForm.district.trim() : (selectedClient?.district || '')
+        const pickupAddr = customAddress ? pickupAddress.trim() : addr
+        const pickupDist = customAddress ? pickupDistrict.trim() : dist
+        const deliveryAddr = customAddress ? (sameAddress ? pickupAddress.trim() : deliveryAddress.trim()) : addr
+        const deliveryDist = customAddress ? (sameAddress ? pickupDistrict.trim() : deliveryDistrict.trim()) : dist
+        if (pickupAddr && !pickupDist) {
+          setError('Укажите район (не удалось определить автоматически)')
+          setLoading(false)
+          return
+        }
+        if (deliveryAddr && !deliveryDist && deliveryAddr !== pickupAddr) {
+          setError('Укажите район доставки (не удалось определить автоматически)')
+          setLoading(false)
+          return
+        }
+      }
+
       if (showNewClient) {
         const validationError = validateClientForm(newClientForm)
         if (validationError) {
@@ -191,6 +214,12 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       // state selectedClient — он выставляется в selectClient и живёт до сброса.
       const clientAddr = showNewClient ? newClientForm.address.trim() : (selectedClient?.address || '')
       const clientDist = showNewClient ? newClientForm.district.trim() : (selectedClient?.district || '')
+      // Квартира — так же, как адрес: из формы, а не из состояния полей заказа.
+      // Раньше её брали из pickupApartment, который заполняется вызовом
+      // setPickupApartment строкой выше — React применяет такие изменения к
+      // следующему рендеру, поэтому в заказ уходила пустая строка, и квартира
+      // терялась и в карточке, и в логистике, и в накладных.
+      const clientApt = showNewClient ? newClientForm.apartment.trim() : (selectedClient?.apartment || '')
       const clientLat = showNewClient ? newClientForm.lat : (selectedClient?.lat ?? null)
       const clientLon = showNewClient ? newClientForm.lon : (selectedClient?.lon ?? null)
 
@@ -198,22 +227,14 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       const finalPickupDistrict = customAddress ? pickupDistrict.trim() : clientDist
       const finalDeliveryAddress = customAddress ? (sameAddress ? pickupAddress.trim() : deliveryAddress.trim()) : clientAddr
       const finalDeliveryDistrict = customAddress ? (sameAddress ? pickupDistrict.trim() : deliveryDistrict.trim()) : clientDist
+      const finalPickupApartment = customAddress ? pickupApartment.trim() : clientApt
+      const finalDeliveryApartment = customAddress
+        ? (sameAddress ? pickupApartment.trim() : deliveryApartment.trim())
+        : clientApt
       const finalPickupLat = customAddress ? pickupCoords.lat : clientLat
       const finalPickupLon = customAddress ? pickupCoords.lon : clientLon
       const finalDeliveryLat = customAddress ? (sameAddress ? pickupCoords.lat : deliveryCoords.lat) : clientLat
       const finalDeliveryLon = customAddress ? (sameAddress ? pickupCoords.lon : deliveryCoords.lon) : clientLon
-
-      // Валидация районов (только если адрес заполнен)
-      if (finalPickupAddress && !finalPickupDistrict) {
-        setError('Укажите район (не удалось определить автоматически)')
-        setLoading(false)
-        return
-      }
-      if (finalDeliveryAddress && !finalDeliveryDistrict && finalDeliveryAddress !== finalPickupAddress) {
-        setError('Укажите район доставки (не удалось определить автоматически)')
-        setLoading(false)
-        return
-      }
 
       const orderData: CreateOrderRequest = {
         client_id: clientId,
@@ -231,13 +252,13 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       // V19 (#9): квартиру всегда сохраняем (даже если районы/координаты пустые).
       const hasAnyDetail = finalPickupDistrict || finalDeliveryDistrict
         || finalPickupLat != null || finalDeliveryLat != null
-        || pickupApartment || deliveryApartment
+        || finalPickupApartment || finalDeliveryApartment
       if (hasAnyDetail) {
         await updateOrderDetails(order.id, {
           pickup_address: finalPickupAddress || null,
           delivery_address: finalDeliveryAddress || null,
-          pickup_apartment: pickupApartment || null,
-          delivery_apartment: sameAddress ? (pickupApartment || null) : (deliveryApartment || null),
+          pickup_apartment: finalPickupApartment || null,
+          delivery_apartment: finalDeliveryApartment || null,
           pickup_district: finalPickupDistrict || null,
           delivery_district: finalDeliveryDistrict || finalPickupDistrict || null,
           pickup_lat: finalPickupLat,

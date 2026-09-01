@@ -2139,7 +2139,46 @@ ${renderCopy('Экземпляр организации')}
                   }}
                 >⚠</button>
               )}
+              {/* Телефон рядом с именем: без него оператор ради звонка уходил
+                  в карточку клиента и возвращался обратно. */}
+              {order.client_phone && (
+                <a
+                  href={`tel:${order.client_phone.replace(/[^\d+]/g, '')}`}
+                  onClick={e => e.stopPropagation()}
+                  style={{ marginLeft: 4, color: 'var(--c-primary-dark)', whiteSpace: 'nowrap' }}
+                  title="Позвонить клиенту"
+                >{order.client_phone}</a>
+              )}
             </div>
+          {clientIsProblem && (
+            <span style={{
+              padding: '2px 8px', background: '#fdecea',
+              border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21',
+              fontWeight: 600, fontSize: 'var(--font-sm)',
+            }}>
+              ⚠ Проблемный клиент
+            </span>
+          )}
+          {order.is_warranty && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+              <strong>Гарантийный</strong>
+              {order.parent_order_id && (
+                <button className="btn-secondary btn-sm" onClick={() => navigate(`/orders/${order.parent_order_id}`)}>
+                  Родительский {String(order.parent_order_id).padStart(5, '0')}
+                </button>
+              )}
+            </span>
+          )}
+          {/* Деньги — отдельной группой у правого края: слева «кто и в каком
+              статусе», справа «сколько и как оплачено». */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap',
+            // marginLeft: auto прижимает группу вправо, пока она помещается в
+            // строку; flex + justifyContent держат её у правого края и после
+            // переноса на свою строку — иначе на узком экране деньги
+            // оказывались слева.
+            marginLeft: 'auto', flex: '1 1 auto', justifyContent: 'flex-end',
+          }}>
           <span><strong>Сумма:</strong> {Number(order.total_amount).toFixed(2)} &#8381;</span>
           {order.discount_percent > 0 && (
             <span><strong>Скидка:</strong> {order.discount_percent}%</span>
@@ -2201,31 +2240,18 @@ ${renderCopy('Экземпляр организации')}
                 }}
               />
             </div>
-          {clientIsProblem && (
-            <span style={{
-              padding: '2px 8px', background: '#fdecea',
-              border: '1px solid #e74c3c', borderRadius: 4, color: '#922b21',
-              fontWeight: 600, fontSize: 'var(--font-sm)',
-            }}>
-              ⚠ Проблемный клиент
-            </span>
-          )}
-          {order.is_warranty && (
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-              <strong>Гарантийный</strong>
-              {order.parent_order_id && (
-                <button className="btn-secondary btn-sm" onClick={() => navigate(`/orders/${order.parent_order_id}`)}>
-                  Родительский {String(order.parent_order_id).padStart(5, '0')}
-                </button>
-              )}
-            </span>
-          )}
-          {/* «Создан» и «Дата оплаты» — в конец ленты: справочная информация,
-              ради которой держать отдельную колонку было незачем. */}
-          <span style={{ marginLeft: 'auto', fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', textAlign: 'right' }}>
-            Создан {new Date(order.created_at).toLocaleString('ru')}
-            {order.payment_date && ` · оплачен ${new Date(order.payment_date).toLocaleString('ru')}`}
-          </span>
+          </div>
+        </div>
+
+        {/* «Создан» и «Дата оплаты» — отдельной строкой под лентой. В самой
+            ленте они спорили за свободное место с денежной группой, и та
+            переставала прижиматься к правому краю. */}
+        <div style={{
+          marginTop: 4, textAlign: 'right',
+          fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)',
+        }}>
+          Создан {new Date(order.created_at).toLocaleString('ru')}
+          {order.payment_date && ` · оплачен ${new Date(order.payment_date).toLocaleString('ru')}`}
         </div>
 
         {/* Логистика и детали — поля активны всегда, без кнопки «Редактировать».

@@ -1,4 +1,5 @@
-import { useEffect, useState, useMemo, useCallback } from 'react'
+import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getOrders, updateActualDates, setOrderDriver } from '../api/orders'
 import { getDrivers } from '../api/references'
@@ -251,9 +252,26 @@ export default function LogisticsPage() {
   const [horizon, setHorizon] = useState<Horizon>(4)
   // Карта в sidebar — по умолчанию свёрнута, разворачивается по клику.
   const [mapExpanded, setMapExpanded] = useState(false)
+  /**
+   * Реальная высота липкой шапки — панель фильтров прилипает ровно под ней.
+   * Считаем измерением, а не константой: высота блока обзора меняется при
+   * переключении 4/8/12 недель, и при 12 фильтры наезжали на сетку недель.
+   */
+  const pageRootRef = useRef<HTMLDivElement | null>(null)
+  const [stickyHeadH, setStickyHeadH] = useState(52)
   // Полноэкранная карта закрывается по Esc — она перекрывает всю страницу,
   // и выйти из неё кнопкой в углу было единственным способом.
   useEscapeClose(mapExpanded, () => setMapExpanded(false))
+
+  useEffect(() => {
+    const el = pageRootRef.current?.querySelector('.page-sticky-head') as HTMLElement | null
+    if (!el) return
+    const measure = () => setStickyHeadH(el.offsetHeight)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
   // День для маршрутного листа и массового завершения развозки.
   const [routeDay, setRouteDay] = useState<string>(() => new Date().toISOString().slice(0, 10))
   /**
@@ -532,14 +550,40 @@ export default function LogisticsPage() {
     return haystack.some(v => v && v.toLowerCase().includes(q))
   }
 
+  /** Ссылка на найденную карточку — чтобы прокрутить к ней доску. */
+  const highlightRef = useRef<HTMLDivElement | null>(null)
+
+  /**
+   * Заказы, попавшие под поиск, — подсвечиваем их прямо в днях, а не прячем
+   * остальную неделю. Учитываем оба поля: точный номер и частичное совпадение
+   * по клиенту, телефону, адресу. Так оператор видит, на какой день назначен
+   * найденный заказ, даже когда ищет по фамилии.
+   */
+  const highlightedOrderIds = useMemo(() => {
+    const target = orderNoFilter.replace(/^0+/, '')
+    const hasSearch = searchText.trim() !== ''
+    if (!target && !hasSearch) return new Set<number>()
+    const ids = new Set<number>()
+    allCards.forEach(c => {
+      if (target && String(c.order.id) === target) { ids.add(c.order.id); return }
+      if (!target && hasSearch && matchesCardSearch(c)) ids.add(c.order.id)
+    })
+    return ids
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allCards, orderNoFilter, searchText])
+
+  /**
+   * Карточки для доски дней.
+   *
+   * Район и поиск по клиенту сюда НЕ применяются: при планировании оператор
+   * разбирает нераспределённые заказы, и вычищать из-под них уже назначенные
+   * дни бессмысленно — расписание недели должно оставаться целым. Эти два
+   * фильтра работают только по списку «Без даты» (см. noDateCards).
+   *
+   * Слот и водитель, наоборот, общие: это свойства самой развозки.
+   */
   const filteredCards = useMemo(() => {
-    const orderNoTarget = orderNoFilter.replace(/^0+/, '')
     return allCards.filter(c => {
-      if (districtFilters.length > 0 && (!c.district || !districtFilters.includes(c.district))) return false
-      if (orderNoTarget && String(c.order.id) !== orderNoTarget) return false
-      if (!matchesCardSearch(c)) return false
-      // Фильтр водителя — общий: раньше он влиял только на маршрутный лист,
-      // а доска дней и карта показывали всех, и выбор ничего не менял на экране.
       if (routeDriverId !== null) {
         if (routeDriverId === 0) { if (c.order.assigned_driver_id) return false }
         else if (c.order.assigned_driver_id !== routeDriverId) return false
@@ -554,8 +598,17 @@ export default function LogisticsPage() {
       }
       return true
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allCards, districtFilters, timeSlotFilters, orderNoFilter, searchText, routeDriverId])
+  }, [allCards, timeSlotFilters, routeDriverId])
+
+  useEffect(() => {
+    if (highlightedOrderIds.size === 0) return
+    // Ждём отрисовку доски: карточка появляется в своём дне только после того,
+    // как пересчитаются группы по дням.
+    const t = window.setTimeout(() => {
+      highlightRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    }, 120)
+    return () => window.clearTimeout(t)
+  }, [highlightedOrderIds])
 
   // Сортировка карточек по началу временного слота (без слота — в конец).
   const slotStartMinutes = (slot: string | null): number => {
@@ -588,16 +641,25 @@ export default function LogisticsPage() {
     return map
   }, [filteredCards, weekDays])
 
-  // Применяем noDateFilter поверх карточек без даты.
+  /**
+   * Список «Без даты» — здесь и работают район, поиск по клиенту и номер заказа.
+   * Заказ, уже назначенный на день, из этого списка не выпадает по определению:
+   * его тут просто нет, зато он подсвечивается в своём дне.
+   */
   const noDateCards = useMemo(() => {
     const cards = cardsByDay.get('no-date') || []
+    const orderNoTarget = orderNoFilter.replace(/^0+/, '')
     return cards.filter(c => {
+      if (districtFilters.length > 0 && (!c.district || !districtFilters.includes(c.district))) return false
+      if (orderNoTarget && String(c.order.id) !== orderNoTarget) return false
+      if (!matchesCardSearch(c)) return false
       if (noDateFilter === 'leads') return c.type === 'pickup' && (c.order.status === 'LEAD' || c.order.status === 'CREATED')
       if (noDateFilter === 'ready') return c.type === 'delivery'
       if (noDateFilter === 'old')  return daysSince(c.order.created_at) >= 7
       return true
     })
-  }, [cardsByDay, noDateFilter])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cardsByDay, noDateFilter, districtFilters, orderNoFilter, searchText])
 
   // Список районов для фильтра больше не нужен сверху — фильтр применяется кликом по строке в боковой сводке.
 
@@ -753,6 +815,9 @@ export default function LogisticsPage() {
 
   const renderCard = (card: OrderCard) => {
     const isPickup = card.type === 'pickup'
+    // Полный адрес — только в режиме дня и в списке «Без даты»: там колонка
+    // широкая и адрес читается целиком.
+    const showAddress = viewMode === 'day' || !card.date
     const ageDays = !card.date && card.order.status !== 'DONE' ? daysSince(card.order.created_at) : 0
     // Цвет полоски слева:
     // - двойной: тип (pickup/delivery) сверху, слот снизу. Делаем градиент.
@@ -762,9 +827,14 @@ export default function LogisticsPage() {
     // Архивная карточка (развозка уже выполнена) — приглушена и не таскается:
     // менять дату у состоявшейся доставки нельзя, она уже история.
     const archived = !!card.archived
+    // Заказ найден по номеру и уже стоит в дне — подсвечиваем его прямо там,
+    // вместо того чтобы прятать остальную неделю: оператору нужно увидеть,
+    // на какой день заказ назначен.
+    const highlighted = highlightedOrderIds.has(card.order.id)
     return (
       <div
         key={`${card.order.id}-${card.type}`}
+        ref={highlighted ? highlightRef : undefined}
         // В режиме просмотра drag не нужен — карточки только показываем.
         draggable={!viewer && !archived}
         onDragStart={() => !viewer && !archived && handleDragStart(card.order.id, card.type)}
@@ -777,9 +847,11 @@ export default function LogisticsPage() {
           borderRadius: 5,
           // полоска слева — тип (забор/доставка); полоска слота — внешний боксшэдоу.
           borderLeft: `3px solid ${archived ? '#95a5a6' : typeColor}`,
-          boxShadow: 'inset 3px 0 0 0 ' + sColor,
+          boxShadow: highlighted
+            ? 'inset 3px 0 0 0 ' + sColor + ', 0 0 0 2px #f39c12'
+            : 'inset 3px 0 0 0 ' + sColor,
           paddingLeft: 12,
-          background: archived ? '#f7f9f9' : '#fff',
+          background: highlighted ? '#fef9e7' : (archived ? '#f7f9f9' : '#fff'),
           opacity: archived ? 0.72 : 1,
           cursor: archived ? 'pointer' : 'grab',
           fontSize: 'var(--font-sm)',
@@ -789,19 +861,31 @@ export default function LogisticsPage() {
           overflow: 'hidden',
         }}
       >
+        {/* Номер заказа + район сверху, клиент под ними. Адрес показываем только
+            в режиме дня: в узкой колонке недели он всё равно обрезался на
+            «г Санкт-Петербург…», занимал строку и ничего не сообщал, тогда как
+            номер заказа оператору нужен постоянно. */}
         <div style={{
-          fontWeight: 700, color: card.district ? '#2c3e50' : '#ccc',
-          whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+          display: 'flex', alignItems: 'baseline', gap: 6,
+          whiteSpace: 'nowrap', overflow: 'hidden',
         }}>
-          {archived && <span title="Развозка выполнена" style={{ marginRight: 4 }}>✓</span>}
-          {card.district || '—'}
+          {archived && <span title="Развозка выполнена">✓</span>}
+          <strong style={{ color: '#2c3e50', flexShrink: 0 }}>
+            {formatOrderNumber(card.order.id, card.order.created_at)}
+          </strong>
+          <span style={{
+            fontWeight: 600, color: card.district ? '#2c3e50' : '#ccc',
+            overflow: 'hidden', textOverflow: 'ellipsis',
+          }}>
+            {card.district || '—'}
+          </span>
         </div>
         <div style={{
           color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1,
         }}>
           {card.order.client_name}
         </div>
-        {card.address && (
+        {showAddress && card.address && (
           <div style={{
             color: '#888', fontSize: 'var(--font-sm)', marginTop: 1,
             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
@@ -1286,7 +1370,11 @@ export default function LogisticsPage() {
     return c.order.assigned_driver_id === mapDriverId
   })
 
-  const visibleMapCards = mapCandidateCards.filter(c => !mapDay || c.date === mapDay)
+  // Найденные поиском точки показываем независимо от выбранного дня: иначе
+  // «карта дня» прячет ровно тот заказ, который оператор только что искал,
+  // и подсветка на карте не срабатывает в самом частом режиме.
+  const visibleMapCards = mapCandidateCards.filter(
+    c => !mapDay || c.date === mapDay || highlightedOrderIds.has(c.order.id))
   const mapPoints: MapPoint[] = visibleMapCards
     .filter(c => c.lat != null && c.lon != null)
     .map(c => {
@@ -1298,9 +1386,11 @@ export default function LogisticsPage() {
         kind: c.type,
         // Если включена подсветка типа — точки другого типа гасим в серый,
         // но с карты не убираем: оператор видит весь маршрут и понимает, где что.
-        color: (mapKindFocus && c.type !== mapKindFocus)
+        // Найденный заказ не гасим подсветкой типа — иначе он теряется среди серых.
+        color: (mapKindFocus && c.type !== mapKindFocus && !highlightedOrderIds.has(c.order.id))
           ? '#c8cdd2'
           : (c.date ? dayColor(c.date) : undefined),
+        highlighted: highlightedOrderIds.has(c.order.id),
         // Структурные поля — для красивого тултипа: дата → время → № → адрес → имя.
         date: c.date ?? undefined,
         time: c.timeSlot ?? undefined,
@@ -1314,7 +1404,11 @@ export default function LogisticsPage() {
     })
 
   return (
-    <div>
+    <div
+      ref={pageRootRef}
+      className={mapExpanded ? 'map-expanded-lock' : undefined}
+      style={{ ['--sticky-head-h' as string]: `${stickyHeadH}px` } as React.CSSProperties}
+    >
       {/* Те же три фильтра и в том же месте, что на Заказах / Позициях /
           Производстве. Район уже управлял доской раньше — теперь он тут же,
           а не только в сводке справа. */}
@@ -1327,93 +1421,94 @@ export default function LogisticsPage() {
         onOrderNoChange={setOrderNoFilter}
         search={searchText}
         onSearchChange={setSearchText}
-      />
-
-      {/* Полоса-обзор недель: всегда занимает всю ширину.
-          4/8 — одна строка с равномерным распределением.
-          12 — сетка 4×3 (как «месяц» из 4 недель в строке × 3 строки). */}
-      <div style={{
-        marginBottom: 16, padding: '10px 12px', borderRadius: 8, background: '#fff',
-        border: '1px solid #e6e9ec',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-          <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
-            Обзор
-          </span>
-          <div className="segmented" style={{ marginLeft: 'auto' }}>
-            {([4, 8, 12] as Horizon[]).map(h => (
-              <button
-                key={h}
-                className={horizon === h ? 'active' : undefined}
-                onClick={() => setHorizon(h)}
-              >{h} нед.</button>
-            ))}
+        extra={<>
+        {/* Полоса-обзор недель: всегда занимает всю ширину.
+            4/8 — одна строка с равномерным распределением.
+            12 — сетка 4×3 (как «месяц» из 4 недель в строке × 3 строки). */}
+        <div style={{
+          marginBottom: 16, padding: '10px 12px', borderRadius: 8, background: '#fff',
+          border: '1px solid #e6e9ec',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+            <span style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+              Обзор
+            </span>
+            <div className="segmented" style={{ marginLeft: 'auto' }}>
+              {([4, 8, 12] as Horizon[]).map(h => (
+                <button
+                  key={h}
+                  className={horizon === h ? 'active' : undefined}
+                  onClick={() => setHorizon(h)}
+                >{h} нед.</button>
+              ))}
+            </div>
+          </div>
+          <div style={{
+            display: 'grid',
+            gridTemplateColumns: horizon === 12 ? 'repeat(4, 1fr)' : `repeat(${horizon}, 1fr)`,
+            gap: 6,
+          }}>
+            {overviewWeeks.map(w => {
+              const isCurrent = w.mondayStr === weekStart
+              const isThisWeek = w.mondayStr === todayMonday
+              const total = w.pickups + w.deliveries
+              const sundayDate = (() => {
+                const d = new Date(w.mondayStr)
+                d.setDate(d.getDate() + 6)
+                return d.toISOString().slice(0, 10)
+              })()
+              // Для 12-недельного режима пилюли мельче — оптимизируем подписи.
+              const compact = horizon === 12
+              return (
+                <button
+                  key={w.mondayStr}
+                  onClick={() => setWeekStart(w.mondayStr)}
+                  style={{
+                    padding: compact ? '5px 8px' : '6px 10px',
+                    borderRadius: 6, cursor: 'pointer',
+                    // Жёлтая полоска слева — индикатор текущей недели (всегда видна, даже если выбрана другая).
+                    borderTop:    `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
+                    borderRight:  `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
+                    borderBottom: `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
+                    borderLeft:   `4px solid ${isThisWeek ? '#f9a825' : (isCurrent ? '#3498db' : '#e6e9ec')}`,
+                    // Невыбранная неделя — белая, а не серая: серый фон читался
+                    // как «неактивно», хотя неделя кликабельна.
+                    background: isCurrent ? '#ebf5fb' : '#fff',
+                    textAlign: 'left',
+                    position: 'relative',
+                    overflow: 'hidden',
+                    // Доп. подсветка для активной недели — кольцом-тенью внутри.
+                    boxShadow: isCurrent ? 'inset 0 0 0 1px #3498db' : 'none',
+                  }}
+                  title={`${w.mondayStr} — ${sundayDate}${isThisWeek ? ' · текущая неделя' : ''}`}
+                >
+                  <div style={{
+                    fontSize: 'var(--font-sm)',
+                    color: '#7f8c8d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                  }}>
+                    {formatShortDate(w.mondayStr)}–{formatShortDate(sundayDate)}
+                  </div>
+                  <div style={{
+                    marginTop: 3, fontSize: 'var(--font-sm)', display: 'flex', gap: compact ? 4 : 8,
+                  }}>
+                    <span style={{ color: '#2980b9' }}>З<strong style={{ marginLeft: 2 }}>{w.pickups || 0}</strong></span>
+                    <span style={{ color: '#27ae60' }}>Д<strong style={{ marginLeft: 2 }}>{w.deliveries || 0}</strong></span>
+                    <span style={{ color: total > 0 ? '#2c3e50' : '#bbb', marginLeft: 'auto' }}>{total}</span>
+                  </div>
+                </button>
+              )
+            })}
           </div>
         </div>
-        <div style={{
-          display: 'grid',
-          gridTemplateColumns: horizon === 12 ? 'repeat(4, 1fr)' : `repeat(${horizon}, 1fr)`,
-          gap: 6,
-        }}>
-          {overviewWeeks.map(w => {
-            const isCurrent = w.mondayStr === weekStart
-            const isThisWeek = w.mondayStr === todayMonday
-            const total = w.pickups + w.deliveries
-            const sundayDate = (() => {
-              const d = new Date(w.mondayStr)
-              d.setDate(d.getDate() + 6)
-              return d.toISOString().slice(0, 10)
-            })()
-            // Для 12-недельного режима пилюли мельче — оптимизируем подписи.
-            const compact = horizon === 12
-            return (
-              <button
-                key={w.mondayStr}
-                onClick={() => setWeekStart(w.mondayStr)}
-                style={{
-                  padding: compact ? '5px 8px' : '6px 10px',
-                  borderRadius: 6, cursor: 'pointer',
-                  // Жёлтая полоска слева — индикатор текущей недели (всегда видна, даже если выбрана другая).
-                  borderTop:    `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
-                  borderRight:  `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
-                  borderBottom: `1px solid ${isCurrent ? '#3498db' : '#e6e9ec'}`,
-                  borderLeft:   `4px solid ${isThisWeek ? '#f9a825' : (isCurrent ? '#3498db' : '#e6e9ec')}`,
-                  // Невыбранная неделя — белая, а не серая: серый фон читался
-                  // как «неактивно», хотя неделя кликабельна.
-                  background: isCurrent ? '#ebf5fb' : '#fff',
-                  textAlign: 'left',
-                  position: 'relative',
-                  overflow: 'hidden',
-                  // Доп. подсветка для активной недели — кольцом-тенью внутри.
-                  boxShadow: isCurrent ? 'inset 0 0 0 1px #3498db' : 'none',
-                }}
-                title={`${w.mondayStr} — ${sundayDate}${isThisWeek ? ' · текущая неделя' : ''}`}
-              >
-                <div style={{
-                  fontSize: 'var(--font-sm)',
-                  color: '#7f8c8d', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-                }}>
-                  {formatShortDate(w.mondayStr)}–{formatShortDate(sundayDate)}
-                </div>
-                <div style={{
-                  marginTop: 3, fontSize: 'var(--font-sm)', display: 'flex', gap: compact ? 4 : 8,
-                }}>
-                  <span style={{ color: '#2980b9' }}>З<strong style={{ marginLeft: 2 }}>{w.pickups || 0}</strong></span>
-                  <span style={{ color: '#27ae60' }}>Д<strong style={{ marginLeft: 2 }}>{w.deliveries || 0}</strong></span>
-                  <span style={{ color: total > 0 ? '#2c3e50' : '#bbb', marginLeft: 'auto' }}>{total}</span>
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      </div>
+        </>}
+      />
 
       <div className="logistics-layout" data-tour="logistics-grid">
         <div className="logistics-main">
 
       {/* Фильтры. Фильтр района — в боковой сводке (клик по строке).
           Стрелки навигации недель убраны: переключение через полосу обзора недель сверху. */}
-      <div className="filters">
+      <div className="filters logistics-sticky-filters">
         {/* Спринт D, фидбэк 11 мая: вместо двухпозиционного дроп-дауна —
             две кнопки-toggle. Активная подсвечена; повторный клик — выключить.
             Группа переехала в строку режима: пять групп фильтров в одну полосу
@@ -1981,7 +2076,7 @@ export default function LogisticsPage() {
           {/* Модальное окно с большой картой.
               Условие только на mapExpanded (а не на наличие точек): иначе при
               переключении на день без координат окно схлопывалось само собой. */}
-          {mapExpanded && (
+          {mapExpanded && createPortal(
             <div
               className="modal-overlay"
               onClick={() => setMapExpanded(false)}
@@ -2025,7 +2120,8 @@ export default function LogisticsPage() {
                   )}
                 </div>
               </div>
-            </div>
+            </div>,
+            document.body,
           )}
         </aside>
       </div>
