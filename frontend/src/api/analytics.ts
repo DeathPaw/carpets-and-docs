@@ -54,7 +54,7 @@ export const getProblemOrders = () =>
   client.get<ProblemOrdersResponse>('/api/analytics/dashboard/problems').then(r => r.data)
 
 export const getProductionQueue = () =>
-  client.get<{order_id: number, client_name: string, status: string, created_at: string, total_amount: number, pickup_district: string, items_count: number, services_count: number, services_done: number, client_phone?: string | null, legacy_id?: number | null}[]>('/api/analytics/production-queue').then(r => r.data)
+  client.get<{order_id: number, client_name: string, status: string, created_at: string, total_amount: number, pickup_district: string, items_count: number, services_count: number, services_done: number, client_phone?: string | null, legacy_id?: number | null, photos_count?: number}[]>('/api/analytics/production-queue').then(r => r.data)
 
 export interface ProductionQueueItem {
   item_id: number
@@ -73,6 +73,8 @@ export interface ProductionQueueItem {
   services_done: number
   client_phone?: string | null
   legacy_id?: number | null
+  /** Правка №8: сколько фото у позиции — превью на доске производства. */
+  photos_count?: number
 }
 
 export const getProductionQueueItems = () =>
@@ -98,6 +100,8 @@ export interface ProductionQueueService {
   employee_ids: number[]
   client_phone?: string | null
   legacy_id?: number | null
+  /** Правка №8: сколько фото у позиции — превью на доске производства. */
+  photos_count?: number
 }
 
 export const getProductionQueueServices = () =>

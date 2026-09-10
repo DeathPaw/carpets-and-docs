@@ -46,13 +46,15 @@ public final class AnalyticsDto {
                                        String pickupDistrict, String deliveryDistrict,
                                        long itemsCount, long servicesCount, long servicesDone,
                                        /** V11/13: для поиска на странице производства. */
-                                       String clientPhone, Long legacyId) {}
+                                       String clientPhone, Long legacyId,
+                                       /** Правка №8: сколько фото у ковров заказа. */
+                                       long photosCount) {}
 
     public record ProductionQueueItem(long itemId, long orderId, String status, String description,
                                       BigDecimal length, BigDecimal width, BigDecimal weight, BigDecimal area,
                                       String itemTypeName, String clientName, LocalDateTime orderCreatedAt,
                                       String pickupDistrict, long servicesCount, long servicesDone,
-                                      String clientPhone, Long legacyId) {}
+                                      String clientPhone, Long legacyId, long photosCount) {}
 
     public record ProductionQueueService(long serviceId, String status, BigDecimal price,
                                          String serviceName, String pricingType,
@@ -61,7 +63,7 @@ public final class AnalyticsDto {
                                          long orderId, String clientName, LocalDateTime orderCreatedAt,
                                          String pickupDistrict, long positionInOrder,
                                          String employeeNames, List<Integer> employeeIds,
-                                         String clientPhone, Long legacyId) {}
+                                         String clientPhone, Long legacyId, long photosCount) {}
 
     // ───── profitability ─────
 

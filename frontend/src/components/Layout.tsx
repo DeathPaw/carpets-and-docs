@@ -57,6 +57,7 @@ export default function Layout() {
               (позиции, производство) и аналитика. */}
           <NavLink to="/dashboard"  className={navClass()} data-tour="nav-dashboard">Главная</NavLink>
           <NavLink to="/orders"     className={navClass()} data-tour="nav-orders">Заказы</NavLink>
+          <NavLink to="/calculator" className={navClass()}>Калькулятор</NavLink>
           <NavLink to="/logistics"  className={navClass()} data-tour="nav-logistics">Логистика</NavLink>
           <NavLink to="/clients"    className={navClass()} data-tour="nav-clients">Клиенты</NavLink>
           <NavLink to="/supply"     className={navClass()}>Закупки</NavLink>

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   getProductionQueue, getProductionQueueItems, getProductionQueueServices,
@@ -10,6 +10,9 @@ import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import PageFilterBar from '../components/PageFilterBar'
 import { hashColor } from '../components/Tiles'
+import ItemThumb, { prefetchItemThumbs } from '../components/ItemThumb'
+import PhotoGallery, { type GalleryPhoto } from '../components/PhotoGallery'
+import { getItemPhotos, getAllOrderPhotos } from '../api/orders'
 import type { Employee, ItemType, ServiceStatus } from '../types'
 
 interface QueueOrder {
@@ -22,6 +25,8 @@ interface QueueOrder {
   items_count: number
   services_count: number
   services_done: number
+  /** Правка №8: сколько фото у ковров заказа. */
+  photos_count?: number
 }
 
 type Mode = 'orders' | 'items' | 'services'
@@ -87,6 +92,9 @@ export default function ProductionPage() {
   // V10/V11/V13: универсальный поиск — работает во всех 3 режимах (по заказам/позициям/услугам).
   // Ищет по имени клиента (подстрока), телефону (последние цифры), legacy ID.
   const [searchText, setSearchText] = useState('')
+  // Правка №8 (09.09): фото ковра в полном размере — прямо с доски, не открывая заказ.
+  const [gallery, setGallery] = useState<{ title: string; photos: GalleryPhoto[]; loading: boolean } | null>(null)
+  const galleryRequest = useRef(0)
 
   useEffect(() => { localStorage.setItem('production_mode', mode) }, [mode])
 
@@ -102,10 +110,35 @@ export default function ProductionPage() {
     if (m === 'orders') {
       getProductionQueue().then(setOrders).catch(() => {}).finally(() => setLoading(false))
     } else if (m === 'items') {
-      getProductionQueueItems().then(setItems).catch(() => {}).finally(() => setLoading(false))
+      getProductionQueueItems()
+        .then(list => {
+          setItems(list)
+          // Превью одним запросом на всю доску, а не по запросу на карточку.
+          void prefetchItemThumbs(list.filter(i => (i.photos_count ?? 0) > 0).map(i => i.item_id))
+        })
+        .catch(() => {}).finally(() => setLoading(false))
     } else {
-      getProductionQueueServices().then(setServices).catch(() => {}).finally(() => setLoading(false))
+      getProductionQueueServices()
+        .then(list => {
+          setServices(list)
+          void prefetchItemThumbs(Array.from(new Set(list.filter(x => (x.photos_count ?? 0) > 0).map(x => x.item_id))))
+        })
+        .catch(() => {}).finally(() => setLoading(false))
     }
+  }
+
+  /** Открыть галерею: сразу — с «Загрузка…», фото подставляются по приходу. */
+  const openGallery = (title: string, load: () => Promise<GalleryPhoto[]>) => {
+    const request = ++galleryRequest.current
+    setGallery({ title, photos: [], loading: true })
+    load()
+      .then(photos => {
+        if (request === galleryRequest.current) setGallery(g => g && { ...g, photos, loading: false })
+      })
+      .catch(() => {
+        if (request === galleryRequest.current) setGallery(null)
+        showToast('Не удалось загрузить фото', 'error')
+      })
   }
 
   useEffect(() => { reload(mode) }, [mode])
@@ -477,8 +510,24 @@ export default function ProductionPage() {
                           <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>{new Date(item.created_at).toLocaleDateString('ru')}</span>
                         </div>
                         <div style={{ fontSize: 'var(--font-sm)', marginBottom: 4 }}>{item.client_name}</div>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#666' }}>
-                          <span>{item.items_count} поз.</span>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 'var(--font-sm)', color: '#666' }}>
+                          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                            {item.items_count} поз.
+                            {(item.photos_count ?? 0) > 0 && (
+                              <button
+                                type="button"
+                                className="photo-chip"
+                                title="Фото ковров заказа — открыть"
+                                onClick={e => {
+                                  e.stopPropagation()
+                                  openGallery(
+                                    `Заказ #${String(item.order_id).padStart(5, '0')} · ${item.client_name}`,
+                                    () => getAllOrderPhotos(item.order_id),
+                                  )
+                                }}
+                              >📷 {item.photos_count}</button>
+                            )}
+                          </span>
                           <span style={{
                             color: item.services_done === item.services_count ? '#27ae60' : '#f39c12',
                             fontWeight: 600,
@@ -501,28 +550,42 @@ export default function ProductionPage() {
                           marginBottom: 8, cursor: 'pointer',
                           borderLeft: `4px solid ${COLUMN_COLORS[status] || '#7f8c8d'}`,
                           boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
+                          display: 'flex', gap: 10,
                         }}
                         title="Открыть позицию"
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                          <strong style={{ fontSize: 14 }}>Поз. #{it.item_id}</strong>
-                          <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>заказ #{String(it.order_id).padStart(5, '0')}</span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                            <strong style={{ fontSize: 14 }}>Поз. #{it.item_id}</strong>
+                            <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>заказ #{String(it.order_id).padStart(5, '0')}</span>
+                          </div>
+                          <div style={{ fontSize: 'var(--font-sm)', marginBottom: 2 }}>{it.item_type_name || `Тип`}</div>
+                          {it.description && (
+                            <div style={{ fontSize: 'var(--font-sm)', color: '#666', marginBottom: 4 }}>{it.description}</div>
+                          )}
+                          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#666' }}>
+                            <span>{it.client_name}</span>
+                            <span style={{
+                              color: it.services_done === it.services_count ? '#27ae60' : '#f39c12',
+                              fontWeight: 600,
+                            }}>
+                              {it.services_done}/{it.services_count} услуг
+                            </span>
+                          </div>
+                          {it.pickup_district && (
+                            <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{it.pickup_district}</div>
+                          )}
                         </div>
-                        <div style={{ fontSize: 'var(--font-sm)', marginBottom: 2 }}>{it.item_type_name || `Тип`}</div>
-                        {it.description && (
-                          <div style={{ fontSize: 'var(--font-sm)', color: '#666', marginBottom: 4 }}>{it.description}</div>
-                        )}
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 'var(--font-sm)', color: '#666' }}>
-                          <span>{it.client_name}</span>
-                          <span style={{
-                            color: it.services_done === it.services_count ? '#27ae60' : '#f39c12',
-                            fontWeight: 600,
-                          }}>
-                            {it.services_done}/{it.services_count} услуг
-                          </span>
-                        </div>
-                        {it.pickup_district && (
-                          <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{it.pickup_district}</div>
+                        {(it.photos_count ?? 0) > 0 && (
+                          <CardPhoto
+                            orderId={it.order_id}
+                            itemId={it.item_id}
+                            count={it.photos_count ?? 0}
+                            onOpen={() => openGallery(
+                              `Поз. #${it.item_id} · ${it.item_type_name || 'изделие'} · ${it.client_name}`,
+                              () => getItemPhotos(it.order_id, it.item_id),
+                            )}
+                          />
                         )}
                       </div>
                     ))
@@ -542,28 +605,42 @@ export default function ProductionPage() {
                           borderLeft: `4px solid ${COLUMN_COLORS[status] || '#7f8c8d'}`,
                           boxShadow: '0 1px 3px rgba(0,0,0,0.08)',
                           opacity: dragServiceId === s.service_id ? 0.5 : 1,
+                          display: 'flex', gap: 10,
                         }}
                       >
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
-                          <strong style={{ fontSize: 14 }}>{s.service_name}</strong>
-                          <span style={{ fontSize: 'var(--font-sm)', color: '#888', whiteSpace: 'nowrap' }}>
-                            {Number(s.price).toFixed(0)} ₽
-                          </span>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 2 }}>
+                            <strong style={{ fontSize: 14 }}>{s.service_name}</strong>
+                            <span style={{ fontSize: 'var(--font-sm)', color: '#888', whiteSpace: 'nowrap' }}>
+                              {Number(s.price).toFixed(0)} ₽
+                            </span>
+                          </div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#555', marginBottom: 2 }}>
+                            {s.item_type_name || 'позиция'}
+                            {s.item_description ? ` · ${s.item_description}` : ''}
+                          </div>
+                          <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 2 }}>
+                            Заказ #{String(s.order_id).padStart(5, '0')} · поз. #{s.position_in_order} · {s.client_name}
+                          </div>
+                          {s.employee_names ? (
+                            <div style={{ fontSize: 'var(--font-sm)', color: '#27ae60' }}>👤 {s.employee_names}</div>
+                          ) : (
+                            <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22' }}>исполнитель не назначен</div>
+                          )}
+                          {s.pickup_district && (
+                            <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{s.pickup_district}</div>
+                          )}
                         </div>
-                        <div style={{ fontSize: 'var(--font-sm)', color: '#555', marginBottom: 2 }}>
-                          {s.item_type_name || 'позиция'}
-                          {s.item_description ? ` · ${s.item_description}` : ''}
-                        </div>
-                        <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 2 }}>
-                          Заказ #{String(s.order_id).padStart(5, '0')} · поз. #{s.position_in_order} · {s.client_name}
-                        </div>
-                        {s.employee_names ? (
-                          <div style={{ fontSize: 'var(--font-sm)', color: '#27ae60' }}>👤 {s.employee_names}</div>
-                        ) : (
-                          <div style={{ fontSize: 'var(--font-sm)', color: '#e67e22' }}>исполнитель не назначен</div>
-                        )}
-                        {s.pickup_district && (
-                          <div style={{ fontSize: 'var(--font-sm)', color: '#999', marginTop: 2 }}>{s.pickup_district}</div>
+                        {(s.photos_count ?? 0) > 0 && (
+                          <CardPhoto
+                            orderId={s.order_id}
+                            itemId={s.item_id}
+                            count={s.photos_count ?? 0}
+                            onOpen={() => openGallery(
+                              `${s.item_type_name || 'Позиция'} · заказ #${String(s.order_id).padStart(5, '0')} · ${s.client_name}`,
+                              () => getItemPhotos(s.order_id, s.item_id),
+                            )}
+                          />
                         )}
                       </div>
                     ))
@@ -573,6 +650,15 @@ export default function ProductionPage() {
             )
           })}
         </div>
+      )}
+
+      {gallery && (
+        <PhotoGallery
+          title={gallery.title}
+          photos={gallery.photos}
+          loading={gallery.loading}
+          onClose={() => setGallery(null)}
+        />
       )}
 
       {/* Модалка выбора исполнителя при перетаскивании в «В работе»/«Готово»
@@ -631,6 +717,29 @@ export default function ProductionPage() {
           </div>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * Превью фото на карточке производства (правка №8): первое фото ковра и число,
+ * если их несколько. Клик открывает все фото в полном размере и, в отличие от
+ * клика по самой карточке, не уводит со страницы.
+ */
+function CardPhoto({ orderId, itemId, count, onOpen }: {
+  orderId: number
+  itemId: number
+  count: number
+  onOpen: () => void
+}) {
+  return (
+    <div
+      className="card-photo"
+      title={count > 1 ? `Фото: ${count} — открыть` : 'Открыть фото'}
+      onClick={e => { e.stopPropagation(); onOpen() }}
+    >
+      <ItemThumb orderId={orderId} itemId={itemId} size={52} />
+      {count > 1 && <span className="card-photo-count">{count}</span>}
     </div>
   )
 }

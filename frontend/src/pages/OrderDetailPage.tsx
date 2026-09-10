@@ -24,6 +24,8 @@ import TimeSlotSelect from '../components/TimeSlotSelect'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal } from '../components/orders/order-detail-modals'
 import SkuPicker from '../components/SkuPicker'
+import { getCompanySettings } from '../api/companySettings'
+import { buildInvoiceData, printAcceptance, printIssue } from '../print/printDocs'
 import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
@@ -1772,226 +1774,24 @@ export default function OrderDetailPage() {
   }
 
   /**
-   * Печать накладной. Два вида документа:
-   *   'delivery' — отвоз готовых ковров клиенту: позиции, размеры, услуги, итог;
-   *   'pickup'   — забор ковров у клиента: только ковровые изделия (без служебных
-   *                позиций Приём/Доставка/Оформление), размеры и стоимость помечены
-   *                как предварительные, доставка вынесена отдельной строкой.
-   *
-   * Лист горизонтальный, на нём два одинаковых экземпляра (клиенту и организации),
-   * оба с местом под подпись — режется по пунктиру посередине.
+   * Печать накладной: 'pickup' — на приём ковров у клиента, 'delivery' — на выдачу
+   * готовых. Формы, шапка и реквизиты — в print/printDocs.ts (правки №3–7 от 09.09):
+   * каждый экземпляр на своём листе, итоги под таблицей, в экземпляре организации
+   * накладной на выдачу — отметка о сдаче денег.
    */
   const handlePrintPdf = async (mode: 'delivery' | 'pickup' = 'delivery') => {
     if (!order) return
-    const modRows = orderModifiers.map(m => {
-      const amount = Number(order.base_amount) * m.percent / 100
-      const sign = amount >= 0 ? '+' : ''
-      return `<tr><td style="padding:3px 6px">${m.modifier_name} (${m.percent > 0 ? '+' : ''}${m.percent}%)</td><td style="padding:3px 6px;text-align:right">${sign}${amount.toFixed(2)} руб.</td></tr>`
-    }).join('')
-
-    // Загружаем услуги для всех позиций ОДНИМ батч-запросом (раньше было N запросов).
-    const allFlat = await getAllOrderServices(orderId).catch(() => [])
-    const servicesByItem = new Map<number, typeof allFlat>()
-    allFlat.forEach(s => {
-      const arr = servicesByItem.get(s.order_item_id) || []
-      arr.push(s)
-      servicesByItem.set(s.order_item_id, arr)
-    })
-
-    // Отменённые позиции из печатной формы исключаем всегда — клиенту они не нужны.
-    const activeItems = items.filter(i => i.status !== 'CANCELLED')
-    // Служебные позиции (V22): «Приём», «Доставка», «Оформление» — это не изделия,
-    // а этапы работы. В накладной на забор их не показываем: клиенту важен список
-    // сданных ковров, а доставка идёт отдельной строкой в итогах.
-    const SERVICE_ITEM_TYPES = new Set(['Приём', 'Доставка', 'Оформление'])
-    const isServiceItem = (it: typeof activeItems[number]) =>
-      SERVICE_ITEM_TYPES.has((it.item_type_name || '').trim())
-    const goodsItems = activeItems.filter(it => !isServiceItem(it))
-    const serviceItems = activeItems.filter(isServiceItem)
-    const deliveryAmount = serviceItems.reduce((sum, it) => sum + Number(it.price), 0)
-
-    const visibleItems = mode === 'pickup' ? goodsItems : activeItems
-    const dims = (it: typeof activeItems[number]) =>
-      `${it.length ? it.length + '×' + (it.width || 0) : '—'}${it.weight ? ' (' + it.weight + 'кг)' : ''}${it.area ? ' S=' + it.area : ''}${it.running_meters ? ' ' + it.running_meters + 'п.м.' : ''}`
-
-    const itemRows = visibleItems.map((it, idx) => {
-      // В накладной на забор услуги не расписываем: на этом этапе состав работ
-      // ещё уточняется, показываем только принятые изделия.
-      const svcRows = mode === 'pickup' ? '' : (servicesByItem.get(it.id) || [])
-        .filter(s => s.status !== 'CANCELLED')
-        .map(s =>
-          `<tr style="background:#fafafa;font-size:9px">
-            <td style="padding:1px 6px 1px 16px" colspan="3">— ${s.sku_name || 'Услуга #' + s.sku_id}
-              <span style="color:#888;margin-left:6px">(${SERVICE_STATUS_LABELS[s.status] || s.status})</span>
-            </td>
-            <td style="padding:1px 6px"></td>
-            <td style="padding:1px 6px;text-align:right">${Number(s.price).toFixed(2)} руб.</td>
-          </tr>`
-        ).join('')
-      return `<tr>
-        <td style="padding:3px 6px">${idx + 1}</td>
-        <td style="padding:3px 6px">${it.item_type_name || 'Тип #' + it.item_type_id}</td>
-        <td style="padding:3px 6px">${it.description || '—'}${it.defects ? '<br><span style="color:#e67e22;font-size:0.9em">Дефекты: ' + it.defects + '</span>' : ''}</td>
-        <td style="padding:3px 6px">${dims(it)}</td>
-        <td style="padding:3px 6px;text-align:right;font-weight:bold">${Number(it.price).toFixed(2)} руб.</td>
-      </tr>${svcRows}`
-    }).join('')
-
-    const docTitle = mode === 'pickup'
-      ? 'НАКЛАДНАЯ НА ПРИЁМ КОВРОВ'
-      : 'НАКЛАДНАЯ НА ВЫДАЧУ КОВРОВ'
-
-    // Итоги. Для забора всё помечено как предварительное: размеры уточняются на
-    // производстве, от них зависит цена.
-    const totalsBlock = mode === 'pickup' ? `
-<table>
-  <tbody>
-    <tr><td style="padding:2px 5px">Предварительная стоимость ковров</td><td style="padding:2px 5px;text-align:right">${goodsItems.reduce((s, it) => s + Number(it.price), 0).toFixed(2)} руб.</td></tr>
-    <tr><td style="padding:2px 5px">Доставка</td><td style="padding:2px 5px;text-align:right">${deliveryAmount > 0 ? deliveryAmount.toFixed(2) + ' руб.' : 'включена в стоимость'}</td></tr>
-    ${modRows}
-    <tr class="total-row"><td style="padding:4px 5px;border-top:2px solid #333">ПРЕДВАРИТЕЛЬНО К ОПЛАТЕ</td><td style="padding:4px 5px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
-  </tbody>
-</table>
-<div class="notice">
-  <div>• Ковровые изделия приняты у клиента для дальнейшей обработки на производстве.</div>
-  <div>• Размеры предварительные и будут уточнены после поступления ковров на производство.</div>
-  <div>• Стоимость предварительная и может быть изменена после уточнения размеров и фактической обработки ковров.</div>
-  <div>• ${deliveryAmount > 0 ? 'Доставка рассчитывается отдельно согласно условиям заказа.' : 'Доставка включена в стоимость заказа.'}</div>
-</div>` : `
-<table>
-  <tbody>
-    <tr><td style="padding:2px 5px;font-weight:bold">Сумма позиций</td><td style="padding:2px 5px;text-align:right;font-weight:bold">${Number(order.base_amount).toFixed(2)} руб.</td></tr>
-    ${modRows}
-    <tr class="total-row"><td style="padding:4px 5px;border-top:2px solid #333">ИТОГО</td><td style="padding:4px 5px;text-align:right;border-top:2px solid #333">${Number(order.total_amount).toFixed(2)} руб.</td></tr>
-  </tbody>
-</table>
-<div style="margin-top:6px">
-  <span class="label">Оплата:</span> ${order.paid ? 'Оплачен (' + (order.payment_type ? PAYMENT_LABELS[order.payment_type] : '') + ')' : 'Не оплачен'}
-</div>`
-
-    /**
-     * Один экземпляр накладной. copyLabel различает клиентский и наш.
-     *
-     * Верстаем «в ширину»: экземпляр занимает всю ширину листа и половину его
-     * высоты, поэтому шапка и реквизиты идут строками, а итоги с примечаниями —
-     * двумя колонками рядом с таблицей, а не под ней.
-     */
-    const renderCopy = (copyLabel: string) => `
-<div class="copy">
-  <div class="head-row">
-    <div>
-      <span class="company">СТИРКА КОВРОВ</span>
-      <span style="font-size:8px;color:#666;margin-left:6px">Система учёта заказов</span>
-    </div>
-    <div class="doc-title">${docTitle}</div>
-    <div class="copy-label">${copyLabel}</div>
-  </div>
-
-  <div class="meta-row">
-    <span><span class="label">Заказ:</span> ${formatOrderNumber(order.id, order.created_at)}</span>
-    <span><span class="label">Клиент:</span> ${order.client_name}</span>
-    ${order.client_address ? '<span><span class="label">Адрес:</span> ' + order.client_address + '</span>' : ''}
-    ${mode === 'pickup'
-      ? (order.pickup_date ? '<span><span class="label">Забор:</span> ' + order.pickup_date + (order.pickup_time_slot ? ' (' + order.pickup_time_slot + ')' : '') + '</span>' : '')
-      : (order.delivery_date ? '<span><span class="label">Доставка:</span> ' + order.delivery_date + (order.delivery_time_slot ? ' (' + order.delivery_time_slot + ')' : '') + '</span>' : '')}
-    ${order.legacy_id ? '<span style="color:#666">ID старой системы: ' + order.legacy_id + '</span>' : ''}
-    ${order.is_warranty ? '<span class="label">Гарантийный заказ</span>' : ''}
-    ${order.comment ? '<span><span class="label">Комментарий:</span> ' + order.comment + '</span>' : ''}
-  </div>
-
-  <div class="body-row">
-    <div class="col-items">
-      <table>
-        <thead><tr><th style="width:22px">#</th><th style="width:22%">Вид</th><th>Описание</th><th style="width:20%">${mode === 'pickup' ? 'Размеры (предв.)' : 'Размеры'}</th><th style="width:18%;text-align:right">${mode === 'pickup' ? 'Стоимость (предв.)' : 'Стоимость'}</th></tr></thead>
-        <tbody>${itemRows || '<tr><td colspan="5" style="padding:8px;text-align:center;color:#999">Изделий нет</td></tr>'}</tbody>
-      </table>
-    </div>
-    <div class="col-total">
-      ${totalsBlock}
-    </div>
-  </div>
-
-  <div class="foot-row">
-    <div class="sig-block">
-      <div class="sig-line"></div>
-      <div class="sig-label">Подпись клиента / ФИО</div>
-    </div>
-    <div class="sig-block">
-      <div class="sig-line"></div>
-      <div class="sig-label">Подпись представителя / ФИО</div>
-    </div>
-    <div class="footer">Сформирован ${new Date().toLocaleString('ru')}</div>
-  </div>
-</div>`
-
-    const html = `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${docTitle} ${formatOrderNumber(order.id, order.created_at)}</title>
-<style>
-  /* Вертикальный лист, на нём два одинаковых экземпляра друг под другом.
-     Каждый занимает половину высоты и всю ширину — то есть сам «горизонтальный».
-     Рвётся пополам по высоте листа: линия отреза посередине. */
-  @page { size: A4 portrait; margin: 8mm; }
-  body { font-family: Arial, sans-serif; font-size: 10px; margin: 0; color: #333;
-         display: flex; flex-direction: column;
-         /* A4 297mm минус поля 8mm сверху и снизу. */
-         height: 281mm; }
-  .copy { height: 50%; box-sizing: border-box; overflow: hidden; padding-bottom: 4mm;
-          display: flex; flex-direction: column; }
-  .copy + .copy { border-top: 1px dashed #999; padding-top: 4mm; padding-bottom: 0; }
-
-  /* Шапка одной строкой: название, тип документа, чей экземпляр. */
-  .head-row { display: flex; align-items: baseline; justify-content: space-between;
-              gap: 10px; border-bottom: 2px solid #333; padding-bottom: 3px; margin-bottom: 4px; }
-  .company { font-size: 13px; font-weight: bold; letter-spacing: 1.2px; }
-  .doc-title { font-size: 11px; font-weight: bold; }
-  .copy-label { font-size: 9px; color: #666; }
-
-  /* Реквизиты — в строку с переносом, чтобы не съедать высоту. */
-  .meta-row { display: flex; flex-wrap: wrap; gap: 2px 14px; font-size: 9px; margin-bottom: 4px; }
-  .label { font-weight: bold; }
-
-  /* Таблица и итоги рядом: половина листа по высоте, места вниз нет. */
-  .body-row { display: flex; gap: 6mm; flex: 1; min-height: 0; overflow: hidden; }
-  .col-items { flex: 1 1 68%; min-width: 0; overflow: hidden; }
-  .col-total { flex: 0 0 30%; }
-
-  table { width: 100%; border-collapse: collapse; }
-  th { background: #f0f0f0; text-align: left; padding: 2px 5px; border: 1px solid #ccc; font-size: 8px; }
-  td { border: 1px solid #ccc; font-size: 8px; vertical-align: top; }
-  .total-row { font-size: 10px; font-weight: bold; }
-  .notice { margin-top: 4px; font-size: 7px; color: #555; line-height: 1.45; }
-
-  /* Подписи и штамп времени — прижаты к низу экземпляра. */
-  .foot-row { display: flex; align-items: flex-end; justify-content: space-between;
-              gap: 10px; margin-top: 3mm; }
-  .sig-block { flex: 1 1 0; max-width: 38%; }
-  .sig-line { border-bottom: 1px solid #333; margin-bottom: 2px; height: 14px; }
-  .sig-label { font-size: 7px; color: #666; }
-  .footer { font-size: 7px; color: #999; white-space: nowrap; }
-
-  tr, .sig-block { page-break-inside: avoid; break-inside: avoid; }
-  table thead { display: table-header-group; }
-</style></head><body>
-${renderCopy('Экземпляр клиента')}
-${renderCopy('Экземпляр организации')}
-</body></html>`
-
-    const iframe = document.createElement('iframe')
-    iframe.style.position = 'fixed'
-    iframe.style.left = '-9999px'
-    iframe.style.top = '-9999px'
-    document.body.appendChild(iframe)
-    const doc = iframe.contentDocument || iframe.contentWindow?.document
-    if (doc) {
-      doc.open()
-      doc.write(html)
-      doc.close()
-      setTimeout(() => {
-        iframe.contentWindow?.print()
-        iframe.addEventListener('afterprint', () => document.body.removeChild(iframe))
-        // Fallback cleanup after 60 seconds
-        setTimeout(() => { if (iframe.parentNode) document.body.removeChild(iframe) }, 60000)
-      }, 300)
+    try {
+      const [company, services] = await Promise.all([
+        getCompanySettings(),
+        // Без услуг накладная всё равно печатается — просто без списка работ.
+        getAllOrderServices(orderId).catch(() => []),
+      ])
+      const data = buildInvoiceData(order, items, services, orderModifiers, mode)
+      if (mode === 'pickup') printAcceptance(company, data)
+      else printIssue(company, data)
+    } catch {
+      showToast('Не удалось загрузить реквизиты для печати — попробуйте ещё раз', 'error')
     }
   }
 
@@ -2566,7 +2366,7 @@ ${renderCopy('Экземпляр организации')}
           {/* Документы для печати — своя группа. */}
           <span className="actions-divider" />
           {/* Две накладные под разные этапы: забор ковров у клиента и выдача готовых.
-              Каждая печатается на горизонтальном листе в двух экземплярах. */}
+              Два экземпляра — клиенту и организации, каждый на своём листе A4. */}
           <button
             className="btn-secondary"
             onClick={() => void handlePrintPdf('pickup')}

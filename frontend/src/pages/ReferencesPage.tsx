@@ -20,6 +20,8 @@ import {
 import { invalidateDistrictCache } from '../components/DistrictSelect'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
+import { getCompanySettings, updateCompanySettings, type CompanySettings } from '../api/companySettings'
+import { printAcceptance } from '../print/printDocs'
 import type {
   ItemType, PriceModifier, District,
   Sku, SkuGroup, AttributeDefinition, SkuPricingType,
@@ -101,6 +103,7 @@ export default function ReferencesPage() {
       <PriceModifiersCard modifiers={modifiers} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DeliverySlotsCard slots={slots} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DistrictsCard districts={districts} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
+      <CompanySettingsCard showToast={showToast} />
       <UpdateBannersCard banners={banners} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
 
       {confirmAction && (
@@ -1304,6 +1307,123 @@ function UpdateBannersCard({ banners, reload, setConfirm, showToast }: CardProps
           + Добавить баннер
         </button>
       )}
+    </div>
+  )
+}
+
+/**
+ * V39: реквизиты для печатных форм (правка №6 от 09.09).
+ *
+ * Одно место на всю систему: поправили телефон — он сразу печатается во всех
+ * накладных, пустых бланках и маршрутных листах. ИНН, ОГРНИП и банковских
+ * реквизитов нет намеренно: заказчик просил их не печатать.
+ */
+function CompanySettingsCard({ showToast }: {
+  showToast: (msg: string, kind?: 'success' | 'error' | 'warning') => void
+}) {
+  const [form, setForm] = useState<CompanySettings | null>(null)
+  const [saved, setSaved] = useState<CompanySettings | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getCompanySettings({ fresh: true })
+      .then(c => { setForm(c); setSaved(c) })
+      .catch(() => setErr('Не удалось загрузить реквизиты'))
+  }, [])
+
+  if (!form) {
+    return (
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h2 style={{ marginTop: 0 }}>Реквизиты для печатных форм</h2>
+        <div style={{ color: err ? 'var(--c-danger)' : 'var(--c-text-muted)' }}>{err || 'Загрузка…'}</div>
+      </div>
+    )
+  }
+
+  const dirty = JSON.stringify(form) !== JSON.stringify(saved)
+  const setField = (key: keyof CompanySettings, value: string) => setForm(f => f && { ...f, [key]: value })
+
+  const pickLogo = (file: File | undefined) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setErr('Логотип — это картинка: PNG, JPG или SVG'); return }
+    if (file.size > 1024 * 1024) { setErr('Файл логотипа больше 1 МБ — уменьшите его'); return }
+    const reader = new FileReader()
+    reader.onload = () => { setErr(''); setForm(f => f && { ...f, logo_data: String(reader.result) }) }
+    reader.readAsDataURL(file)
+  }
+
+  const save = async () => {
+    setSaving(true)
+    setErr('')
+    try {
+      const c = await updateCompanySettings(form)
+      setForm(c)
+      setSaved(c)
+      showToast('Реквизиты сохранены — уже во всех печатных формах')
+    } catch (e: unknown) {
+      setErr((e as any)?.response?.data?.message || 'Не удалось сохранить')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const fields: { key: keyof CompanySettings; label: string; hint?: string }[] = [
+    { key: 'brand_name', label: 'Название', hint: 'крупно в шапке' },
+    { key: 'tagline', label: 'Подзаголовок', hint: 'под названием, жирным' },
+    { key: 'subtitle', label: 'Строка под подзаголовком' },
+    { key: 'header_address', label: 'Адрес в шапке', hint: 'короткой формой' },
+    { key: 'executor', label: 'Исполнитель', hint: 'в реквизитах справа' },
+    { key: 'legal_address', label: 'Адрес в реквизитах', hint: 'полной формой' },
+    { key: 'phones', label: 'Телефоны', hint: 'через запятую, печатаются как есть' },
+  ]
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h2 style={{ marginTop: 0 }}>Реквизиты для печатных форм</h2>
+      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginBottom: 12 }}>
+        Шапка и контакты накладных на приём и выдачу, пустых бланков и маршрутного листа.
+        После сохранения сразу печатаются во всех документах.
+      </div>
+      <div className="company-form">
+        {fields.map(f => (
+          <div className="form-group" key={f.key}>
+            <label>{f.label}{f.hint && <span className="field-hint"> · {f.hint}</span>}</label>
+            <input value={(form[f.key] as string | null) ?? ''} onChange={e => setField(f.key, e.target.value)} />
+          </div>
+        ))}
+        <div className="form-group">
+          <label>Логотип<span className="field-hint"> · PNG, JPG или SVG до 1 МБ</span></label>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minHeight: 'var(--control-h)' }}>
+            {form.logo_data
+              ? <img src={form.logo_data} alt="Логотип" style={{ height: 'var(--control-h)', maxWidth: 140, objectFit: 'contain' }} />
+              : <span style={{ color: 'var(--c-text-muted)' }}>не загружен</span>}
+            <label className="btn-secondary btn-control-h" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', marginBottom: 0 }}>
+              {form.logo_data ? 'Заменить' : 'Загрузить'}
+              <input
+                type="file" accept="image/png,image/jpeg,image/svg+xml" hidden
+                onChange={e => { pickLogo(e.target.files?.[0]); e.target.value = '' }}
+              />
+            </label>
+            {form.logo_data && (
+              <button className="btn-secondary btn-control-h" onClick={() => setForm(f => f && { ...f, logo_data: null })}>
+                Убрать
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+      {err && <div className="error-msg">{err}</div>}
+      <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+        <button className="btn-primary" disabled={!dirty || saving} onClick={() => void save()}>
+          {saving ? 'Сохранение…' : 'Сохранить'}
+        </button>
+        <button
+          className="btn-secondary"
+          onClick={() => printAcceptance(form, null)}
+          title="Пустая накладная на приём с реквизитами из формы — проверить шапку до сохранения"
+        >🖨 Пробная печать</button>
+      </div>
     </div>
   )
 }

@@ -33,7 +33,11 @@ public class ProductionRepository {
             "o.pickup_district, o.delivery_district, o.legacy_id, c.phone as client_phone, " +
             "COUNT(DISTINCT oi.id) as items_count, " +
             "COUNT(DISTINCT ois.id) as services_count, " +
-            "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done " +
+            "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done, " +
+            // Правка №8 (09.09): сколько фото у ковров заказа — производство видит это прямо
+            // на карточке, а не открывает каждый заказ, чтобы проверить.
+            "(SELECT COUNT(*) FROM order_item_photos p JOIN order_items pi ON pi.id = p.order_item_id " +
+            " WHERE pi.order_id = o.id) as photos_count " +
             "FROM orders o " +
             "LEFT JOIN clients c ON c.id = o.client_id " +
             "LEFT JOIN order_items oi ON oi.order_id = o.id " +
@@ -45,7 +49,8 @@ public class ProductionRepository {
                 rs.getTimestamp("created_at").toLocalDateTime(), nz(rs.getBigDecimal("total_amount")),
                 rs.getString("pickup_district"), rs.getString("delivery_district"),
                 longOrZero(rs, "items_count"), longOrZero(rs, "services_count"), longOrZero(rs, "services_done"),
-                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
+                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class),
+                longOrZero(rs, "photos_count")
             )
         );
     }
@@ -59,7 +64,8 @@ public class ProductionRepository {
             "o.client_name, o.created_at as order_created_at, " +
             "o.pickup_district, o.legacy_id, c.phone as client_phone, " +
             "COUNT(DISTINCT ois.id) as services_count, " +
-            "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done " +
+            "COUNT(DISTINCT CASE WHEN ois.status = 'DONE' THEN ois.id END) as services_done, " +
+            "(SELECT COUNT(*) FROM order_item_photos p WHERE p.order_item_id = oi.id) as photos_count " +
             "FROM order_items oi " +
             "JOIN orders o ON o.id = oi.order_id " +
             "LEFT JOIN clients c ON c.id = o.client_id " +
@@ -79,7 +85,8 @@ public class ProductionRepository {
                 rs.getTimestamp("order_created_at").toLocalDateTime(),
                 rs.getString("pickup_district"),
                 longOrZero(rs, "services_count"), longOrZero(rs, "services_done"),
-                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
+                rs.getString("client_phone"), rs.getObject("legacy_id", Long.class),
+                longOrZero(rs, "photos_count")
             )
         );
     }
@@ -100,7 +107,8 @@ public class ProductionRepository {
             "o.pickup_district, o.legacy_id, c.phone as client_phone, " +
             "ROW_NUMBER() OVER (PARTITION BY oi.order_id ORDER BY oi.id) as position_in_order, " +
             "COALESCE(STRING_AGG(DISTINCT e.name, ', ' ORDER BY e.name), '') as employee_names, " +
-            "COALESCE(ARRAY_AGG(DISTINCT e.id) FILTER (WHERE e.id IS NOT NULL), '{}') as employee_ids " +
+            "COALESCE(ARRAY_AGG(DISTINCT e.id) FILTER (WHERE e.id IS NOT NULL), '{}') as employee_ids, " +
+            "(SELECT COUNT(*) FROM order_item_photos p WHERE p.order_item_id = oi.id) as photos_count " +
             "FROM order_item_services ois " +
             "JOIN order_items oi ON oi.id = ois.order_item_id " +
             "JOIN orders o ON o.id = oi.order_id " +
@@ -130,7 +138,8 @@ public class ProductionRepository {
                     rs.getTimestamp("order_created_at").toLocalDateTime(),
                     rs.getString("pickup_district"), longOrZero(rs, "position_in_order"),
                     rs.getString("employee_names"), employeeIds,
-                    rs.getString("client_phone"), rs.getObject("legacy_id", Long.class)
+                    rs.getString("client_phone"), rs.getObject("legacy_id", Long.class),
+                    longOrZero(rs, "photos_count")
                 );
             }
         );

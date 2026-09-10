@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { createOrder, updateOrderDetails } from '../../api/orders'
 import { searchClients, createClient, getClientModifiers } from '../../api/clients'
 import DistrictSelect from '../DistrictSelect'
+import TimeSlotSelect from '../TimeSlotSelect'
 import AddressInput, { type AddressResolved } from '../AddressInput'
 import { formatPhone } from '../PhoneInput'
 import ClientFormFields, {
@@ -14,9 +15,16 @@ import type { Order, CreateOrderRequest, Client, PriceModifier } from '../../typ
  * из его 1100. Вынесена отдельно — OrdersPage стало проще читать, тестировать
  * и менять модалку независимо.
  */
-export default function CreateOrderModal({ onClose, onCreated }: {
+export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
   onClose: () => void
   onCreated: (o: Order) => void
+  /**
+   * Правка №9 (09.09): заказ создаётся из калькулятора. Строка — что перенесётся
+   * («3 изделия · 9 600 ₽»); изделия, услуги и скидки калькулятор добавит в заказ
+   * сам после создания. В этом режиме в форме есть дата и время забора — о них
+   * договариваются в том же разговоре, — а Legacy ID не нужен.
+   */
+  quoteSummary?: string
 }) {
   const [form, setForm] = useState<CreateOrderRequest>({ client_name: '', comment: '' })
   const [clients, setClients] = useState<Client[]>([])
@@ -40,6 +48,8 @@ export default function CreateOrderModal({ onClose, onCreated }: {
   const [legacyId, setLegacyId] = useState('')
   // V5: при импорте из старой системы (legacyId задан) можно указать дату прошлой.
   const [legacyCreatedAt, setLegacyCreatedAt] = useState('')
+  const [pickupDate, setPickupDate] = useState('')
+  const [pickupSlot, setPickupSlot] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
   const [searchTimer, setSearchTimer] = useState<ReturnType<typeof setTimeout> | null>(null)
@@ -253,6 +263,7 @@ export default function CreateOrderModal({ onClose, onCreated }: {
       const hasAnyDetail = finalPickupDistrict || finalDeliveryDistrict
         || finalPickupLat != null || finalDeliveryLat != null
         || finalPickupApartment || finalDeliveryApartment
+        || pickupDate
       if (hasAnyDetail) {
         await updateOrderDetails(order.id, {
           pickup_address: finalPickupAddress || null,
@@ -265,6 +276,7 @@ export default function CreateOrderModal({ onClose, onCreated }: {
           pickup_lon: finalPickupLon,
           delivery_lat: finalDeliveryLat ?? finalPickupLat,
           delivery_lon: finalDeliveryLon ?? finalPickupLon,
+          ...(pickupDate ? { pickup_date: pickupDate, pickup_time_slot: pickupSlot || null } : {}),
         })
       }
       onCreated(order)
@@ -286,7 +298,13 @@ export default function CreateOrderModal({ onClose, onCreated }: {
           style={{ position: 'absolute', top: 12, right: 12, background: 'none', border: 'none', fontSize: '1.5em', cursor: 'pointer', color: '#888', lineHeight: 1 }}
           title="Закрыть"
         >&times;</button>
-        <h2>Новый заказ</h2>
+        <h2>{quoteSummary ? 'Новый заказ по расчёту' : 'Новый заказ'}</h2>
+        {quoteSummary && (
+          <div className="quote-strip">
+            Из калькулятора перенесутся изделия, размеры, услуги и скидки: <b>{quoteSummary}</b>.
+            Осталось указать клиента, адрес и дату забора.
+          </div>
+        )}
 
         <div className="form-group">
           <label>Клиент</label>
@@ -538,6 +556,25 @@ export default function CreateOrderModal({ onClose, onCreated }: {
             )}
           </>
         )}
+        {quoteSummary && (
+          <div className="form-group">
+            <label>Дата и время забора</label>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <input
+                type="date"
+                style={{ flex: '0 0 160px' }}
+                value={pickupDate}
+                min={todayIso()}
+                onChange={e => setPickupDate(e.target.value)}
+                aria-label="Дата забора"
+              />
+              <div style={{ flex: '0 0 200px' }}>
+                <TimeSlotSelect value={pickupSlot} onChange={setPickupSlot} date={pickupDate || null} disabled={!pickupDate} />
+              </div>
+            </div>
+          </div>
+        )}
+        {!quoteSummary && (
         <div className="form-group">
           <label>Legacy ID</label>
           <input
@@ -565,6 +602,7 @@ export default function CreateOrderModal({ onClose, onCreated }: {
             </div>
           )}
         </div>
+        )}
 
         <div className="form-group">
           <label>Комментарий</label>
@@ -586,4 +624,10 @@ export default function CreateOrderModal({ onClose, onCreated }: {
 
     </div>
   )
+}
+
+/** Сегодня по местному времени: toISOString() даёт UTC, и после 21:00 по Москве поле пускало вчерашний день. */
+function todayIso(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }

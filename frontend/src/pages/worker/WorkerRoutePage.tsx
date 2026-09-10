@@ -4,6 +4,7 @@ import {
     myRoute, getItemsForDelivery, setItemDeliveryState,
     type RoutePoint, type DeliveryItem,
 } from '../../api/worker'
+import { getCompanySettings, type CompanySettings } from '../../api/companySettings'
 
 /**
  * Маршрут водителя/логиста на день. Из ответов заказчика (10 мая):
@@ -27,6 +28,11 @@ export default function WorkerRoutePage() {
 
     const employeeId = Number(sessionStorage.getItem('worker_id') || 0)
     const employeeName = sessionStorage.getItem('worker_name') || ''
+    // Правка №6 (09.09): шапка «Коврокот» и реквизиты — те же, что в накладных оператора.
+    const [company, setCompany] = useState<CompanySettings | null>(null)
+    useEffect(() => {
+        getCompanySettings({ worker: true }).then(setCompany).catch(() => setCompany(null))
+    }, [])
 
     useEffect(() => {
         if (!employeeId) { navigate('/worker-login', { replace: true }); return }
@@ -254,6 +260,7 @@ export default function WorkerRoutePage() {
                                 <th style={thStyle}>Тип</th>
                                 <th style={thStyle}>Время</th>
                                 <th style={thStyle}>Клиент / Адрес</th>
+                                <th style={thStyle}>Район</th>
                                 <th style={thStyle}>Телефон</th>
                                 <th style={thStyle}>Сумма</th>
                                 <th style={thStyle}>Подпись</th>
@@ -269,9 +276,12 @@ export default function WorkerRoutePage() {
                                         <div style={{ fontWeight: 600 }}>{p.client_name}</div>
                                         <div style={{ fontSize: 11 }}>{p.address || '—'}</div>
                                     </td>
+                                    <td style={tdStyle}>{p.district || '—'}</td>
                                     <td style={tdStyle}>{p.client_phone || '—'}</td>
                                     <td style={tdStyle}>
-                                        {p.paid ? '—' : `${Number(p.total_amount).toFixed(0)} ₽`}
+                                        {/* Правка №2 (09.09): у забора сумма предварительная —
+                                            в маршрутном листе её не печатаем. */}
+                                        {p.point_type === 'pickup' ? '' : p.paid ? '—' : `${Number(p.total_amount).toFixed(0)} ₽`}
                                     </td>
                                     <td style={{ ...tdStyle, width: 100 }}></td>
                                 </tr>
@@ -281,13 +291,14 @@ export default function WorkerRoutePage() {
                     <div style={{ marginTop: 24, fontSize: 12, color: '#666' }}>
                         Итого точек: {route.length} ·
                         К получению наличными:{' '}
-                        {route.filter(p => !p.paid).reduce((s, p) => s + Number(p.total_amount), 0).toFixed(0)} ₽
+                        {route.filter(p => p.point_type === 'delivery' && !p.paid).reduce((s, p) => s + Number(p.total_amount), 0).toFixed(0)} ₽
                     </div>
                 </div>
 
                 {/* Страницы 2..N — отдельная накладная на каждого клиента (Спринт D.5) */}
                 {route.map(p => (
                     <div className="print-page" key={`${p.order_id}-${p.point_type}-invoice`}>
+                        {company && <CompanyHeader company={company} />}
                         <h1 style={{ fontSize: 18, marginBottom: 4 }}>
                             Накладная № {p.order_id}-{p.point_type === 'pickup' ? 'З' : 'Д'}
                         </h1>
@@ -315,7 +326,9 @@ export default function WorkerRoutePage() {
                                     <td style={tdStyle}>{p.time_slot || '—'}</td>
                                 </tr>
                                 <tr>
-                                    <td style={{ ...tdStyle, fontWeight: 600 }}>Сумма заказа:</td>
+                                    <td style={{ ...tdStyle, fontWeight: 600 }}>
+                                        {p.point_type === 'pickup' ? 'Стоимость (предв.):' : 'Сумма заказа:'}
+                                    </td>
                                     <td style={tdStyle}>{Number(p.total_amount).toFixed(2)} ₽</td>
                                 </tr>
                                 <tr>
@@ -366,4 +379,31 @@ const thStyle: React.CSSProperties = {
 }
 const tdStyle: React.CSSProperties = {
     border: '1px solid #333', padding: '6px 8px', verticalAlign: 'top',
+}
+
+/** Шапка накладной: бренд и реквизиты из Справочников (правка №6 от 09.09). */
+function CompanyHeader({ company }: { company: CompanySettings }) {
+    return (
+        <div style={{
+            display: 'flex', justifyContent: 'space-between', gap: 16,
+            borderBottom: '2px solid #111', paddingBottom: 8, marginBottom: 12,
+        }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                {company.logo_data && (
+                    <img src={company.logo_data} alt="" style={{ maxHeight: 54, maxWidth: 110, objectFit: 'contain' }} />
+                )}
+                <div>
+                    <div style={{ fontSize: 24, fontWeight: 800, lineHeight: 1.1 }}>{company.brand_name}</div>
+                    {company.tagline && <div style={{ fontSize: 13, fontWeight: 700 }}>{company.tagline}</div>}
+                    {company.subtitle && <div style={{ fontSize: 12 }}>{company.subtitle}</div>}
+                    {company.header_address && <div style={{ fontSize: 12 }}>{company.header_address}</div>}
+                </div>
+            </div>
+            <div style={{ textAlign: 'right', fontSize: 12, lineHeight: 1.5 }}>
+                {company.executor && <div>Исполнитель: <b>{company.executor}</b></div>}
+                {company.legal_address && <div>Адрес: {company.legal_address}</div>}
+                {company.phones && <div>Тел.: <b>{company.phones}</b></div>}
+            </div>
+        </div>
+    )
 }

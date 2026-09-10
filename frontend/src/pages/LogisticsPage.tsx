@@ -4,6 +4,10 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getOrders, updateActualDates, setOrderDriver } from '../api/orders'
 import { getDrivers } from '../api/references'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
+import PrintMenuButton from '../components/PrintMenuButton'
+import { useToast } from '../components/Toast'
+import { getCompanySettings, type CompanySettings } from '../api/companySettings'
+import { brandLineHtml, esc, openPrint, printAcceptance, printIssue } from '../print/printDocs'
 import MultiSelectFilter from '../components/MultiSelectFilter'
 import CompleteDeliveriesModal from '../components/logistics/CompleteDeliveriesModal'
 import AddOneOffSlotModal from '../components/logistics/AddOneOffSlotModal'
@@ -136,9 +140,13 @@ function daysSince(createdAt: string): number {
  * а место занимала. Оплата берётся из предварительного типа (оператор ставит
  * заранее), при его отсутствии — из фактической оплаты.
  *
+ * Правки 09.09: отдельная колонка «Район» (№1) — по ней водитель планирует
+ * порядок объезда; у заборов сумма не печатается (№2) — на этом этапе она
+ * предварительная и сбивает водителя в разговоре с клиентом.
+ *
  * driverName — если задан, лист печатается для одного водителя (его имя в шапке).
  */
-function printRouteSheet(date: string, cards: OrderCard[], driverName?: string): void {
+function printRouteSheet(date: string, cards: OrderCard[], company: CompanySettings, driverName?: string): void {
   const dayCards = cards.filter(c => c.date === date)
     .sort((a, b) => (a.timeSlot || '').localeCompare(b.timeSlot || ''))
   const formattedDate = new Date(date).toLocaleDateString('ru', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
@@ -154,6 +162,7 @@ function printRouteSheet(date: string, cards: OrderCard[], driverName?: string):
     const payment = c.order.preliminary_payment_type
       ? PRELIMINARY_PAYMENT_LABELS[c.order.preliminary_payment_type]
       : (c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—')
+    const amount = c.type === 'pickup' ? '' : `${Number(c.order.total_amount).toFixed(0)} ₽`
     // Архивный маршрутный лист: выполненные точки помечаем галкой и глушим цвет,
     // чтобы при перепечатке прошедшей развозки было видно, что уже отработано.
     const rowStyle = c.archived ? ' style="color:#7f8c8d"' : ''
@@ -162,12 +171,13 @@ function printRouteSheet(date: string, cards: OrderCard[], driverName?: string):
       <td style="padding:5px 6px;text-align:center">${idx + 1}</td>
       <td style="padding:5px 6px;text-align:center;font-weight:600">${c.type === 'pickup' ? 'Забор' : 'Отвоз'}${mark}</td>
       <td style="padding:5px 6px;white-space:nowrap">#${String(c.order.id).padStart(5, '0')}</td>
-      <td style="padding:5px 6px">${addr}</td>
-      <td style="padding:5px 6px;white-space:nowrap">${phone}</td>
-      <td style="padding:5px 6px;text-align:right;white-space:nowrap">${Number(c.order.total_amount).toFixed(0)} ₽</td>
-      <td style="padding:5px 6px;white-space:nowrap">${payment}</td>
-      <td style="padding:5px 6px;white-space:nowrap">${c.timeSlot || '—'}</td>
-      <td style="padding:5px 6px;color:#555">${c.order.comment || ''}</td>
+      <td style="padding:5px 6px">${esc(addr)}</td>
+      <td style="padding:5px 6px">${esc(c.district || '—')}</td>
+      <td style="padding:5px 6px;white-space:nowrap">${esc(phone)}</td>
+      <td style="padding:5px 6px;text-align:right;white-space:nowrap">${amount}</td>
+      <td style="padding:5px 6px;white-space:nowrap">${esc(payment)}</td>
+      <td style="padding:5px 6px;white-space:nowrap">${esc(c.timeSlot || '—')}</td>
+      <td style="padding:5px 6px;color:#555">${esc(c.order.comment || '')}</td>
       <td style="padding:5px 6px"></td>
     </tr>`
   }).join('')
@@ -179,7 +189,9 @@ function printRouteSheet(date: string, cards: OrderCard[], driverName?: string):
          на много строк, как это было в книжной ориентации. */
       @page{ size: A4 landscape; margin: 8mm }
       body{font-family:Arial,sans-serif;font-size:11px;margin:0;color:#222}
+      .head{display:flex;justify-content:space-between;align-items:baseline;gap:16px}
       h1{font-size:16px;margin:0 0 4px}
+      .brand{font-size:11px;color:#444;text-align:right}
       .sub{color:#666;margin-bottom:10px}
       table{width:100%;border-collapse:collapse;table-layout:fixed}
       th{background:#ecf0f1;text-align:left;padding:5px 6px;border:1px solid #bdc3c7;font-size:10px}
@@ -188,20 +200,24 @@ function printRouteSheet(date: string, cards: OrderCard[], driverName?: string):
       tr{page-break-inside:avoid;break-inside:avoid}
       thead{display:table-header-group}
     </style></head><body>
-    <h1>Маршрутный лист${driverName ? ' — ' + driverName : ''}</h1>
+    <div class="head">
+      <h1>Маршрутный лист${driverName ? ' — ' + esc(driverName) : ''}</h1>
+      <div class="brand">${brandLineHtml(company)}</div>
+    </div>
     <div class="sub">${formattedDate} · всего ${dayCards.length} ${dayCards.length === 1 ? 'выезд' : 'выездов'}</div>
     <table>
       <colgroup>
         <col style="width:3%"><col style="width:6%"><col style="width:7%">
-        <col style="width:30%"><col style="width:11%"><col style="width:7%">
-        <col style="width:8%"><col style="width:8%"><col style="width:14%">
-        <col style="width:6%">
+        <col style="width:25%"><col style="width:10%"><col style="width:11%">
+        <col style="width:6%"><col style="width:8%"><col style="width:8%">
+        <col style="width:10%"><col style="width:6%">
       </colgroup>
       <thead><tr>
         <th>#</th>
         <th>Тип</th>
         <th>Заказ</th>
         <th>Адрес</th>
+        <th>Район</th>
         <th>Телефон</th>
         <th>Сумма</th>
         <th>Оплата</th>
@@ -209,26 +225,23 @@ function printRouteSheet(date: string, cards: OrderCard[], driverName?: string):
         <th>Комментарий</th>
         <th>Отметка</th>
       </tr></thead>
-      <tbody>${rows || '<tr><td colspan=10 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
+      <tbody>${rows || '<tr><td colspan=11 style="padding:20px;text-align:center;color:#999">На эту дату выездов нет</td></tr>'}</tbody>
     </table>
     </body></html>`
 
-  const iframe = document.createElement('iframe')
-  iframe.style.position = 'fixed'; iframe.style.left = '-9999px'; iframe.style.top = '-9999px'
-  document.body.appendChild(iframe)
-  const doc = iframe.contentDocument || iframe.contentWindow?.document
-  if (doc) {
-    doc.open(); doc.write(html); doc.close()
-    setTimeout(() => {
-      iframe.contentWindow?.print()
-      iframe.addEventListener('afterprint', () => document.body.removeChild(iframe))
-      setTimeout(() => { if (iframe.parentNode) document.body.removeChild(iframe) }, 60000)
-    }, 300)
-  }
+  openPrint(html)
 }
 
 export default function LogisticsPage() {
   const navigate = useNavigate()
+  const { showToast } = useToast()
+
+  /** Реквизиты нужны каждой печатной форме — подгружаем их перед печатью. */
+  const withCompany = (print: (c: CompanySettings) => void) => {
+    getCompanySettings()
+      .then(print)
+      .catch(() => showToast('Не удалось загрузить реквизиты для печати — попробуйте ещё раз', 'error'))
+  }
   const [searchParams] = useSearchParams()
   const { isReadonly } = useAuth()
   const [weekStart, setWeekStart] = useState(() => getMonday(new Date().toISOString().slice(0,10)))
@@ -1582,13 +1595,29 @@ export default function LogisticsPage() {
                 })(),
               }))}
             />
-            <button
-              className="btn-secondary"
-              title={routeDriverId
-                ? 'Напечатать маршрутный лист выбранного водителя'
-                : 'Напечатать маршрутный лист на выбранный день'}
-              onClick={() => printRouteSheet(routeDay, routeCards, routeDriverName)}
-            >🖨</button>
+            {/* Правка №4 (09.09): рядом с маршрутным листом — пустые бланки
+                накладных: водитель берёт их на смену. */}
+            <PrintMenuButton
+              title="Печать: маршрутный лист и пустые бланки"
+              items={[
+                {
+                  label: 'Маршрутный лист',
+                  hint: `${formatDayHeader(routeDay)} · ${routeDriverName || 'все водители'}`,
+                  onClick: () => withCompany(c => printRouteSheet(routeDay, routeCards, c, routeDriverName)),
+                },
+                {
+                  label: 'Пустая накладная на приём',
+                  hint: 'Для забора вне распечатанного заказа',
+                  onClick: () => withCompany(c => printAcceptance(c, null)),
+                  separated: true,
+                },
+                {
+                  label: 'Пустая накладная на выдачу',
+                  hint: 'Для выдачи вне распечатанного заказа',
+                  onClick: () => withCompany(c => printIssue(c, null)),
+                },
+              ]}
+            />
             {/* Правка №2: массовое завершение развозки — оператор закрывает все
                 доставки дня из одного окна, без захода в каждую карточку. */}
             {!isReadonly && (

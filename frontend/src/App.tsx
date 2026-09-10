@@ -12,6 +12,7 @@ import ReferencesPage from './pages/ReferencesPage'
 import EmployeesPage from './pages/EmployeesPage'
 import ClientsPage from './pages/ClientsPage'
 import SupplyRequestsPage from './pages/SupplyRequestsPage'
+import CalculatorPage from './pages/CalculatorPage'
 import ErrorLogPage from './pages/ErrorLogPage'
 import AuditLogPage from './pages/AuditLogPage'
 import LogisticsPage from './pages/LogisticsPage'
@@ -74,6 +75,8 @@ export default function App() {
               <Route index element={<Navigate to="/dashboard" replace />} />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="orders" element={<OrdersPage />} />
+              {/* Правка №9 (09.09): расчёт стоимости без клиента и заказа. */}
+              <Route path="calculator" element={<CalculatorPage />} />
               <Route path="logistics" element={<LogisticsPage />} />
               <Route path="production" element={<ProductionPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />

@@ -686,3 +686,126 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 @media (prefers-reduced-motion: reduce) {
   .map-marker-highlight .map-halo { animation: none; opacity: 0.32; }
 }
+
+/* ───── Меню печати (правка №4): маршрутный лист и пустые бланки под одной 🖨 ───── */
+.menu-pop {
+  position: absolute; top: calc(100% + 4px); right: 0; z-index: 2000;
+  min-width: 290px; padding: 4px;
+  background: #fff; border: 1px solid var(--c-border); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+.menu-pop button {
+  display: block; width: 100%; height: auto; padding: 8px 10px;
+  text-align: left; background: none; border: none; border-radius: 6px;
+  color: var(--c-text); font-size: 14px; cursor: pointer;
+}
+.menu-pop button:hover { background: var(--c-primary-light); }
+.menu-pop .menu-hint { display: block; margin-top: 2px; font-size: var(--font-sm); color: var(--c-text-secondary); }
+.menu-pop .menu-sep { height: 1px; margin: 4px 6px; background: var(--c-border); }
+
+/* ───── Фото в производстве (правка №8) ───── */
+.card-photo { position: relative; flex-shrink: 0; align-self: flex-start; cursor: zoom-in; }
+.card-photo img { display: block; }
+.card-photo-count {
+  position: absolute; right: -6px; bottom: -6px;
+  min-width: 20px; height: 20px; padding: 0 5px; border-radius: 10px;
+  background: var(--c-primary); color: #fff; border: 2px solid #fff;
+  font-size: var(--font-sm); line-height: 16px; text-align: center;
+}
+.photo-chip {
+  height: 22px; padding: 0 8px; border-radius: 11px;
+  border: 1px solid #aed6f1; background: var(--c-primary-light); color: var(--c-primary-dark);
+  font-size: var(--font-sm); line-height: 1; cursor: zoom-in;
+}
+.photo-gallery {
+  width: min(92vw, 1100px); max-height: 94vh; padding: 12px;
+  display: flex; flex-direction: column; gap: 10px;
+  background: #fff; border-radius: 8px;
+}
+.photo-gallery-head { display: flex; align-items: center; gap: 12px; }
+.photo-gallery-head button { margin-left: auto; }
+.photo-gallery-count { font-size: var(--font-sm); color: var(--c-text-secondary); }
+.photo-gallery-stage {
+  position: relative; height: 72vh; min-height: 280px;
+  display: flex; align-items: center; justify-content: center;
+  background: #1f2a36; border-radius: 6px; overflow: hidden;
+}
+.photo-gallery-stage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.photo-gallery-empty { color: #fff; }
+.photo-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  width: 44px; height: 64px; padding: 0; border: none; border-radius: 6px;
+  background: rgba(255, 255, 255, 0.88); color: var(--c-text); font-size: 30px; line-height: 1; cursor: pointer;
+}
+.photo-nav.prev { left: 8px; }
+.photo-nav.next { right: 8px; }
+.photo-gallery-strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 2px; }
+.photo-gallery-strip img {
+  width: 64px; height: 64px; flex-shrink: 0; object-fit: cover; cursor: pointer;
+  border: 2px solid transparent; border-radius: 4px; opacity: 0.7;
+}
+.photo-gallery-strip img.active { border-color: var(--c-primary); opacity: 1; }
+
+/* ───── Реквизиты в Справочниках (правка №6) ───── */
+.company-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; max-width: 900px; }
+.field-hint { font-weight: 400; color: var(--c-text-secondary); }
+
+/* ───── Калькулятор (правка №9) ───── */
+.quote-strip {
+  margin-bottom: 12px; padding: 8px 12px;
+  background: var(--c-primary-light); border: 1px solid #aed6f1; border-radius: 6px;
+  font-size: var(--font-sm);
+}
+.calc-lead { font-size: var(--font-sm); color: var(--c-text-secondary); }
+.calc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+.calc-card { margin-bottom: 16px; }
+.calc-card h2 { margin: 0 0 8px; }
+.calc-grid {
+  display: grid; gap: 8px; align-items: start;
+  grid-template-columns: 28px minmax(170px, 1.3fr) 84px 84px 96px minmax(170px, 1.5fr) 104px 34px;
+}
+.calc-grid-head {
+  padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--c-border);
+  font-size: var(--font-sm); color: var(--c-text-secondary);
+}
+.calc-row { padding: 8px 0; border-bottom: 1px dashed var(--c-border); }
+.calc-no { height: var(--control-h); display: flex; align-items: center; justify-content: center; font-weight: 600; }
+.calc-span3 { grid-column: span 3; min-height: var(--control-h); display: flex; align-items: center; gap: 8px; }
+.calc-hint { font-size: var(--font-sm); color: var(--c-text-secondary); }
+.calc-num { text-align: right; }
+.calc-services { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.calc-service-name { min-height: var(--control-h); display: flex; align-items: center; flex-wrap: wrap; gap: 0 4px; }
+.calc-warn { font-size: var(--font-sm); color: var(--c-warning-strong); }
+.calc-extra {
+  align-self: flex-start; display: inline-flex; align-items: center; gap: 6px;
+  padding: 2px 4px 2px 10px; border-radius: 12px; background: var(--c-primary-light); font-size: var(--font-sm);
+}
+.calc-extra button {
+  height: auto; padding: 0 4px; border: none; background: none;
+  color: var(--c-text-secondary); font-size: 14px; cursor: pointer;
+}
+.calc-price { height: var(--control-h); display: flex; align-items: center; justify-content: flex-end; font-weight: 700; white-space: nowrap; }
+.calc-remove {
+  width: 34px; height: var(--control-h); padding: 0;
+  border: 1px solid var(--c-border); border-radius: 6px; background: #fff;
+  color: var(--c-text-secondary); font-size: 18px; line-height: 1; cursor: pointer;
+}
+.calc-remove:hover { color: var(--c-danger); border-color: var(--c-danger); }
+.calc-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+.calc-chip { border: 1px solid var(--c-border); border-radius: 14px; background: #fff; color: var(--c-text); }
+.calc-chip.is-on { background: var(--c-primary); border-color: var(--c-primary); color: #fff; }
+/* Итог — под липкой шапкой страницы, чтобы не уезжал при длинном списке ковров. */
+.calc-total { position: sticky; top: 78px; }
+.calc-total h2 { margin: 0 0 10px; }
+.calc-line { display: flex; justify-content: space-between; gap: 12px; padding: 6px 0; border-bottom: 1px solid var(--c-border); }
+.calc-muted { color: var(--c-text-secondary); }
+.calc-grand { display: flex; justify-content: space-between; align-items: baseline; padding: 12px 0 8px; }
+.calc-grand b { font-size: 22px; }
+.calc-note { margin-bottom: 8px; font-size: var(--font-sm); color: var(--c-warning-strong); }
+.calc-note.is-ok { color: var(--c-success); }
+.calc-warnings { margin: 8px 0; padding-left: 18px; font-size: var(--font-sm); color: var(--c-warning-strong); }
+.calc-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+@media (max-width: 1100px) {
+  .calc-layout { grid-template-columns: 1fr; }
+  .calc-total { position: static; }
+}
