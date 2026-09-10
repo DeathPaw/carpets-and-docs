@@ -538,8 +538,11 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 .logistics-aside {
   flex: 0 0 220px;
   position: sticky;
-  top: 16px;
-  max-height: calc(100vh - 32px);
+  /* Под липкой шапкой страницы, а не у края окна: с прежним top: 16px верх
+     колонки уезжал под шапку. Теперь наверху карта, и её заголовок с кнопкой
+     «Развернуть» должен оставаться на виду; остальное прокручивается внутри. */
+  top: calc(var(--sticky-head-h, 52px) + 10px);
+  max-height: calc(100vh - var(--sticky-head-h, 52px) - 20px);
   overflow-y: auto;
   transition: flex-basis 0.2s ease;
 }

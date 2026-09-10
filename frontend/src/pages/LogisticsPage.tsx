@@ -853,7 +853,7 @@ export default function LogisticsPage() {
         onDragStart={() => !viewer && !archived && handleDragStart(card.order.id, card.type)}
         onDragEnd={() => setDragData(null)}
         onClick={() => navigate(`/orders/${card.order.id}`)}
-        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}${archived ? ' · развозка выполнена' : ''}`}
+        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.district || 'без района'} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}${archived ? ' · развозка выполнена' : ''}`}
         style={{
           padding: '6px 8px',
           marginBottom: 4,
@@ -874,7 +874,7 @@ export default function LogisticsPage() {
           overflow: 'hidden',
         }}
       >
-        {/* Номер заказа + район сверху, клиент под ними. Адрес показываем только
+        {/* Номер заказа, под ним район, затем клиент. Адрес показываем только
             в режиме дня: в узкой колонке недели он всё равно обрезался на
             «г Санкт-Петербург…», занимал строку и ничего не сообщал, тогда как
             номер заказа оператору нужен постоянно. */}
@@ -886,12 +886,26 @@ export default function LogisticsPage() {
           <strong style={{ color: '#2c3e50', flexShrink: 0 }}>
             {formatOrderNumber(card.order.id, card.order.created_at)}
           </strong>
-          <span style={{
-            fontWeight: 600, color: card.district ? '#2c3e50' : '#ccc',
-            overflow: 'hidden', textOverflow: 'ellipsis',
-          }}>
-            {card.district || '—'}
-          </span>
+        </div>
+        {/* Район — своей строкой (фидбэк 10.09). Он стоял в строке номера, но
+            «00361 от 02.09.2026» занимает всю ширину колонки недели, и район
+            обрезался целиком — по доске было не понять, что в каком районе.
+            Выбранный в сводке район подсвечен тем же жёлтым, что и строка
+            сводки: фильтр района сокращает только «Без даты», а в днях так
+            видно, где стоят заказы этого района. */}
+        <div style={{ marginTop: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {card.district ? (
+            <span style={{
+              fontWeight: 600, color: '#1f618d',
+              ...(districtFilters.includes(card.district)
+                ? { background: '#fef9e7', boxShadow: '0 0 0 1px #f1c40f', borderRadius: 3, padding: '0 3px' }
+                : {}),
+            }}>
+              {card.district}
+            </span>
+          ) : (
+            <span style={{ color: '#b3b6b7' }}>без района</span>
+          )}
         </div>
         <div style={{
           color: '#555', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', marginTop: 1,
@@ -1774,6 +1788,10 @@ export default function LogisticsPage() {
                     <th style={{ width: 34 }}>#</th>
                     <th style={{ width: 70 }}>Тип</th>
                     <th style={{ width: 90 }}>Заказ</th>
+                    {/* Без фиксированной ширины: район — одно слово, и колонка
+                        берёт ровно под самый длинный за день, не отнимая место
+                        у ФИО и адреса. */}
+                    <th>Район</th>
                     <th>ФИО клиента</th>
                     <th style={{ width: 140 }}>Телефон</th>
                     <th>Адрес</th>
@@ -1801,6 +1819,9 @@ export default function LogisticsPage() {
                             {c.type === 'pickup' ? 'Забор' : 'Отвоз'}{c.archived ? ' ✓' : ''}
                           </td>
                           <td>{formatOrderNumber(c.order.id, c.order.created_at)}</td>
+                          <td style={{ fontWeight: 600, whiteSpace: 'nowrap', color: c.district ? '#1f618d' : '#b3b6b7' }}>
+                            {c.district || '—'}
+                          </td>
                           <td>{c.order.client_name}</td>
                           <td>{c.order.client_phone ? formatPhone(c.order.client_phone) : '—'}</td>
                           <td>{(c.address || '—') + (apt ? `, кв. ${apt}` : '')}</td>
@@ -1880,13 +1901,65 @@ export default function LogisticsPage() {
       )}
 
         </div>
-        {/* Sticky-сводка по районам справа. На узких экранах — переезжает вниз через CSS. */}
+        {/* Sticky-колонка справа: карта, сводка по районам, слоты. На узких
+            экранах — переезжает вниз через CSS. */}
         <aside className="logistics-aside">
+          {/* Карта недели — всегда видна и стоит первой (фидбэк 10.09): раньше
+              над ней была сводка по районам, и длинный список выталкивал карту
+              за нижний край экрана. По умолчанию маленькая, по кнопке или
+              двойному клику — разворачивается на всю ширину окна (модально). */}
+          <div className="card" style={{ padding: '10px 12px' }}>
+            <div style={{ marginBottom: 8 }}>
+              <strong style={{
+                display: 'block', marginBottom: 6,
+                fontSize: 'var(--font-sm)', color: '#7f8c8d',
+                textTransform: 'uppercase', letterSpacing: 0.6,
+              }}>
+                {mapDay ? 'Карта дня' : 'Карта недели'} {mapPoints.length > 0 && <span style={{ color: '#3498db' }}>· {mapPoints.length}</span>}
+              </strong>
+              {mapPoints.length > 0 && (
+                <button
+                  onClick={() => setMapExpanded(true)}
+                  className="btn-secondary btn-sm"
+                  style={{ width: '100%' }}
+                  title="Открыть карту в полноэкранном виде"
+                >
+                  ⛶ Развернуть
+                </button>
+              )}
+            </div>
+            {renderMapDayStrip(false)}
+            {mapPoints.length === 0 ? (
+              <div style={{ fontSize: 'var(--font-sm)', color: '#888', textAlign: 'center', padding: '12px 0' }}>
+                {mapDay
+                  ? 'Нет заказов с координатами на этот день.'
+                  : 'Нет заказов с координатами на этой неделе.'}
+              </div>
+            ) : (
+              <>
+                {renderMapLegend(false)}
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)', marginBottom: 8 }}>
+                  цвет точки — день недели
+                </div>
+                {/* Разворачиваем по ДВОЙНОМУ клику: одиночный click срабатывал
+                    и после перетаскивания карты — оператор двигал её вбок, отпускал
+                    мышь и получал полноэкранный режим вместо нужного участка. */}
+                <div
+                  onDoubleClick={() => setMapExpanded(true)}
+                  title="Двойной клик — развернуть карту"
+                  data-tour="logistics-map"
+                >
+                  <MapMarkers points={mapPoints} height={220} />
+                </div>
+              </>
+            )}
+          </div>
+
           {(() => {
             const totalAll = districtStats.reduce((a,s) => a + s.pickups + s.deliveries, 0)
             const maxLoad = districtStats.reduce((a,s) => Math.max(a, s.pickups + s.deliveries), 0)
             return (
-              <div className="card" style={{ padding: '10px 12px' }}>
+              <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
                 {/* Кнопка «развернуть панель» убрана: у страницы было три
                     состояния (узкая панель / широкая / полноэкранная карта),
                     и оператор не понимал, в каком он находится. Осталось два —
@@ -1962,56 +2035,7 @@ export default function LogisticsPage() {
             )
           })()}
 
-          {/* Карта недели — всегда видна. По умолчанию маленькая (240px),
-              клик по карте/кнопке — разворачивается на всю ширину окна (модально). */}
-          <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
-            <div style={{ marginBottom: 8 }}>
-              <strong style={{
-                display: 'block', marginBottom: 6,
-                fontSize: 'var(--font-sm)', color: '#7f8c8d',
-                textTransform: 'uppercase', letterSpacing: 0.6,
-              }}>
-                {mapDay ? 'Карта дня' : 'Карта недели'} {mapPoints.length > 0 && <span style={{ color: '#3498db' }}>· {mapPoints.length}</span>}
-              </strong>
-              {mapPoints.length > 0 && (
-                <button
-                  onClick={() => setMapExpanded(true)}
-                  className="btn-secondary btn-sm"
-                  style={{ width: '100%' }}
-                  title="Открыть карту в полноэкранном виде"
-                >
-                  ⛶ Развернуть
-                </button>
-              )}
-            </div>
-            {renderMapDayStrip(false)}
-            {mapPoints.length === 0 ? (
-              <div style={{ fontSize: 'var(--font-sm)', color: '#888', textAlign: 'center', padding: '12px 0' }}>
-                {mapDay
-                  ? 'Нет заказов с координатами на этот день.'
-                  : 'Нет заказов с координатами на этой неделе.'}
-              </div>
-            ) : (
-              <>
-                {renderMapLegend(false)}
-                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-muted)', marginBottom: 8 }}>
-                  цвет точки — день недели
-                </div>
-                {/* Разворачиваем по ДВОЙНОМУ клику: одиночный click срабатывал
-                    и после перетаскивания карты — оператор двигал её вбок, отпускал
-                    мышь и получал полноэкранный режим вместо нужного участка. */}
-                <div
-                  onDoubleClick={() => setMapExpanded(true)}
-                  title="Двойной клик — развернуть карту"
-                  data-tour="logistics-map"
-                >
-                  <MapMarkers points={mapPoints} height={220} />
-                </div>
-              </>
-            )}
-          </div>
-
-          {/* Справочник временных слотов — прямо под картой, в свёрнутом и
+          {/* Справочник временных слотов — внизу той же колонки, в свёрнутом и
               развёрнутом виде страницы. Оператор правит график развозки там же,
               где на неё смотрит, не уходя в Справочники. */}
           <div className="card" style={{ padding: '10px 12px', marginTop: 12 }}>
