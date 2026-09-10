@@ -159,6 +159,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--c-text);
 }
 .segmented > button.active { background: var(--c-primary); color: #fff; }
+/* Где кнопок много, а места мало (режимы Производства в шапке) — поуже, высота та же. */
+.segmented.compact > button { padding: 0 8px; }
 .segmented > button.active:hover { opacity: 1; }
 
 input, select, textarea {
@@ -758,11 +760,13 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 }
 .calc-lead { font-size: var(--font-sm); color: var(--c-text-secondary); }
 .calc-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 16px; align-items: start; }
+/* Ширины колонок подобраны так, чтобы строка изделия (минимум ~730 px) влезала
+   рядом с итогом от 1366 px и шире; уже — итог уходит под список. */
 .calc-card { margin-bottom: 16px; }
 .calc-card h2 { margin: 0 0 8px; }
 .calc-grid {
   display: grid; gap: 8px; align-items: start;
-  grid-template-columns: 28px minmax(170px, 1.3fr) 84px 84px 96px minmax(170px, 1.5fr) 104px 34px;
+  grid-template-columns: 26px minmax(140px, 1.3fr) 72px 72px 84px minmax(150px, 1.5fr) 96px 34px;
 }
 .calc-grid-head {
   padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px solid var(--c-border);
@@ -785,6 +789,8 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
   color: var(--c-text-secondary); font-size: 14px; cursor: pointer;
 }
 .calc-price { height: var(--control-h); display: flex; align-items: center; justify-content: flex-end; font-weight: 700; white-space: nowrap; }
+/* Пока идёт пересчёт — прежние суммы приглушены: видно, что цифра сейчас обновится. */
+.calc-price.is-stale, .calc-total .is-stale { opacity: 0.55; transition: opacity 0.15s; }
 .calc-remove {
   width: 34px; height: var(--control-h); padding: 0;
   border: 1px solid var(--c-border); border-radius: 6px; background: #fff;
@@ -805,7 +811,22 @@ select:disabled { background-color: var(--c-bg-hover); color: var(--c-text-muted
 .calc-note.is-ok { color: var(--c-success); }
 .calc-warnings { margin: 8px 0; padding-left: 18px; font-size: var(--font-sm); color: var(--c-warning-strong); }
 .calc-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
-@media (max-width: 1100px) {
+@media (max-width: 1400px) {
+  .calc-layout { grid-template-columns: minmax(0, 1fr) 300px; }
+}
+@media (max-width: 1300px) {
   .calc-layout { grid-template-columns: 1fr; }
   .calc-total { position: static; }
+}
+
+/* ───── Колокольчик уведомлений ─────
+   Стоит в строке с названием в боковом меню. Раньше он висел в правом верхнем
+   углу поверх шапки страницы и на экранах уже ~1700 px закрывал крайнюю кнопку:
+   «+ Новый заказ», «Экспорт Excel», переключатель режимов Производства. */
+.notif-bell { position: fixed; top: 8px; left: calc(var(--sidebar-w) - 42px); z-index: 1100; }
+.notif-bell-panel { left: 0; }
+/* Узкий экран: меню уезжает наверх (--sidebar-w: 0) — колокольчик справа, как раньше. */
+@media (max-width: 900px) {
+  .notif-bell { left: auto; right: 70px; }
+  .notif-bell-panel { left: auto; right: 0; }
 }

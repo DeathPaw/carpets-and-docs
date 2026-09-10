@@ -19,6 +19,7 @@ public class OrderItemService {
     private final ItemTypeRepository itemTypeRepository;
     private final OrderService orderService;
     private final SkuService skuService;
+    private final AuditLogService auditLogService;
 
     public OrderItemService(
             OrderItemRepository orderItemRepository,
@@ -26,7 +27,8 @@ public class OrderItemService {
             OrderRepository orderRepository,
             ItemTypeRepository itemTypeRepository,
             @Lazy OrderService orderService,
-            SkuService skuService
+            SkuService skuService,
+            AuditLogService auditLogService
     ) {
         this.orderItemRepository = orderItemRepository;
         this.serviceInstanceRepository = serviceInstanceRepository;
@@ -34,15 +36,19 @@ public class OrderItemService {
         this.itemTypeRepository = itemTypeRepository;
         this.orderService = orderService;
         this.skuService = skuService;
+        this.auditLogService = auditLogService;
     }
 
     @Transactional
     public OrderItem addItem(Long orderId, Long itemTypeId, String description) {
         orderRepository.findById(orderId)
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
-        itemTypeRepository.findById(itemTypeId)
+        ItemType type = itemTypeRepository.findById(itemTypeId)
                 .orElseThrow(() -> new EntityNotFoundException("ItemType not found: " + itemTypeId));
-        return orderItemRepository.save(orderId, itemTypeId, description);
+        OrderItem item = orderItemRepository.save(orderId, itemTypeId, description);
+        auditLogService.log("ORDER", orderId, "ITEM", "Заказ " + OrderService.orderNo(orderId)
+                + ": добавлена позиция #" + item.id() + " — " + type.name());
+        return item;
     }
 
     public List<OrderItem> findByOrderId(Long orderId) {
@@ -71,6 +77,8 @@ public class OrderItemService {
         findById(itemId);
         orderItemRepository.updateStatusWithReason(itemId, newStatus, reason);
         OrderItem item = orderItemRepository.findById(itemId).orElseThrow();
+        auditLogService.log("ORDER", item.orderId(), "ITEM", "Заказ " + OrderService.orderNo(item.orderId())
+                + ": позиция #" + itemId + " отменена (причина: " + reason + ")");
         // Отменённая позиция выпадает из суммы заказа: sumPriceByOrderId её уже не
         // считает, но без явного пересчёта base_amount/total_amount оставались
         // старыми — в «Расчёт стоимости» базовая сумма менялась, а ИТОГО нет.
@@ -80,10 +88,22 @@ public class OrderItemService {
     }
 
     public OrderItem updateDescription(Long itemId, String description, String defects) {
-        findById(itemId);
+        OrderItem before = findById(itemId);
         orderItemRepository.updateDescription(itemId, description, defects);
+        // Поле сохраняется само при уходе из него — пишем только настоящие изменения.
+        java.util.List<String> changed = new java.util.ArrayList<>();
+        if (!java.util.Objects.equals(trimToNull(before.description()), trimToNull(description))) changed.add("описание изменено");
+        if (!java.util.Objects.equals(trimToNull(before.defects()), trimToNull(defects))) {
+            changed.add(trimToNull(defects) != null ? "дефекты: " + defects.trim() : "дефекты убраны");
+        }
+        if (!changed.isEmpty()) {
+            auditLogService.log("ORDER", before.orderId(), "ITEM", "Заказ " + OrderService.orderNo(before.orderId())
+                    + ", позиция #" + itemId + ": " + String.join("; ", changed));
+        }
         return orderItemRepository.findById(itemId).orElseThrow();
     }
+
+    private static String trimToNull(String s) { return s == null || s.isBlank() ? null : s.trim(); }
 
     @Transactional
     public OrderItem updateDimensions(Long itemId, BigDecimal length, BigDecimal width, BigDecimal weight,
@@ -113,8 +133,23 @@ public class OrderItemService {
         // сбрасываем флаги, потом он пройдётся по всем как по чистому списку.
         serviceInstanceRepository.clearAllManualPriceFlagsForItem(itemId);
         lastSwitches = recalculateServicePrices(itemId);
-        return orderItemRepository.findById(itemId).orElseThrow();
+        OrderItem updated = orderItemRepository.findById(itemId).orElseThrow();
+        auditLogService.log("ORDER", item.orderId(), "ITEM", "Заказ " + OrderService.orderNo(item.orderId())
+                + ", позиция #" + itemId + ": размеры " + dimensionsText(updated) + ", цена " + plain(updated.price()) + " ₽");
+        return updated;
     }
+
+    /** «2 × 3 м, 6 м², 2,5 кг» — для лога действий. */
+    private static String dimensionsText(OrderItem it) {
+        java.util.List<String> parts = new java.util.ArrayList<>();
+        if (it.length() != null && it.width() != null) parts.add(plain(it.length()) + " × " + plain(it.width()) + " м");
+        if (it.area() != null) parts.add(plain(it.area()) + " м²");
+        if (it.weight() != null) parts.add(plain(it.weight()) + " кг");
+        if (it.runningMeters() != null) parts.add(plain(it.runningMeters()) + " п. м");
+        return parts.isEmpty() ? "не заданы" : String.join(", ", parts);
+    }
+
+    private static String plain(BigDecimal v) { return v == null ? "0" : v.stripTrailingZeros().toPlainString(); }
 
     /** V11: результат последнего recalculate для передачи в контроллер. */
     private List<SkuSwitchInfo> lastSwitches = List.of();

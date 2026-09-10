@@ -25,16 +25,19 @@ public class OrderController {
     private final OrderItemServiceInstanceService serviceInstanceService;
     private final OrderItemPhotoRepository photoRepository;
     private final NamedParameterJdbcTemplate jdbc;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
     public OrderController(OrderService service, OrderItemService orderItemService,
                            OrderItemServiceInstanceService serviceInstanceService,
                            OrderItemPhotoRepository photoRepository,
-                           NamedParameterJdbcTemplate jdbc) {
+                           NamedParameterJdbcTemplate jdbc,
+                           ru.carpet.service.AuditLogService auditLogService) {
         this.service = service;
         this.orderItemService = orderItemService;
         this.serviceInstanceService = serviceInstanceService;
         this.photoRepository = photoRepository;
         this.jdbc = jdbc;
+        this.auditLogService = auditLogService;
     }
 
     @GetMapping
@@ -187,6 +190,9 @@ public class OrderController {
             """, Map.of("id", id));
         Map<String, Object> result = new HashMap<>(rows.isEmpty() ? Map.of() : rows.get(0));
         result.put("ok", true);
+        Object driverName = result.get("driver_name");
+        auditLogService.log("ORDER", id, "LOGISTICS", "Логистика, заказ #" + String.format("%05d", id) + ": "
+                + (employeeId == null ? "водитель снят" : "водитель → " + (driverName != null ? driverName : "#" + employeeId)));
         return result;
     }
 
@@ -313,12 +319,17 @@ public class OrderController {
     @ResponseStatus(HttpStatus.CREATED)
     public OrderItemPhoto addPhoto(@PathVariable Long orderId, @PathVariable Long itemId,
                                    @RequestBody Map<String, String> body) {
-        return photoRepository.save(itemId, body.get("filename"), body.get("content_type"), body.get("data"));
+        OrderItemPhoto photo = photoRepository.save(itemId, body.get("filename"), body.get("content_type"), body.get("data"));
+        auditLogService.log("ORDER", orderId, "PHOTO",
+                "Заказ #" + String.format("%05d", orderId) + ", позиция #" + itemId + ": добавлено фото");
+        return photo;
     }
 
     @DeleteMapping("/{orderId}/items/{itemId}/photos/{photoId}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deletePhoto(@PathVariable Long orderId, @PathVariable Long itemId, @PathVariable Long photoId) {
         photoRepository.delete(photoId);
+        auditLogService.log("ORDER", orderId, "PHOTO",
+                "Заказ #" + String.format("%05d", orderId) + ", позиция #" + itemId + ": удалено фото");
     }
 }

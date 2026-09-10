@@ -27,8 +27,10 @@ import java.util.Map;
 public class DeliverySlotController {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
-    public DeliverySlotController(NamedParameterJdbcTemplate jdbc) {
+    public DeliverySlotController(NamedParameterJdbcTemplate jdbc, ru.carpet.service.AuditLogService auditLogService) {
+        this.auditLogService = auditLogService;
         this.jdbc = jdbc;
     }
 
@@ -76,12 +78,14 @@ public class DeliverySlotController {
             "INSERT INTO delivery_time_slots (day_of_week, start_time, end_time, label, is_active, sort_order, specific_date) " +
             "VALUES (:dow, :st::time, NULLIF(:et,'')::time, :lbl, :act, :so, NULLIF(:sd,'')::date)",
             p, kh, new String[]{"id"});
-        return jdbc.queryForMap(
+        Map<String, Object> slot = jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +
             "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order, " +
             "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots WHERE id = :id",
             Map.of("id", kh.getKey().longValue()));
+        auditLogService.log("DELIVERY_SLOT", kh.getKey().longValue(), "CREATE", "Слот доставки: " + slotText(slot));
+        return slot;
     }
 
     @PutMapping("/{id}")
@@ -101,15 +105,26 @@ public class DeliverySlotController {
             "end_time=NULLIF(:et,'')::time, " +
             "label=:lbl, is_active=:act, sort_order=:so, specific_date=NULLIF(:sd,'')::date, " +
             "updated_at=NOW() WHERE id=:id", p);
-        return jdbc.queryForMap(
+        Map<String, Object> slot = jdbc.queryForMap(
             "SELECT id, day_of_week, TO_CHAR(start_time,'HH24:MI') AS start_time, " +
             "TO_CHAR(end_time,'HH24:MI') AS end_time, label, is_active, sort_order, " +
             "  TO_CHAR(specific_date, 'YYYY-MM-DD') AS specific_date " +
             "FROM delivery_time_slots WHERE id = :id", Map.of("id", id));
+        auditLogService.log("DELIVERY_SLOT", id, "UPDATE", "Изменён слот доставки: " + slotText(slot));
+        return slot;
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable Long id) {
         jdbc.update("DELETE FROM delivery_time_slots WHERE id = :id", Map.of("id", id));
+        auditLogService.log("DELIVERY_SLOT", id, "DELETE", "Удалён слот доставки #" + id);
+    }
+
+    /** «Весь день, 10:00–20:30, только 12.09» — для лога действий. */
+    private static String slotText(Map<String, Object> s) {
+        Object label = s.get("label"), start = s.get("start_time"), end = s.get("end_time"), date = s.get("specific_date");
+        return (label != null && !label.toString().isBlank() ? label + ", " : "") + start
+                + (end != null ? "–" + end : "") + (date != null ? ", только " + date : "")
+                + (Boolean.FALSE.equals(s.get("is_active")) ? " (выключен)" : "");
     }
 }

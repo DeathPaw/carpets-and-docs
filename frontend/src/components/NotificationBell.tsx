@@ -77,12 +77,15 @@ export default function NotificationBell() {
   }
 
   return (
-    <div ref={ref} style={{ position: 'fixed', top: 12, right: 70, zIndex: 1100 }}>
+    // Место колокольчика — в CSS (.notif-bell): в строке названия бокового меню.
+    <div ref={ref} className="notif-bell">
       <button
         onClick={() => setOpen(o => !o)}
         style={{
           position: 'relative', background: 'transparent', border: 'none',
-          width: 40, height: 40, cursor: 'pointer', fontSize: 22,
+          // 30×30: строка названия в боковом меню ниже 40 px, большая кнопка
+          // задевала «← Назад» под ней.
+          width: 30, height: 30, cursor: 'pointer', fontSize: 18,
           display: 'flex', alignItems: 'center', justifyContent: 'center',
         }}
         title="Уведомления"
@@ -99,8 +102,8 @@ export default function NotificationBell() {
       </button>
 
       {open && (
-        <div style={{
-          position: 'absolute', top: 48, right: 0, width: 360,
+        <div className="notif-bell-panel" style={{
+          position: 'absolute', top: 36, width: 360,
           background: '#fff', border: '1px solid #ddd', borderRadius: 8,
           boxShadow: '0 4px 20px rgba(0,0,0,0.15)', maxHeight: 400, overflowY: 'auto',
         }}>

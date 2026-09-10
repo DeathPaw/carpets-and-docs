@@ -4,6 +4,7 @@ import org.springframework.jdbc.core.RowMapper;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
+import ru.carpet.audit.AuditUser;
 import ru.carpet.model.AuditLogEntry;
 
 import java.util.HashMap;
@@ -21,7 +22,8 @@ public class AuditLogRepository {
             rs.getObject("entity_id", Long.class),
             rs.getString("action"),
             rs.getString("description"),
-            rs.getTimestamp("occurred_at").toLocalDateTime()
+            rs.getTimestamp("occurred_at").toLocalDateTime(),
+            rs.getString("actor")
     );
 
     public AuditLogRepository(NamedParameterJdbcTemplate jdbc) {
@@ -29,15 +31,21 @@ public class AuditLogRepository {
     }
 
     public void log(String entityType, Long entityId, String action, String description) {
+        logAs(AuditUser.current(), entityType, entityId, action, description);
+    }
+
+    /** V41: запись с явной подписью — для кабинета работника, где нет входа оператора. */
+    public void logAs(String actor, String entityType, Long entityId, String action, String description) {
         try {
             var params = new MapSqlParameterSource()
                     .addValue("entityType", entityType)
                     .addValue("entityId", entityId)
                     .addValue("action", action)
-                    .addValue("description", description);
+                    .addValue("description", description)
+                    .addValue("actor", actor);
             jdbc.update(
-                    "INSERT INTO audit_log (entity_type, entity_id, action, description) " +
-                    "VALUES (:entityType, :entityId, :action, :description)",
+                    "INSERT INTO audit_log (entity_type, entity_id, action, description, actor) " +
+                    "VALUES (:entityType, :entityId, :action, :description, :actor)",
                     params
             );
         } catch (Exception ignored) {
@@ -51,7 +59,7 @@ public class AuditLogRepository {
         params.put("offset", (long) page * size);
 
         StringBuilder sql = new StringBuilder(
-                "SELECT id, entity_type, entity_id, action, description, occurred_at FROM audit_log WHERE 1=1 ");
+                "SELECT id, entity_type, entity_id, action, description, occurred_at, actor FROM audit_log WHERE 1=1 ");
 
         if (entityType != null && !entityType.isEmpty()) {
             sql.append("AND entity_type = :entityType ");

@@ -316,7 +316,9 @@ export default function ProductionPage() {
         search={searchText}
         onSearchChange={setSearchText}
         right={
-          <div data-tour="production-modes" className="segmented">
+          // Компактный вариант: три режима с обычными отступами наезжали на поле
+          // поиска в шапке уже на 1512 px (на 15 px), а на 1440 — сильнее.
+          <div data-tour="production-modes" className="segmented compact">
             {([
               { v: 'orders' as Mode,   label: 'По заказам' },
               { v: 'items' as Mode,    label: 'По позициям' },

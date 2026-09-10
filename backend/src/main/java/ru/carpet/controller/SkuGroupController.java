@@ -12,9 +12,11 @@ import java.util.Map;
 public class SkuGroupController {
 
     private final SkuGroupRepository repository;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
-    public SkuGroupController(SkuGroupRepository repository) {
+    public SkuGroupController(SkuGroupRepository repository, ru.carpet.service.AuditLogService auditLogService) {
         this.repository = repository;
+        this.auditLogService = auditLogService;
     }
 
     @GetMapping
@@ -22,16 +24,23 @@ public class SkuGroupController {
 
     @PostMapping
     public SkuGroup create(@RequestBody Map<String, Object> body) {
-        return repository.create((String) body.get("name"),
+        SkuGroup group = repository.create((String) body.get("name"),
                 body.get("sort_order") == null ? 100 : ((Number) body.get("sort_order")).intValue());
+        auditLogService.log("SKU_GROUP", group.id(), "CREATE", "Группа услуг «" + body.get("name") + "»");
+        return group;
     }
 
     @PutMapping("/{id}")
     public SkuGroup update(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        return repository.update(id, (String) body.get("name"),
+        SkuGroup group = repository.update(id, (String) body.get("name"),
                 body.get("sort_order") == null ? 100 : ((Number) body.get("sort_order")).intValue());
+        auditLogService.log("SKU_GROUP", id, "UPDATE", "Изменена группа услуг «" + body.get("name") + "»");
+        return group;
     }
 
     @DeleteMapping("/{id}")
-    public void delete(@PathVariable Long id) { repository.delete(id); }
+    public void delete(@PathVariable Long id) {
+        repository.delete(id);
+        auditLogService.log("SKU_GROUP", id, "DELETE", "Удалена группа услуг #" + id);
+    }
 }

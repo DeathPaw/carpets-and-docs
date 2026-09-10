@@ -568,7 +568,8 @@ export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
                 onChange={e => setPickupDate(e.target.value)}
                 aria-label="Дата забора"
               />
-              <div style={{ flex: '0 0 200px' }}>
+              {/* Слот тянется на остаток строки: «10:00–20:30 · Весь день» в 200 px обрезался. */}
+              <div style={{ flex: '1 1 auto', minWidth: 0 }}>
                 <TimeSlotSelect value={pickupSlot} onChange={setPickupSlot} date={pickupDate || null} disabled={!pickupDate} />
               </div>
             </div>

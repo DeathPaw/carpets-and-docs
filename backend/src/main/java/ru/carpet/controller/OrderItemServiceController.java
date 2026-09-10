@@ -72,6 +72,13 @@ public class OrderItemServiceController {
                                                           @PathVariable Long itemId,
                                                           @PathVariable Long serviceId,
                                                           @Valid @RequestBody AssignEmployeesRequest request) {
-        return service.assignEmployeesWithAssignees(serviceId, request.employeeIds());
+        OrderItemServiceWithAssignees result = service.assignEmployeesWithAssignees(serviceId, request.employeeIds());
+        String names = result.assignees() == null || result.assignees().isEmpty() ? "никого"
+                : result.assignees().stream().map(ru.carpet.model.Employee::name)
+                        .collect(java.util.stream.Collectors.joining(", "));
+        auditLogService.log("ORDER_SERVICE", serviceId, "ASSIGN",
+                "Исполнители услуги \"" + (result.skuName() != null ? result.skuName() : "SKU #" + result.skuId())
+                + "\" (позиция #" + itemId + ", заказ #" + orderId + "): " + names);
+        return result;
     }
 }

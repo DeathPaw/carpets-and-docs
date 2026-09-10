@@ -173,6 +173,8 @@ public class OrderService {
                         String pickupAddress, String deliveryAddress, Long legacyId,
                         java.time.LocalDateTime createdAt) {
         Order order = repository.save(clientId, clientName, comment, pickupAddress, deliveryAddress, legacyId);
+        auditLogService.log("ORDER", order.id(), "CREATE", "Создан заказ " + orderNo(order.id()) + " · " + clientName
+                + (legacyId != null ? " (перенос из старой системы, ID " + legacyId + ")" : ""));
         // V5: при импорте из старой системы оператор может указать дату создания в прошлом.
         // Разрешено только если задан legacy_id (=это импорт), иначе игнорируем.
         if (legacyId != null && createdAt != null) {
@@ -297,6 +299,9 @@ public class OrderService {
         BigDecimal price = newSku.price() == null ? BigDecimal.ZERO : newSku.price();
         Long newServiceId = serviceInstanceRepository.saveOne(orderItemId, newSkuId, price);
         orderItemService.recalculateItemPrice(orderItemId);
+        String oldName = skuNameOr(oldSvc.skuId(), "услуга #" + oldServiceId);
+        itemRepository.findById(orderItemId).ifPresent(item -> auditLogService.log("ORDER", item.orderId(), "LOGISTICS",
+                "Заказ " + orderNo(item.orderId()) + ": «" + oldName + "» заменена на «" + newSku.name() + "»"));
         return serviceInstanceRepository.findById(newServiceId).orElseThrow();
     }
 
@@ -704,6 +709,8 @@ public class OrderService {
 
         // Создаём гарантийный заказ с total_amount = 0
         Order warranty = repository.saveWarranty(original.clientId(), original.clientName(), warrantyComment, orderId);
+        auditLogService.log("ORDER", warranty.id(), "CREATE", "Создан гарантийный заказ " + orderNo(warranty.id())
+                + " по заказу " + orderNo(orderId) + " (позиций: " + itemIds.size() + ")");
 
         // Копируем только выбранные позиции (с их размерами). По #2 — гарантийный
         // заказ полностью бесплатный (включая доставку): цены услуг и позиций обнуляем.
@@ -828,7 +835,46 @@ public class OrderService {
             throw new BusinessRuleException("Заказ отменён — изменения запрещены.");
         }
         repository.updateActualDates(orderId, actualPickupDate, actualPickupTimeSlot, actualDeliveryDate, actualDeliveryTimeSlot);
-        return repository.findById(orderId).orElseThrow();
+        // Логистика: что поменялось — перенос на другой день, смена слота, снятие с даты.
+        // Сравниваем с тем, что реально легло в базу, а не с запросом.
+        Order after = repository.findById(orderId).orElseThrow();
+        String changes = java.util.stream.Stream.of(
+                        describeLeg("забор", order.actualPickupDate(), order.actualPickupTimeSlot(),
+                                after.actualPickupDate(), after.actualPickupTimeSlot()),
+                        describeLeg("доставка", order.actualDeliveryDate(), order.actualDeliveryTimeSlot(),
+                                after.actualDeliveryDate(), after.actualDeliveryTimeSlot()))
+                .filter(java.util.Objects::nonNull)
+                .collect(java.util.stream.Collectors.joining("; "));
+        if (!changes.isEmpty()) {
+            auditLogService.log("ORDER", orderId, "LOGISTICS", "Логистика, заказ " + orderNo(orderId) + ": " + changes);
+        }
+        return after;
+    }
+
+    /** «забор → 03.09.2026 14:00-18:00», «доставка снята с даты»; null — ничего не поменялось. */
+    private static String describeLeg(String leg, java.time.LocalDate oldDate, String oldSlot,
+                                      java.time.LocalDate newDate, String newSlot) {
+        if (java.util.Objects.equals(oldDate, newDate) && java.util.Objects.equals(blankToNull(oldSlot), blankToNull(newSlot))) {
+            return null;
+        }
+        if (newDate == null) return leg + (leg.equals("доставка") ? " снята" : " снят") + " с даты";
+        return leg + " → " + newDate.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"))
+                + (blankToNull(newSlot) != null ? " " + newSlot : "");
+    }
+
+    private static String blankToNull(String s) { return s == null || s.isBlank() ? null : s; }
+
+    /** Номер заказа так, как его видит оператор: #00086. */
+    static String orderNo(Long orderId) { return "#" + String.format("%05d", orderId); }
+
+    /** «скидка «Пенсионер» −10%» / «надбавка «Срочность» +10%». */
+    private static String modifierLabel(String name, BigDecimal percent) {
+        String pct = percent.abs().stripTrailingZeros().toPlainString();
+        return percent.signum() < 0 ? "скидка «" + name + "» −" + pct + "%" : "надбавка «" + name + "» +" + pct + "%";
+    }
+
+    private String skuNameOr(Long skuId, String fallback) {
+        try { return skuService.findById(skuId).name(); } catch (Exception e) { return fallback; }
     }
 
     /** Дублирование заказа — копирует все позиции, услуги, модификаторы. Новый заказ в статусе LEAD, цены из прайс-листа */
@@ -870,6 +916,8 @@ public class OrderService {
                 .orElseThrow(() -> new EntityNotFoundException("OrderItem not found: " + itemId));
         OrderItem newItem = duplicateItemInternal(orderId, original);
         recalculateTotalAmount(orderId);
+        auditLogService.log("ORDER", orderId, "ITEM",
+                "Заказ " + orderNo(orderId) + ": продублирована позиция #" + itemId + " → #" + newItem.id());
         return newItem;
     }
 
@@ -985,6 +1033,8 @@ public class OrderService {
                 .orElseThrow(() -> new EntityNotFoundException("Modifier not found: " + modifierId));
         orderModifierRepository.add(orderId, modifierId, pm.name(), pm.percent());
         recalculateTotalAmount(orderId);
+        auditLogService.log("ORDER", orderId, "MODIFIER",
+                "Заказ " + orderNo(orderId) + ": добавлена " + modifierLabel(pm.name(), pm.percent()));
         return findById(orderId);
     }
 
@@ -992,8 +1042,14 @@ public class OrderService {
     @Transactional
     public Order removeModifier(Long orderId, Long modifierId) {
         findById(orderId);
+        OrderModifier removed = orderModifierRepository.findByOrderId(orderId).stream()
+                .filter(m -> java.util.Objects.equals(m.modifierId(), modifierId)).findFirst().orElse(null);
         orderModifierRepository.removeByOrderIdAndModifierId(orderId, modifierId);
         recalculateTotalAmount(orderId);
+        if (removed != null) {
+            auditLogService.log("ORDER", orderId, "MODIFIER",
+                    "Заказ " + orderNo(orderId) + ": убрана " + modifierLabel(removed.modifierName(), removed.percent()));
+        }
         return findById(orderId);
     }
 
@@ -1009,5 +1065,8 @@ public class OrderService {
         for (OrderModifier om : orderMods) {
             clientModifierRepository.add(order.clientId(), om.modifierId());
         }
+        auditLogService.log("CLIENT", order.clientId(), "UPDATE", "Скидки и надбавки заказа " + orderNo(orderId)
+                + " перенесены в карточку клиента: " + (orderMods.isEmpty() ? "нет"
+                : orderMods.stream().map(OrderModifier::modifierName).collect(java.util.stream.Collectors.joining(", "))));
     }
 }

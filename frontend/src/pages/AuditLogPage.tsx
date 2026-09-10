@@ -1,41 +1,82 @@
 import { useEffect, useState } from 'react'
 import client from '../api/client'
+import StyledSelect from '../components/StyledSelect'
 import type { AuditLogEntry } from '../types'
 
+/**
+ * Лог действий: кто, что и когда сделал.
+ *
+ * Типы объектов и действий — всё, что пишет бэкенд (AuditLogService.log / logAs).
+ * Раньше список был захардкожен на момент первой версии: закупки, логистика и
+ * справочники показывались кодами вида SUPPLY_REQUEST, а в фильтрах их не было.
+ */
 const ENTITY_LABELS: Record<string, string> = {
   ORDER: 'Заказ',
-  CLIENT: 'Клиент',
-  EMPLOYEE: 'Сотрудник',
-  ITEM_TYPE: 'Тип позиции',
-  SERVICE_DEFINITION: 'Шаблон услуги',
-  ORDER_SERVICE: 'Услуга',
+  ORDER_SERVICE: 'Услуга в заказе',
   PAYMENT: 'Оплата',
+  CLIENT: 'Клиент',
+  SUPPLY_REQUEST: 'Закупка',
+  EXPENSE: 'Расходы',
+  EMPLOYEE: 'Сотрудник',
+  EMPLOYEE_ROLE: 'Роль',
+  USER: 'Пользователь',
+  ITEM_TYPE: 'Тип позиции',
+  SKU: 'Каталог услуг',
+  SKU_GROUP: 'Группа услуг',
+  SKU_ATTRIBUTE: 'Атрибут услуг',
+  PRICE_MODIFIER: 'Скидка/надбавка',
+  DISTRICT: 'Район',
+  DELIVERY_SLOT: 'Слот доставки',
+  BANNER: 'Баннер',
+  SETTINGS: 'Реквизиты',
 }
 
 const ACTION_LABELS: Record<string, string> = {
   CREATE: 'Создание',
   UPDATE: 'Изменение',
   DELETE: 'Удаление',
-  DEACTIVATE: 'Деактивация',
   STATUS_CHANGE: 'Смена статуса',
-  PRICE_CHANGE: 'Изменение цены',
-  ADD_SERVICE: 'Привязка услуги',
-  REMOVE_SERVICE: 'Отвязка услуги',
+  STATUS_ROLLBACK: 'Откат статуса',
+  LOGISTICS: 'Логистика',
+  ITEM: 'Позиция',
+  MODIFIER: 'Скидка/надбавка',
+  PHOTO: 'Фото',
+  ASSIGN: 'Исполнители',
+  PRICE_CHANGE: 'Цена',
+  PROBLEM_FLAG: 'Проблема',
+  LIFECYCLE_TRIGGER: 'Авто-статус',
+  RENAME_PROPAGATE: 'Переименование',
+  ACTIVATE: 'Активация',
+  DEACTIVATE: 'Деактивация',
+  PASSWORD_CHANGE: 'Смена пароля',
+  PIN_SET: 'PIN',
 }
 
 const ACTION_COLORS: Record<string, string> = {
-  CREATE: '#28a745',
-  UPDATE: '#007bff',
-  DELETE: '#dc3545',
-  DEACTIVATE: '#6c757d',
-  STATUS_CHANGE: '#fd7e14',
+  CREATE: '#27ae60',
+  UPDATE: '#3498db',
+  DELETE: '#c0392b',
+  STATUS_CHANGE: '#e67e22',
+  STATUS_ROLLBACK: '#d35400',
+  LOGISTICS: '#16a085',
+  ITEM: '#2980b9',
+  MODIFIER: '#8e44ad',
+  PHOTO: '#1abc9c',
+  ASSIGN: '#20c997',
   PRICE_CHANGE: '#6f42c1',
-  ADD_SERVICE: '#20c997',
-  REMOVE_SERVICE: '#e83e8c',
+  PROBLEM_FLAG: '#c0392b',
+  LIFECYCLE_TRIGGER: '#34495e',
+  RENAME_PROPAGATE: '#2980b9',
+  ACTIVATE: '#27ae60',
+  DEACTIVATE: '#d35400',
+  PASSWORD_CHANGE: '#8e44ad',
+  PIN_SET: '#8e44ad',
 }
 
-const ALL_ENTITY_TYPES = ['ORDER', 'CLIENT', 'EMPLOYEE', 'ITEM_TYPE', 'SERVICE_DEFINITION', 'ORDER_SERVICE', 'PAYMENT']
-const ALL_ACTIONS = ['CREATE', 'UPDATE', 'DELETE', 'DEACTIVATE', 'STATUS_CHANGE', 'PRICE_CHANGE', 'ADD_SERVICE', 'REMOVE_SERVICE']
+const entityOptions = [{ value: '', label: 'Все объекты' },
+  ...Object.entries(ENTITY_LABELS).map(([value, label]) => ({ value, label }))]
+const actionOptions = [{ value: '', label: 'Все действия' },
+  ...Object.entries(ACTION_LABELS).map(([value, label]) => ({ value, label }))]
 
 export default function AuditLogPage() {
   const [entries, setEntries] = useState<AuditLogEntry[]>([])
@@ -70,37 +111,32 @@ export default function AuditLogPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1>Лог изменений</h1>
-      </div>
-
-      <div className="filters">
-        <div className="form-group">
-          <label>Тип объекта</label>
-          <select value={entityTypeFilter} onChange={e => { setEntityTypeFilter(e.target.value); setPage(0) }}>
-            <option value="">Все</option>
-            {ALL_ENTITY_TYPES.map(t => (
-              <option key={t} value={t}>{ENTITY_LABELS[t] ?? t}</option>
-            ))}
-          </select>
+      <div className="page-sticky-head">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 12, minHeight: 46 }}>
+          <h1 style={{ margin: 0 }}>Лог действий</h1>
         </div>
-        <div className="form-group">
-          <label>Действие</label>
-          <select value={actionFilter} onChange={e => { setActionFilter(e.target.value); setPage(0) }}>
-            <option value="">Все</option>
-            {ALL_ACTIONS.map(a => (
-              <option key={a} value={a}>{ACTION_LABELS[a] ?? a}</option>
-            ))}
-          </select>
-        </div>
-        <div className="form-group">
-          <label>ID объекта</label>
+        <div className="page-head-extra" style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+          <StyledSelect<string>
+            value={entityTypeFilter}
+            options={entityOptions}
+            onChange={v => { setEntityTypeFilter(v); setPage(0) }}
+            width={200}
+            ariaLabel="Тип объекта"
+          />
+          <StyledSelect<string>
+            value={actionFilter}
+            options={actionOptions}
+            onChange={v => { setActionFilter(v); setPage(0) }}
+            width={180}
+            ariaLabel="Действие"
+          />
           <input
             type="number"
             value={entityIdFilter}
             onChange={e => { setEntityIdFilter(e.target.value); setPage(0) }}
-            placeholder="ID объекта"
-            style={{ minWidth: 120 }}
+            placeholder="№ объекта"
+            title="Номер заказа, клиента, заявки… — в зависимости от типа объекта"
+            style={{ width: 120, height: 'var(--control-h)' }}
           />
         </div>
       </div>
@@ -113,19 +149,22 @@ export default function AuditLogPage() {
             <thead>
               <tr>
                 <th>Время</th>
+                <th>Кто</th>
                 <th>Объект</th>
-                <th>ID</th>
+                <th>№</th>
                 <th>Действие</th>
                 <th>Описание</th>
               </tr>
             </thead>
             <tbody>
               {entries.length === 0 ? (
-                <tr><td colSpan={5} className="empty">Нет записей</td></tr>
+                <tr><td colSpan={6} className="empty">Нет записей</td></tr>
               ) : entries.map(e => (
                 <tr key={e.id}>
                   <td style={{ whiteSpace: 'nowrap' }}>{new Date(e.occurred_at).toLocaleString('ru')}</td>
-                  <td>{ENTITY_LABELS[e.entity_type] ?? e.entity_type}</td>
+                  {/* Подпись появилась в V41 — у старых записей её нет. */}
+                  <td style={{ whiteSpace: 'nowrap' }}>{e.actor ?? '—'}</td>
+                  <td style={{ whiteSpace: 'nowrap' }}>{ENTITY_LABELS[e.entity_type] ?? e.entity_type}</td>
                   <td>{e.entity_id ?? '—'}</td>
                   <td>
                     <span style={{
@@ -135,7 +174,8 @@ export default function AuditLogPage() {
                       fontSize: 'var(--font-sm)',
                       fontWeight: 600,
                       color: '#fff',
-                      backgroundColor: ACTION_COLORS[e.action] ?? '#6c757d',
+                      whiteSpace: 'nowrap',
+                      backgroundColor: ACTION_COLORS[e.action] ?? '#34495e',
                     }}>
                       {ACTION_LABELS[e.action] ?? e.action}
                     </span>

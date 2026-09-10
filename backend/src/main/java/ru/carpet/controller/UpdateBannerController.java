@@ -29,9 +29,11 @@ public class UpdateBannerController {
         "sort_order, is_active ";
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
-    public UpdateBannerController(NamedParameterJdbcTemplate jdbc) {
+    public UpdateBannerController(NamedParameterJdbcTemplate jdbc, ru.carpet.service.AuditLogService auditLogService) {
         this.jdbc = jdbc;
+        this.auditLogService = auditLogService;
     }
 
     /**
@@ -65,7 +67,9 @@ public class UpdateBannerController {
             "INSERT INTO update_banners (title, body, starts_on, ends_on, sort_order, is_active) " +
             "VALUES (:title, :body, NULLIF(:starts,'')::date, NULLIF(:ends,'')::date, :so, :act)",
             p, kh, new String[]{"id"});
-        return byId(kh.getKey().longValue());
+        Map<String, Object> banner = byId(kh.getKey().longValue());
+        auditLogService.log("BANNER", kh.getKey().longValue(), "CREATE", "Баннер «" + banner.get("title") + "»");
+        return banner;
     }
 
     @PutMapping("/{id}")
@@ -75,12 +79,15 @@ public class UpdateBannerController {
             "UPDATE update_banners SET title=:title, body=:body, " +
             "starts_on=NULLIF(:starts,'')::date, ends_on=NULLIF(:ends,'')::date, " +
             "sort_order=:so, is_active=:act, updated_at=NOW() WHERE id=:id", p);
-        return byId(id);
+        Map<String, Object> banner = byId(id);
+        auditLogService.log("BANNER", id, "UPDATE", "Изменён баннер «" + banner.get("title") + "»");
+        return banner;
     }
 
     @DeleteMapping("/{id}")
     public void delete(@PathVariable Long id) {
         jdbc.update("DELETE FROM update_banners WHERE id = :id", Map.of("id", id));
+        auditLogService.log("BANNER", id, "DELETE", "Удалён баннер #" + id);
     }
 
     private MapSqlParameterSource params(Map<String, Object> body) {

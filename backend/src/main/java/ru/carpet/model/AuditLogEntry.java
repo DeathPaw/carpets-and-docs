@@ -8,5 +8,7 @@ public record AuditLogEntry(
         Long entityId,
         String action,
         String description,
-        LocalDateTime occurredAt
+        LocalDateTime occurredAt,
+        /** V41: кто сделал — логин оператора или «Имя (кабинет)» работника. У старых записей пусто. */
+        String actor
 ) {}

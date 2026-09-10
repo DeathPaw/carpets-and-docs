@@ -174,19 +174,31 @@ export default function CalculatorPage() {
     extra_sku_ids: r.extraSkuIds,
   })), [rows])
 
+  /** Что сейчас на экране. Ответ расчёта верен, только если посчитан для этого ключа. */
+  const quoteKey = useMemo(() => JSON.stringify([input, modifierIds]), [input, modifierIds])
+  const [quotedKey, setQuotedKey] = useState('')
+
   // Пересчёт с задержкой: пока оператор набирает «2,35», бэк не дёргаем на каждую цифру.
   const quoteSeq = useRef(0)
   useEffect(() => {
     const seq = ++quoteSeq.current
+    const key = quoteKey
     const timer = window.setTimeout(() => {
       quoteOrder(input, modifierIds)
-        .then(q => { if (seq === quoteSeq.current) { setQuote(q); setQuoteError('') } })
+        .then(q => { if (seq === quoteSeq.current) { setQuote(q); setQuotedKey(key); setQuoteError('') } })
         .catch((e: unknown) => {
           if (seq === quoteSeq.current) setQuoteError((e as any)?.response?.data?.message || 'Не удалось посчитать')
         })
     }, 250)
     return () => window.clearTimeout(timer)
-  }, [input, modifierIds])
+  }, [input, modifierIds, quoteKey])
+
+  /**
+   * Ответ относится к строкам на экране. Пока новый не пришёл (~0,3 с после ввода),
+   * старые суммы показываем приглушённо, а услуги по нему не выводим: тип изделия
+   * мог смениться, и сразу после выбора типа мелькало «в каталоге нет услуги».
+   */
+  const fresh = quote != null && quotedKey === quoteKey
 
   const itemTypes = useMemo(() => types.filter(t => !SERVICE_ITEM_TYPES.has(t.name.trim())), [types])
   const serviceTypeIds = useMemo(
@@ -253,6 +265,9 @@ export default function CalculatorPage() {
       const fresh = await quoteOrder(input, modifierIds)
       const problems = await applyQuoteToOrder(order.id, rows, fresh, modifierIds)
       const saved = await getOrder(order.id).catch(() => null)
+      // Черновик стираем сразу в хранилище: страница уходит в заказ раньше, чем
+      // эффект успел бы записать пустой, и при возврате всплывал старый расчёт.
+      try { sessionStorage.removeItem(STORAGE_KEY) } catch { /* приватный режим */ }
       setDraft(emptyDraft())
       setQuote(null)
       if (problems.length > 0) {
@@ -302,11 +317,14 @@ export default function CalculatorPage() {
 
             {rows.map((r, i) => {
               const result = quote?.items[i]
-              const { main, extras } = splitServices(r, result?.services ?? [])
-              const pricing = pricingOf(r, main)
+              const { main, extras } = splitServices(r, fresh ? result?.services ?? [] : [])
               const candidates = mainCandidates(r.itemTypeId)
+              const pricing = pricingOf(r, main)
+              // Основная услуга: из расчёта, выбранная вручную или первая подходящая по типу —
+              // чтобы до ответа бэка её не предлагали ещё и как дополнительную.
+              const mainId = main?.sku_id ?? r.mainSkuId ?? candidates[0]?.id
               const extraChoices = extraCandidates(r.itemTypeId)
-                .filter(s => s.id !== main?.sku_id && !r.extraSkuIds.includes(s.id))
+                .filter(s => s.id !== mainId && !r.extraSkuIds.includes(s.id))
               const length = num(r.length), width = num(r.width)
               const autoArea = length && width ? Math.round(length * width * 100) / 100 : null
               return (
@@ -353,7 +371,7 @@ export default function CalculatorPage() {
                   <div className="calc-services">
                     {candidates.length > 1 ? (
                       <StyledSelect<number>
-                        value={r.mainSkuId ?? main?.sku_id ?? null}
+                        value={mainId ?? null}
                         options={candidates.map(s => ({ value: s.id, label: s.name }))}
                         onChange={v => update(r.key, { mainSkuId: v })}
                         width="100%"
@@ -366,6 +384,8 @@ export default function CalculatorPage() {
                           {' · '}{money(main.unit_price)}{UNIT[main.pricing_type] ? `/${UNIT[main.pricing_type]}` : ''}
                         </span>
                       </div>
+                    ) : r.itemTypeId != null && !fresh ? (
+                      <span className="calc-service-name calc-hint">{candidates[0]?.name ?? 'считаю…'}</span>
                     ) : (
                       <span className="calc-service-name calc-hint">
                         {r.itemTypeId != null ? 'в каталоге нет услуги для этого типа' : '—'}
@@ -393,7 +413,7 @@ export default function CalculatorPage() {
                       />
                     )}
                   </div>
-                  <span className="calc-price">
+                  <span className={`calc-price${fresh ? '' : ' is-stale'}`}>
                     {result && r.itemTypeId != null ? money(result.price) : ''}
                   </span>
                   <button
@@ -441,7 +461,7 @@ export default function CalculatorPage() {
           {!quote || filledCount === 0 ? (
             <div className="calc-hint">Выберите тип изделия и укажите размеры — стоимость посчитается сразу.</div>
           ) : (
-            <>
+            <div className={fresh ? undefined : 'is-stale'}>
               <div className="calc-line"><span>Ковры и услуги</span><b>{money(quote.goods_amount)}</b></div>
               {quote.logistics.filter(l => l.unit_price > 0).map(l => (
                 <div className="calc-line" key={l.sku_id}>
@@ -467,9 +487,9 @@ export default function CalculatorPage() {
                   ? <div className="calc-note is-ok">Забор и доставка бесплатны — заказ от {money(freeThreshold)}</div>
                   : <div className="calc-note">До бесплатных забора и доставки — ещё {money(freeThreshold - quote.goods_amount)}</div>
               )}
-            </>
+            </div>
           )}
-          {quote && quote.warnings.length > 0 && (
+          {fresh && quote && quote.warnings.length > 0 && (
             <ul className="calc-warnings">
               {quote.warnings.map(w => <li key={w}>{w}</li>)}
             </ul>

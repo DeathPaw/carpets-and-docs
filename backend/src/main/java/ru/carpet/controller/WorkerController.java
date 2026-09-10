@@ -36,13 +36,16 @@ public class WorkerController {
     private final NamedParameterJdbcTemplate jdbc;
     private final OrderItemServiceInstanceService serviceInstanceService;
     private final OrderItemService orderItemService;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
     public WorkerController(NamedParameterJdbcTemplate jdbc,
                             OrderItemServiceInstanceService serviceInstanceService,
-                            OrderItemService orderItemService) {
+                            OrderItemService orderItemService,
+                            ru.carpet.service.AuditLogService auditLogService) {
         this.jdbc = jdbc;
         this.serviceInstanceService = serviceInstanceService;
         this.orderItemService = orderItemService;
+        this.auditLogService = auditLogService;
     }
 
     // ---------- 1. Список сотрудников для экрана выбора плитки ----------
@@ -161,13 +164,17 @@ public class WorkerController {
         // не пересчитывались статус позиции, статус заказа и lifecycle-триггеры
         // (например «Приём» → заказ IN_PROGRESS). Теперь идём через тот же сервис,
         // что и веб-интерфейс — поведение мобилки и десктопа совпадает.
+        String actor = workerLabel(employeeId);
         try {
-            serviceInstanceService.updateStatus(serviceId, ServiceStatus.valueOf(newStatus));
+            ru.carpet.audit.AuditUser.as(actor,
+                    () -> serviceInstanceService.updateStatus(serviceId, ServiceStatus.valueOf(newStatus)));
         } catch (BusinessRuleException e) {
             // Например «не заполнена площадь» для услуги с расчётом по площади —
             // отдаём текст как есть, мобилка показывает его в alert.
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
+        auditLogService.logAs(actor, "ORDER_SERVICE", serviceId, "STATUS_CHANGE",
+                "Статус услуги #" + serviceId + " → " + newStatus + " (из кабинета работника)");
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -186,12 +193,13 @@ public class WorkerController {
         // цены услуг (BY_AREA/BY_WEIGHT) и сумму заказа. Раньше стирщик правил размеры
         // с телефона, а цена оставалась от старых габаритов.
         try {
-            orderItemService.updateDimensions(itemId,
+            // Запись в лог делает сам сервис — подписываем её работником.
+            ru.carpet.audit.AuditUser.as(workerLabel(employeeId), () -> orderItemService.updateDimensions(itemId,
                 asDecimal(body.get("length")),
                 asDecimal(body.get("width")),
                 asDecimal(body.get("weight")),
                 asDecimal(body.get("area")),
-                null);
+                null));
         } catch (BusinessRuleException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -216,6 +224,9 @@ public class WorkerController {
             """, Map.of("d", body.getOrDefault("description", ""),
                         "def", body.getOrDefault("defects", ""),
                         "id", itemId));
+        Long orderId = orderIdOfItem(itemId);
+        auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "ITEM",
+                "Заказ " + orderNo(orderId) + ", позиция #" + itemId + ": описание и дефекты изменены в кабинете");
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -243,6 +254,9 @@ public class WorkerController {
             INSERT INTO order_item_photos(order_item_id, filename, content_type, data)
             VALUES (:oi, :fn, :ct, :d)
             """, params);
+        Long orderId = orderIdOfItem(itemId);
+        auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "PHOTO",
+                "Заказ " + orderNo(orderId) + ", позиция #" + itemId + ": добавлено фото из кабинета");
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -285,6 +299,13 @@ public class WorkerController {
         """, Map.of("s", state, "id", itemId), Long.class);
 
         recomputeOrderStatusAfterDelivery(orderId);
+        String what = switch (state) {
+            case "DELIVERED" -> "отдана клиенту";
+            case "LOST" -> "не довезена";
+            default -> "отметка доставки снята";
+        };
+        auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "LOGISTICS",
+                "Доставка, заказ " + orderNo(orderId) + ": позиция #" + itemId + " " + what);
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -317,14 +338,21 @@ public class WorkerController {
     // ---------- 9. Маршрут водителя на день (Спринт D.5) ----------
 
     /**
-     * Все точки забора и доставки на сегодня, где работник назначен исполнителем
-     * хотя бы одной услуги в заказе (для логиста это обычно «Доставка»).
+     * Точки забора и доставки на день для работника.
      *
-     * <p>Возвращает строки в формате: тип точки (pickup/delivery), адрес,
-     * время, контакт клиента, краткое описание позиций и итоговая сумма.
-     * Сортировка — сначала по дате, потом по time slot. Завершённые
-     * (actual_*_date IS NOT NULL) скрываются — водитель видит только то,
-     * что ещё нужно сделать.
+     * <p>Чьи заказы: водитель назначен на доске Логистики ({@code assigned_driver_id})
+     * или исполнитель хотя бы одной услуги заказа. Раньше учитывались только
+     * исполнители услуг, и водитель, назначенный чипом на доске, свой маршрут не видел.
+     *
+     * <p>Дата точки — фактическая, иначе плановая. Раньше маршрут шёл только по
+     * плановой дате и прятал всё, где уже стоит фактическая. Но фактическая дата
+     * ставится ещё при планировании — перетаскиванием на доске и из плановой при
+     * сохранении карточки, — и запланированные заборы из кабинета пропадали.
+     *
+     * <p>Выполненная точка — та, у которой служебная услуга «Приём» / «Доставка»
+     * уже «Готово» (её закрывает сам водитель кнопкой «Забрал» / «Доставил») или
+     * заменена самовывозом. Для старых заказов без служебных позиций — как раньше:
+     * скрываем, если стоит фактическая дата.
      *
      * <p>{@code dateFrom}/{@code dateTo} — необязательные параметры
      * (формат ISO YYYY-MM-DD). По умолчанию — только сегодня.
@@ -341,45 +369,73 @@ public class WorkerController {
         Map<String, Object> p = Map.of("eid", employeeId, "from", from, "to", to);
         return jdbc.queryForList("""
             WITH my_orders AS (
-                SELECT DISTINCT o.id
+                SELECT o.id
                 FROM orders o
-                JOIN order_items oi ON oi.order_id = o.id
-                JOIN order_item_services ois ON ois.order_item_id = oi.id
-                JOIN service_assignees sa ON sa.order_item_service_id = ois.id
-                WHERE sa.employee_id = :eid
-                  AND o.status NOT IN ('CANCELLED','COMPLETED')
+                WHERE o.status NOT IN ('CANCELLED','COMPLETED')
+                  AND (o.assigned_driver_id = :eid
+                       OR EXISTS (SELECT 1
+                                    FROM order_items oi
+                                    JOIN order_item_services ois ON ois.order_item_id = oi.id
+                                    JOIN service_assignees sa ON sa.order_item_service_id = ois.id
+                                   WHERE oi.order_id = o.id AND sa.employee_id = :eid))
+            ),
+            points AS (
+                SELECT 'pickup' AS point_type,
+                       o.id AS order_id,
+                       o.client_name,
+                       o.pickup_address AS address,
+                       o.pickup_district AS district,
+                       COALESCE(o.actual_pickup_date, o.pickup_date) AS plan_date,
+                       CASE WHEN o.actual_pickup_date IS NOT NULL
+                            THEN o.actual_pickup_time_slot ELSE o.pickup_time_slot END AS time_slot,
+                       o.total_amount,
+                       o.paid,
+                       o.payment_type,
+                       (SELECT phone FROM clients WHERE id = o.client_id) AS client_phone,
+                       o.actual_pickup_date AS fact_date,
+                       'Приём' AS leg_type
+                FROM orders o
+                WHERE o.id IN (SELECT id FROM my_orders)
+                UNION ALL
+                SELECT 'delivery',
+                       o.id,
+                       o.client_name,
+                       o.delivery_address,
+                       o.delivery_district,
+                       COALESCE(o.actual_delivery_date, o.delivery_date),
+                       CASE WHEN o.actual_delivery_date IS NOT NULL
+                            THEN o.actual_delivery_time_slot ELSE o.delivery_time_slot END,
+                       o.total_amount,
+                       o.paid,
+                       o.payment_type,
+                       (SELECT phone FROM clients WHERE id = o.client_id),
+                       o.actual_delivery_date,
+                       'Доставка'
+                FROM orders o
+                WHERE o.id IN (SELECT id FROM my_orders)
             )
-            SELECT 'pickup' AS point_type,
-                   o.id AS order_id,
-                   o.client_name,
-                   o.pickup_address AS address,
-                   o.pickup_district AS district,
-                   o.pickup_date AS plan_date,
-                   o.pickup_time_slot AS time_slot,
-                   o.total_amount,
-                   o.paid,
-                   o.payment_type,
-                   (SELECT phone FROM clients WHERE id = o.client_id) AS client_phone
-            FROM orders o
-            WHERE o.id IN (SELECT id FROM my_orders)
-              AND o.pickup_date BETWEEN :from AND :to
-              AND o.actual_pickup_date IS NULL
-            UNION ALL
-            SELECT 'delivery' AS point_type,
-                   o.id AS order_id,
-                   o.client_name,
-                   o.delivery_address AS address,
-                   o.delivery_district AS district,
-                   o.delivery_date AS plan_date,
-                   o.delivery_time_slot AS time_slot,
-                   o.total_amount,
-                   o.paid,
-                   o.payment_type,
-                   (SELECT phone FROM clients WHERE id = o.client_id) AS client_phone
-            FROM orders o
-            WHERE o.id IN (SELECT id FROM my_orders)
-              AND o.delivery_date BETWEEN :from AND :to
-              AND o.actual_delivery_date IS NULL
+            SELECT point_type, order_id, client_name, address, district, plan_date, time_slot,
+                   total_amount, paid, payment_type, client_phone
+            FROM points pt
+            WHERE pt.plan_date BETWEEN :from AND :to
+              AND (
+                  -- Служебная услуга «Приём» / «Доставка» ещё не выполнена и не заменена самовывозом.
+                  EXISTS (SELECT 1
+                            FROM order_items oi
+                            JOIN item_types it ON it.id = oi.item_type_id
+                            JOIN order_item_services ois ON ois.order_item_id = oi.id
+                            JOIN skus s ON s.id = ois.sku_id
+                           WHERE oi.order_id = pt.order_id AND it.name = pt.leg_type
+                             AND oi.status <> 'CANCELLED'
+                             AND s.is_auto_add = TRUE
+                             AND ois.status NOT IN ('DONE','CANCELLED'))
+                  -- Старые заказы без служебной позиции — по-прежнему по отсутствию факта.
+                  OR (NOT EXISTS (SELECT 1
+                                    FROM order_items oi
+                                    JOIN item_types it ON it.id = oi.item_type_id
+                                   WHERE oi.order_id = pt.order_id AND it.name = pt.leg_type)
+                      AND pt.fact_date IS NULL)
+              )
             ORDER BY plan_date, time_slot NULLS LAST, order_id
             """, p);
     }
@@ -524,6 +580,8 @@ public class WorkerController {
         // надо дёрнуть руками. Без этого услуга уходила «В работе», а позиция
         // оставалась «Создана» — оператор видел рассинхрон в карточке заказа.
         recalcItemStatusByService(serviceId);
+        auditLogService.logAs(workerLabel(employeeId), "ORDER_SERVICE", serviceId, "ASSIGN",
+                "Услуга #" + serviceId + " взята в работу" + (ids.size() > 1 ? " вместе с коллегами: " + (ids.size() - 1) : ""));
         return ResponseEntity.ok(Map.of("ok", true, "assignees", ids.size()));
     }
 
@@ -560,6 +618,8 @@ public class WorkerController {
         if (updated == 0) {
             return ResponseEntity.status(409).body(Map.of("error", "PIN уже задан, обратитесь к супервизору"));
         }
+        // Сам PIN в лог не пишем — только факт.
+        auditLogService.logAs(workerLabel(employeeId), "EMPLOYEE", employeeId, "PIN_SET", "Задан PIN при первом входе в кабинет");
         return ResponseEntity.ok(Map.of("ok", true));
     }
 
@@ -581,6 +641,29 @@ public class WorkerController {
             WHERE ois.order_item_id = :iid AND sa.employee_id = :eid
             """, Map.of("iid", itemId, "eid", employeeId), Long.class);
         return cnt != null && cnt > 0;
+    }
+
+    /** Подпись работника для лога действий: «Холиев Асрор (кабинет)». */
+    private String workerLabel(Long employeeId) {
+        try {
+            String name = jdbc.queryForObject("SELECT name FROM employees WHERE id = :id",
+                    Map.of("id", employeeId), String.class);
+            return (name != null ? name : "сотрудник #" + employeeId) + " (кабинет)";
+        } catch (Exception e) {
+            return "сотрудник #" + employeeId + " (кабинет)";
+        }
+    }
+
+    private Long orderIdOfItem(Long itemId) {
+        try {
+            return jdbc.queryForObject("SELECT order_id FROM order_items WHERE id = :id", Map.of("id", itemId), Long.class);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private static String orderNo(Long orderId) {
+        return orderId == null ? "—" : "#" + String.format("%05d", orderId);
     }
 
     private static BigDecimal asDecimal(Object v) {
@@ -636,6 +719,8 @@ public class WorkerController {
         // оператор назначит слот перетаскиванием.
         jdbc.update("UPDATE orders SET actual_pickup_date = CURRENT_DATE WHERE id = :oid AND actual_pickup_date IS NULL",
                 Map.of("oid", orderId));
+        auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "LOGISTICS",
+                "Логистика, заказ " + orderNo(orderId) + ": водитель отметил забор");
 
         return ResponseEntity.ok(Map.of("ok", true, "message", "Забор зафиксирован"));
     }
@@ -692,6 +777,9 @@ public class WorkerController {
         // Заказ → DELIVERED
         jdbc.update("UPDATE orders SET status = 'DELIVERED', version = version + 1, updated_at = NOW() WHERE id = :oid",
                 Map.of("oid", orderId));
+        auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "LOGISTICS",
+                "Логистика, заказ " + orderNo(orderId) + ": водитель отметил доставку — статус «Доставлен»"
+                + (allReady ? "" : " (не все позиции были готовы)"));
 
         return ResponseEntity.ok(Map.of("ok", true, "all_ready", allReady,
                 "message", allReady ? "Доставлено" : "Доставлено (предупреждение: не все позиции были готовы)"));

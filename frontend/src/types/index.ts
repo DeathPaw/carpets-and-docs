@@ -287,6 +287,8 @@ export interface AuditLogEntry {
   action: string
   description: string
   occurred_at: string
+  /** V41: кто сделал — логин оператора или «Имя (кабинет)» работника. У старых записей пусто. */
+  actor?: string | null
 }
 
 export interface DefectDefinition {

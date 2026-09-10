@@ -25,9 +25,11 @@ import java.util.Map;
 public class SkuController {
 
     private final SkuService service;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
-    public SkuController(SkuService service) {
+    public SkuController(SkuService service, ru.carpet.service.AuditLogService auditLogService) {
         this.service = service;
+        this.auditLogService = auditLogService;
     }
 
     @GetMapping
@@ -38,22 +40,44 @@ public class SkuController {
 
     @PostMapping
     public Sku create(@RequestBody SkuRequest body) {
-        return service.create(body.groupId, body.name, body.pricingType, body.price, body.costPrice,
+        Sku sku = service.create(body.groupId, body.name, body.pricingType, body.price, body.costPrice,
                 body.isAutoAdd, body.freeThreshold,
                 body.autoCompleteOnStatus, body.triggersOrderStatus, body.excludeFromStatusCalc,
                 body.attributes);
+        auditLogService.log("SKU", sku.id(), "CREATE", "Услуга каталога «" + sku.name() + "»" + priceText(sku));
+        return sku;
     }
 
     @PutMapping("/{id}")
     public Sku update(@PathVariable Long id, @RequestBody SkuRequest body) {
-        return service.update(id, body.groupId, body.name, body.pricingType, body.price, body.costPrice,
+        Sku sku = service.update(id, body.groupId, body.name, body.pricingType, body.price, body.costPrice,
                 body.isAutoAdd, body.freeThreshold,
                 body.autoCompleteOnStatus, body.triggersOrderStatus, body.excludeFromStatusCalc,
                 body.attributes);
+        auditLogService.log("SKU", sku.id(), "UPDATE", "Изменена услуга каталога «" + sku.name() + "»" + priceText(sku));
+        return sku;
     }
 
     @DeleteMapping("/{id}")
-    public void delete(@PathVariable Long id) { service.delete(id); }
+    public void delete(@PathVariable Long id) {
+        String name;
+        try { name = service.findById(id).name(); } catch (Exception e) { name = "#" + id; }
+        service.delete(id);
+        auditLogService.log("SKU", id, "DELETE", "Удалена услуга каталога «" + name + "»");
+    }
+
+    /** « — 480 ₽/м²» — для лога действий. */
+    private static String priceText(Sku sku) {
+        if (sku.price() == null) return "";
+        String unit = switch (String.valueOf(sku.pricingType())) {
+            case "BY_AREA" -> "/м²";
+            case "BY_WEIGHT" -> "/кг";
+            case "BY_PERIMETER", "BY_LENGTH", "BY_WIDTH" -> "/м";
+            case "BY_RUNNING_METERS" -> "/п. м";
+            default -> "";
+        };
+        return " — " + sku.price().stripTrailingZeros().toPlainString() + " ₽" + unit;
+    }
 
     @GetMapping("/{id}/history")
     public List<Map<String, Object>> history(@PathVariable Long id) { return service.versions(id); }

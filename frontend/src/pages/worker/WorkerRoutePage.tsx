@@ -150,14 +150,19 @@ export default function WorkerRoutePage() {
                                         {p.client_name}
                                     </div>
                                 </div>
-                                <div style={{ textAlign: 'right' }}>
-                                    <div style={{ fontSize: 16, fontWeight: 600 }}>
-                                        {Number(p.total_amount).toFixed(0)} ₽
+                                {/* Правка №2 (09.09): у забора сумма предварительная и сбивает
+                                    водителя в разговоре с клиентом — показываем её только на доставке,
+                                    где деньги действительно получают. */}
+                                {isDelivery && (
+                                    <div style={{ textAlign: 'right' }}>
+                                        <div style={{ fontSize: 16, fontWeight: 600 }}>
+                                            {Number(p.total_amount).toFixed(0)} ₽
+                                        </div>
+                                        <div style={{ fontSize: 11, color: p.paid ? '#27ae60' : '#c0392b' }}>
+                                            {p.paid ? '✓ оплачен' : 'к получению'}
+                                        </div>
                                     </div>
-                                    <div style={{ fontSize: 11, color: p.paid ? '#27ae60' : '#c0392b' }}>
-                                        {p.paid ? '✓ оплачен' : 'к получению'}
-                                    </div>
-                                </div>
+                                )}
                             </div>
                             <div style={{ fontSize: 13, color: '#34495e', marginTop: 6 }}>
                                 {p.address || '— адрес не указан —'}

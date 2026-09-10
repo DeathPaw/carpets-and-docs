@@ -19,9 +19,11 @@ import java.util.Map;
 public class ExpenseController {
 
     private final NamedParameterJdbcTemplate jdbc;
+    private final ru.carpet.service.AuditLogService auditLogService;
 
-    public ExpenseController(NamedParameterJdbcTemplate jdbc) {
+    public ExpenseController(NamedParameterJdbcTemplate jdbc, ru.carpet.service.AuditLogService auditLogService) {
         this.jdbc = jdbc;
+        this.auditLogService = auditLogService;
     }
 
     // ---- Категории ----
@@ -45,6 +47,7 @@ public class ExpenseController {
                 .addValue("d", body.get("default_amount"))
                 .addValue("s", body.getOrDefault("sort_order", 100)),
             kh, new String[]{"id"});
+        auditLogService.log("EXPENSE", kh.getKey().longValue(), "CREATE", "Статья расходов «" + body.get("name") + "»");
         return jdbc.queryForMap("SELECT * FROM expense_categories WHERE id = :id",
                 Map.of("id", kh.getKey().longValue()));
     }
@@ -52,6 +55,9 @@ public class ExpenseController {
     @DeleteMapping("/categories/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void deleteCategory(@PathVariable Long id) {
+        String name = jdbc.queryForList("SELECT name FROM expense_categories WHERE id = :id", Map.of("id", id), String.class)
+                .stream().findFirst().orElse("#" + id);
+        auditLogService.log("EXPENSE", id, "DELETE", "Удалена статья расходов «" + name + "» вместе с её суммами");
         jdbc.update("DELETE FROM monthly_expenses WHERE category_id = :id", Map.of("id", id));
         jdbc.update("DELETE FROM expense_categories WHERE id = :id", Map.of("id", id));
     }
@@ -70,6 +76,7 @@ public class ExpenseController {
                 .addValue("f", body.getOrDefault("is_fixed", false))
                 .addValue("d", body.get("default_amount"))
                 .addValue("id", id));
+        auditLogService.log("EXPENSE", id, "UPDATE", "Изменена статья расходов «" + body.get("name") + "»");
         return jdbc.queryForMap("SELECT * FROM expense_categories WHERE id = :id", Map.of("id", id));
     }
 
@@ -103,11 +110,14 @@ public class ExpenseController {
             ON CONFLICT (category_id, year_month) DO UPDATE SET amount = :a, comment = :cm
         """, Map.of("c", categoryId, "ym", yearMonth, "a", amount, "cm", comment != null ? comment : ""));
 
-        return jdbc.queryForMap(
+        Map<String, Object> saved = jdbc.queryForMap(
                 "SELECT me.*, ec.name AS category_name FROM monthly_expenses me " +
                 "JOIN expense_categories ec ON ec.id = me.category_id " +
                 "WHERE me.category_id = :c AND me.year_month = :ym",
                 Map.of("c", categoryId, "ym", yearMonth));
+        auditLogService.log("EXPENSE", categoryId, "UPDATE", "Расход «" + saved.get("category_name") + "» за " + yearMonth
+                + ": " + amount.stripTrailingZeros().toPlainString() + " ₽" + (comment != null && !comment.isBlank() ? " (" + comment + ")" : ""));
+        return saved;
     }
 
     // ---- P&L ----

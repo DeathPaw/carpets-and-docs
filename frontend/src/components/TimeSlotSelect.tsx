@@ -27,7 +27,7 @@ export default function TimeSlotSelect({
   if (!date) {
     return (
       <select value={value} onChange={e => onChange(e.target.value)} disabled>
-        <option value="">— сначала выберите дату —</option>
+        <option value="">— выберите дату —</option>
       </select>
     )
   }
