@@ -9,6 +9,7 @@ import ClientFormFields, {
   type ClientFormState, emptyClientForm, validateClientForm,
 } from '../ClientFormFields'
 import type { Order, CreateOrderRequest, Client, PriceModifier } from '../../types'
+import { ORDER_REASON_LABELS } from '../../constants/statuses'
 
 /**
  * Модалка создания заказа. Раньше жила прямо в OrdersPage.tsx и занимала ~450 строк
@@ -46,6 +47,13 @@ export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
   const [pickupCoords, setPickupCoords] = useState<{ lat: number | null; lon: number | null }>({ lat: null, lon: null })
   const [deliveryCoords, setDeliveryCoords] = useState<{ lat: number | null; lon: number | null }>({ lat: null, lon: null })
   const [legacyId, setLegacyId] = useState('')
+  /**
+   * Правка №3 (13.09): основной повод обращения. Спрашивается у клиента при
+   * оформлении и относится к заказу: сегодня залили ковёр, через полгода —
+   * плановая чистка.
+   */
+  const [orderReason, setOrderReason] = useState('')
+  const [orderReasonNote, setOrderReasonNote] = useState('')
   // V5: при импорте из старой системы (legacyId задан) можно указать дату прошлой.
   const [legacyCreatedAt, setLegacyCreatedAt] = useState('')
   const [pickupDate, setPickupDate] = useState('')
@@ -196,6 +204,14 @@ export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
             comment: newClientForm.comment.trim() || undefined,
             lat: newClientForm.lat,
             lon: newClientForm.lon,
+            // Правка №3 (13.09): источник обращения спрашивают как раз при
+            // заведении клиента — здесь он и записывается.
+            restart_status: (newClientForm.restart_status || null) as Client['restart_status'],
+            source: (newClientForm.source || null) as Client['source'],
+            source_note: newClientForm.source === 'OTHER' ? (newClientForm.source_note.trim() || null) : null,
+            // Пол пустой — бэкенд предположит его по отчеству (правка №1 от 13.09).
+            gender: (newClientForm.gender || null) as Client['gender'],
+            age: newClientForm.age ? Number(newClientForm.age) : null,
           })
         } catch {
           setError('Ошибка при создании клиента')
@@ -255,6 +271,9 @@ export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
         legacy_id: legacyId ? Number(legacyId) : null,
         // V5: дата создания «задним числом» — только при импорте (legacy_id задан).
         created_at: (legacyId && legacyCreatedAt) ? `${legacyCreatedAt}T12:00:00` : null,
+        // Правка №3 (13.09): повод обращения — свойство заказа, а не клиента.
+        order_reason: orderReason || null,
+        order_reason_note: orderReason === 'OTHER' ? (orderReasonNote.trim() || null) : null,
       }
 
       const order = await createOrder(orderData)
@@ -614,6 +633,26 @@ export default function CreateOrderModal({ onClose, onCreated, quoteSummary }: {
             placeholder="Необязательный комментарий"
           />
         </div>
+        {/* Правка №3 (13.09): зачем клиент обратился. Поле заказа, а не клиента. */}
+        <div className="form-group">
+          <label>Основной повод обращения</label>
+          <select value={orderReason} onChange={e => setOrderReason(e.target.value)}>
+            <option value="">— не указан —</option>
+            {Object.entries(ORDER_REASON_LABELS).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+        </div>
+        {orderReason === 'OTHER' && (
+          <div className="form-group">
+            <label>Уточнение повода *</label>
+            <input
+              value={orderReasonNote}
+              onChange={e => setOrderReasonNote(e.target.value)}
+              placeholder="С чем обратился клиент"
+            />
+          </div>
+        )}
         {error && <div className="error-msg">{error}</div>}
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Отмена</button>

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { getOrders, updateActualDates, setOrderDriver } from '../api/orders'
+import { getOrders, updateActualDates, setOrderDriver, setClientConfirmed } from '../api/orders'
 import { getDrivers } from '../api/references'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
 import PrintMenuButton from '../components/PrintMenuButton'
@@ -21,7 +21,7 @@ import {
 } from '../api/deliverySlots'
 import { hashColor } from '../components/Tiles'
 import { useEscapeClose } from '../hooks/useEscapeClose'
-import { formatOrderNumber } from '../utils/format'
+import { formatOrderNumber, todayIso } from '../utils/format'
 import { PAYMENT_LABELS, PRELIMINARY_PAYMENT_LABELS } from '../constants/statuses'
 import { formatPhone } from '../components/PhoneInput'
 import { useAuth } from '../auth/AuthContext'
@@ -232,6 +232,21 @@ function printRouteSheet(date: string, cards: OrderCard[], company: CompanySetti
   openPrint(html)
 }
 
+/**
+ * Флажок обзвона (правка №1 от 17.09): зелёная галочка — клиент подтвердил
+ * день выезда, оранжевая трубка — надо звонить. Узкий чип: в колонке недели
+ * место только под значок, расшифровка — в подсказке.
+ */
+function confirmChipStyle(confirmed: boolean): React.CSSProperties {
+  return {
+    flexShrink: 0,
+    width: 22, height: 18, lineHeight: '18px', textAlign: 'center', padding: 0,
+    borderRadius: 3, fontSize: 'var(--font-sm)', fontWeight: 700,
+    background: confirmed ? '#eafaf1' : '#fdf2e9',
+    color:      confirmed ? '#196f3d' : '#a04000',
+  }
+}
+
 export default function LogisticsPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
@@ -244,7 +259,7 @@ export default function LogisticsPage() {
   }
   const [searchParams] = useSearchParams()
   const { isReadonly } = useAuth()
-  const [weekStart, setWeekStart] = useState(() => getMonday(new Date().toISOString().slice(0,10)))
+  const [weekStart, setWeekStart] = useState(() => getMonday(todayIso()))
   // Мультивыборы: пустой массив = «все».
   const [typeFilters, setTypeFilters] = useState<CardType[]>([])
   // Фильтр районов — массив (Спринт D, фидбэк 11 мая: «выбрать Центральный и
@@ -286,7 +301,7 @@ export default function LogisticsPage() {
     return () => ro.disconnect()
   }, [])
   // День для маршрутного листа и массового завершения развозки.
-  const [routeDay, setRouteDay] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [routeDay, setRouteDay] = useState<string>(() => todayIso())
   /**
    * Правка №1 (21.08): режим отображения логистики.
    *   'week' — прежняя недельная доска с drag&drop (по умолчанию, не менялась);
@@ -733,7 +748,7 @@ export default function LogisticsPage() {
   // Полоса-обзор недель: формируем массив недель.
   // Текущая (от today) +1 будущая, остальные — прошлые.
   const overviewWeeks = useMemo(() => {
-    const todayStr = new Date().toISOString().slice(0, 10)
+    const todayStr = todayIso()
     const currentMonday = getMonday(todayStr)
     const result: { mondayStr: string, pickups: number, deliveries: number, sum: number }[] = []
     // 1 будущая + (horizon - 1) прошлых, считая текущую
@@ -823,7 +838,7 @@ export default function LogisticsPage() {
     } catch { /* ignore */ }
   }
 
-  const today = new Date().toISOString().slice(0,10)
+  const today = todayIso()
   const todayMonday = getMonday(today)
 
   const renderCard = (card: OrderCard) => {
@@ -930,40 +945,65 @@ export default function LogisticsPage() {
             висит {ageDays}д
           </div>
         )}
-        {/* Чип «Водитель» — клик открывает модалку выбора. В viewer-mode
-            рендерим как читаемый span (без клика). */}
-        {viewer ? (
-          <div style={{
-            marginTop: 4, padding: '1px 6px',
-            background: card.order.assigned_driver_id ? '#eafaf1' : '#f4f6f7',
-            color:      card.order.assigned_driver_id ? '#196f3d' : '#7f8c8d',
-            borderRadius: 3, fontSize: 'var(--font-sm)',
-            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-          }}>
-            👤 {card.order.assigned_driver_name || 'не назначен'}
+        {/* Водитель и обзвон — одной строкой: оба отвечают на «кто и когда едет».
+            Чип «Водитель» кликом открывает модалку выбора; флажок справа —
+            правка №1 (17.09): отметка оператора, что клиент подтвердил день.
+            Это не статус заказа и в маршрутный лист он не печатается.
+            В viewer-mode оба рендерятся как читаемые span (без клика). */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 4 }}>
+          <div style={{ flex: '1 1 auto', minWidth: 0 }}>
+            {viewer ? (
+              <div style={{
+                padding: '1px 6px',
+                background: card.order.assigned_driver_id ? '#eafaf1' : '#f4f6f7',
+                color:      card.order.assigned_driver_id ? '#196f3d' : '#7f8c8d',
+                borderRadius: 3, fontSize: 'var(--font-sm)',
+                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+              }}>
+                👤 {card.order.assigned_driver_name || 'не назначен'}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation()
+                  setDriverPickerFor({ orderId: card.order.id, current: card.order.assigned_driver_id })
+                }}
+                onMouseDown={e => e.stopPropagation()}
+                style={{
+                  display: 'block', padding: '1px 6px',
+                  background: card.order.assigned_driver_id ? '#eafaf1' : '#fdf2e9',
+                  color:      card.order.assigned_driver_id ? '#196f3d' : '#a04000',
+                  border: 'none', borderRadius: 3,
+                  fontSize: 'var(--font-sm)', fontWeight: 500,
+                  cursor: 'pointer', width: '100%', textAlign: 'left',
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                }}
+                title="Назначить водителя"
+              >
+                👤 {card.order.assigned_driver_name || 'не назначен'}
+              </button>
+            )}
           </div>
-        ) : (
-          <button
-            type="button"
-            onClick={e => {
-              e.stopPropagation()
-              setDriverPickerFor({ orderId: card.order.id, current: card.order.assigned_driver_id })
-            }}
-            onMouseDown={e => e.stopPropagation()}
-            style={{
-              display: 'block', marginTop: 4, padding: '1px 6px',
-              background: card.order.assigned_driver_id ? '#eafaf1' : '#fdf2e9',
-              color:      card.order.assigned_driver_id ? '#196f3d' : '#a04000',
-              border: 'none', borderRadius: 3,
-              fontSize: 'var(--font-sm)', fontWeight: 500,
-              cursor: 'pointer', width: '100%', textAlign: 'left',
-              whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
-            }}
-            title="Назначить водителя"
-          >
-            👤 {card.order.assigned_driver_name || 'не назначен'}
-          </button>
-        )}
+          {viewer ? (
+            <span style={confirmChipStyle(card.order.client_confirmed)} title={confirmTitle(card.order)}>
+              {card.order.client_confirmed ? '✓' : '☎'}
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation()
+                void toggleClientConfirmed(card.order.id, !card.order.client_confirmed)
+              }}
+              onMouseDown={e => e.stopPropagation()}
+              style={{ ...confirmChipStyle(card.order.client_confirmed), border: 'none', cursor: 'pointer' }}
+              title={confirmTitle(card.order)}
+            >
+              {card.order.client_confirmed ? '✓' : '☎'}
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -984,6 +1024,36 @@ export default function LogisticsPage() {
     } catch { /* ignore */ }
     setDriverPickerFor(null)
   }
+
+  /**
+   * Правка №1 (17.09): обзвон перед выездом.
+   *
+   * Оператор отмечает, что клиент подтвердил день — забора или отвоза.
+   * Бэкенд сам сбрасывает отметку при переносе дня и после забора ковров:
+   * дальше клиента обзванивают заново, уже про доставку готовых.
+   */
+  const toggleClientConfirmed = async (orderId: number, confirmed: boolean) => {
+    try {
+      const updated = await setClientConfirmed(orderId, confirmed)
+      setAllOrders(prev => prev.map(o => o.id === orderId
+        ? {
+            ...o,
+            client_confirmed: updated.client_confirmed,
+            client_confirmed_by: updated.client_confirmed_by,
+            client_confirmed_at: updated.client_confirmed_at,
+          }
+        : o
+      ))
+    } catch {
+      showToast('Не удалось изменить отметку подтверждения', 'error')
+    }
+  }
+
+  /** Подсказка к флажку обзвона — с именем оператора, который подтвердил. */
+  const confirmTitle = (order: Order): string => order.client_confirmed
+    ? `Клиент подтвердил день${order.client_confirmed_by ? ' — ' + order.client_confirmed_by : ''}.`
+      + ' Клик — вернуть в «Уточнить»'
+    : 'Уточнить: клиент ещё не подтвердил день. Клик — отметить подтверждение'
 
   /** Drop-overlay со слотами — появляется только при перетаскивании над днём. */
   // Drag-over конкретного слота — для hover-тени.
@@ -1798,6 +1868,10 @@ export default function LogisticsPage() {
                     <th style={{ width: 110 }}>Слот</th>
                     <th style={{ width: 120 }}>Оплата (предв.)</th>
                     <th>Комментарий</th>
+                    {/* Правка №1 (17.09): обзвон клиента — тот же флажок, что на
+                        карточках недели, но здесь с подписью: в режиме дня
+                        оператор как раз и обзванивает список подряд. */}
+                    <th style={{ width: 120 }}>Клиент</th>
                     <th style={{ width: 160 }}>Водитель</th>
                   </tr>
                 </thead>
@@ -1832,6 +1906,28 @@ export default function LogisticsPage() {
                               : (c.order.payment_type ? PAYMENT_LABELS[c.order.payment_type] : '—')}
                           </td>
                           <td style={{ color: '#555' }}>{c.order.comment || ''}</td>
+                          <td onClick={e => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              disabled={isReadonly}
+                              onClick={() => void toggleClientConfirmed(c.order.id, !c.order.client_confirmed)}
+                              title={confirmTitle(c.order)}
+                              style={{
+                                border: 'none', borderRadius: 3, padding: '2px 8px',
+                                cursor: isReadonly ? 'default' : 'pointer',
+                                fontSize: 'var(--font-sm)', fontWeight: 600, whiteSpace: 'nowrap',
+                                background: c.order.client_confirmed ? '#eafaf1' : '#fdf2e9',
+                                color:      c.order.client_confirmed ? '#196f3d' : '#a04000',
+                              }}
+                            >
+                              {c.order.client_confirmed ? '✓ подтверждён' : '☎ уточнить'}
+                            </button>
+                            {c.order.client_confirmed && c.order.client_confirmed_by && (
+                              <div style={{ fontSize: 'var(--font-sm)', color: '#95a5a6', marginTop: 2 }}>
+                                {c.order.client_confirmed_by}
+                              </div>
+                            )}
+                          </td>
                           {/* Назначение водителя прямо из списка — основной способ
                               разделить развозку между несколькими водителями. */}
                           <td onClick={e => e.stopPropagation()}>

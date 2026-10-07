@@ -35,6 +35,44 @@ export interface Client {
   lon: number | null
   created_at: string
   updated_at: string
+  /**
+   * V46 (правка №3 от 13.09): статус относительно перезапуска. Заполняется
+   * руками и не заменяет автоматику «новый/повторный»: истории заказов до
+   * перезапуска в CRM нет.
+   */
+  restart_status: RestartStatus | null
+  /** V46: откуда клиент узнал о компании. */
+  source: ClientSource | null
+  /** V46: расшифровка для источника «Другой». */
+  source_note: string | null
+  /** V47 (правка №1 от 13.09): пол — предзаполняется по отчеству, правится руками. */
+  gender: 'MALE' | 'FEMALE' | 'UNKNOWN' | null
+  /** V47: возраст, если известен. */
+  age: number | null
+}
+
+/** V46: статус клиента относительно перезапуска (правка №3 от 13.09). */
+export type RestartStatus = 'REVIVAL_BEFORE' | 'NEW_AFTER' | 'UNKNOWN'
+
+/** V46: источник обращения клиента (правка №3 от 13.09). */
+export type ClientSource =
+  | 'REVIVAL_BASE' | 'RECOMMENDATION' | 'OLD_SITE' | 'KOVROKOT_SITE'
+  | 'YANDEX_DIRECT' | 'YANDEX_SEARCH' | 'YANDEX_MAPS' | 'OTHER' | 'UNKNOWN'
+
+/** V46: основной повод обращения по заказу (правка №3 от 13.09). */
+export type OrderReason =
+  | 'SEASONAL' | 'PET' | 'STAIN' | 'WET' | 'GENERAL'
+  | 'RENOVATION' | 'EVENT' | 'OTHER' | 'NOT_TOLD'
+
+/** V46: причина отмены заказа из справочника (правка №3 от 13.09). */
+export interface CancellationReason {
+  id: number
+  code: string
+  name: string
+  /** true — к выбору обязательно дописать уточнение («Другая причина»). */
+  requires_note: boolean
+  sort_order: number
+  is_active: boolean
 }
 
 export interface Order {
@@ -87,6 +125,32 @@ export interface Order {
   /** V17: проблемный заказ — поднятый флаг шлёт уведомление админам. */
   is_problem: boolean
   problem_reason: string | null
+  /**
+   * V42: дата прайса. Цены услуг считаются по версии прайса на этот день —
+   * по умолчанию день оформления заказа. Кнопка «Пересчитать по текущему
+   * прайсу» переводит заказ на сегодняшние цены.
+   */
+  price_date: string | null
+  /**
+   * V43: клиент подтвердил день выезда (правка №1 от 17.09). false —
+   * «Уточнить»: надо звонить. Сбрасывается при переносе дня и после забора.
+   */
+  client_confirmed: boolean
+  /** Оператор, поставивший подтверждение. */
+  client_confirmed_by: string | null
+  client_confirmed_at: string | null
+  /** V46 (правка №3 от 13.09): основной повод обращения по этому заказу. */
+  order_reason: OrderReason | null
+  /** V46: расшифровка для повода «Другой». */
+  order_reason_note: string | null
+  /** V46: код причины отмены из справочника. */
+  cancel_reason_code: string | null
+  /** V54 (ТЗ v2, блок 6): контракт юрлица, по которому идёт заказ. */
+  contract_id: number | null
+  /** V54: договорная цена за м², зафиксированная при привязке к контракту. */
+  contract_price_per_sqm: number | null
+  /** V54: отметка сдачи заказчику — до неё метры в факт контракта не идут. */
+  contract_delivered_at: string | null
   /** V18: номер квартиры (отдельно от address). */
   pickup_apartment: string | null
   delivery_apartment: string | null
@@ -111,6 +175,53 @@ export interface OrderItem {
   cancellation_reason: string | null
   created_at: string
   updated_at: string
+}
+
+/** V45: тип события по претензии (правка №3 от 19.09). */
+export type RefundKind = 'FULL_REFUND' | 'PARTIAL_REFUND' | 'ITEM_COMPENSATION' | 'OTHER'
+
+/**
+ * V45: возврат денег или компенсация по заказу (правка №3 от 19.09).
+ *
+ * Финансовая потеря компании по претензии клиента. Сумма всегда
+ * положительная — что именно произошло, говорит `kind`.
+ */
+export interface OrderRefund {
+  id: number
+  order_id: number
+  client_name: string | null
+  kind: RefundKind
+  amount: number
+  reason: string
+  comment: string | null
+  /** Когда деньги фактически отдали. */
+  occurred_on: string
+  created_by: string | null
+  created_at: string
+}
+
+/**
+ * V44: корректировка данных ковра (правка №2 от 17.09).
+ *
+ * Производство перемерило ковёр или уточнило материал — храним, что было,
+ * что стало, кто внёс и как от этого изменилась цена позиции. Оператору это
+ * нужно, чтобы объяснить клиенту, откуда взялась другая сумма.
+ */
+export interface OrderItemAdjustment {
+  id: number
+  order_item_id: number
+  order_id: number
+  /** Описание позиции или её тип — чтобы понять, о каком ковре речь. */
+  item_name: string | null
+  field: 'DIMENSIONS' | 'ITEM_TYPE'
+  old_value: string | null
+  new_value: string | null
+  price_before: number | null
+  price_after: number | null
+  changed_by: string | null
+  /** PRODUCTION — кабинет работника, OPERATOR — карточка заказа. */
+  source: 'PRODUCTION' | 'OPERATOR'
+  created_at: string
 }
 
 export interface OrderItemService {
@@ -317,6 +428,10 @@ export interface CreateOrderRequest {
   legacy_id?: number | null
   /** V5: ISO YYYY-MM-DDTHH:MM:SS. Игнорируется backend'ом если legacy_id == null. */
   created_at?: string | null
+  /** V46 (правка №3 от 13.09): основной повод обращения. */
+  order_reason?: string | null
+  /** V46: расшифровка для повода «Другой». */
+  order_reason_note?: string | null
 }
 
 export interface CreateClientRequest {
@@ -339,6 +454,13 @@ export interface CreateClientRequest {
   is_regular?: boolean
   lat?: number | null
   lon?: number | null
+  /** V46 (правка №3 от 13.09): маркетинговые поля. */
+  restart_status?: RestartStatus | null
+  source?: ClientSource | null
+  source_note?: string | null
+  /** V47 (правка №1 от 13.09): пол и возраст для портрета базы. */
+  gender?: 'MALE' | 'FEMALE' | 'UNKNOWN' | null
+  age?: number | null
 }
 
 export interface District {
@@ -363,8 +485,13 @@ export interface AddOrderItemRequest {
 
 export interface UpdateStatusRequest {
   status: string
-  /** Обязательна при переходе в CANCELLED, минимум 10 символов после trim. */
+  /**
+   * Уточнение к причине. У заказа (V46) обязательно только для причин с
+   * requires_note; у позиций и услуг — по-прежнему текст от 10 символов.
+   */
   cancellation_reason?: string
+  /** V46: код причины отмены из справочника. Обязателен при отмене заказа. */
+  cancel_reason_code?: string
 }
 
 export interface PayOrderRequest {

@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     myServices, myRoute, changeServiceStatus, updateItemDimensions, updateItemDescription, uploadItemPhoto,
-    listWorkers,
-    type WorkerService, type WorkerListItem,
+    listWorkers, listItemTypes, updateItemType, listItemPhotos, itemPhotoUrl,
+    type WorkerService, type WorkerListItem, type WorkerItemPhoto,
 } from '../../api/worker'
 import { t } from '../../i18n'
 
@@ -83,6 +83,12 @@ export default function WorkerHomePage() {
      * само по себе, без смены статуса (ковёр ещё в работе, на сушке и т.п.).
      */
     const [photoFor, setPhotoFor] = useState<{ item: WorkerService; afterStatus: 'IN_PROGRESS' | 'DONE' | null } | null>(null)
+    /**
+     * Правка №4 (19.09): счётчик успешных загрузок. Ленты миниатюр в карточках
+     * перечитывают список, когда он меняется, — работник сразу видит, что
+     * фото действительно прикрепилось.
+     */
+    const [photoVersion, setPhotoVersion] = useState(0)
     const [editing, setEditing] = useState<WorkerService | null>(null)
     /** Правка №4: услуга, которую берём/к которой присоединяемся — открывает модалку выбора коллег. */
     const [takeFor, setTakeFor] = useState<any | null>(null)
@@ -229,6 +235,7 @@ export default function WorkerHomePage() {
                     content_type: 'image/jpeg',
                     data: photoData,
                 })
+                setPhotoVersion(v => v + 1)
             }
             // Статус трогаем только когда модалка открыта ради перехода.
             if (afterStatus) {
@@ -424,6 +431,8 @@ export default function WorkerHomePage() {
                                 <ServiceCard
                                     key={s.service_id}
                                     s={s}
+                                    employeeId={employeeId}
+                                    photoVersion={photoVersion}
                                     onAdvance={() => void advance(s)}
                                     onEdit={() => setEditing(s)}
                                     onUndo={() => void undoStatus(s)}
@@ -443,6 +452,8 @@ export default function WorkerHomePage() {
                         <ServiceCard
                             key={s.service_id}
                             s={s}
+                            employeeId={employeeId}
+                            photoVersion={photoVersion}
                             onAdvance={() => void advance(s)}
                             onEdit={() => setEditing(s)}
                             onUndo={() => void undoStatus(s)}
@@ -460,6 +471,8 @@ export default function WorkerHomePage() {
                         <ServiceCard
                             key={s.service_id}
                             s={s}
+                            employeeId={employeeId}
+                            photoVersion={photoVersion}
                             onAdvance={() => {}}
                             onEdit={() => {}}
                             onUndo={() => {}}
@@ -518,8 +531,12 @@ function EmptyState({ text }: { text: string }) {
 }
 
 /** Карточка услуги в списке. */
-function ServiceCard({ s, onAdvance, onEdit, onUndo, onPhoto, compact, readOnly }: {
+function ServiceCard({ s, employeeId, photoVersion, onAdvance, onEdit, onUndo, onPhoto, compact, readOnly }: {
     s: WorkerService
+    /** Нужен для ленты фото: файлы отдаются через кабинетный API. */
+    employeeId: number
+    /** Растёт после каждой успешной загрузки — лента перечитывает список. */
+    photoVersion: number
     onAdvance: () => void
     onEdit: () => void
     /** Откат на один статус назад. Доступен для IN_PROGRESS (→ CREATED)
@@ -576,6 +593,8 @@ function ServiceCard({ s, onAdvance, onEdit, onUndo, onPhoto, compact, readOnly 
                     Дефекты: {s.item_defects}
                 </div>
             )}
+            {/* Правка №4 (19.09): что уже прикреплено к этому ковру. */}
+            <ItemPhotoStrip employeeId={employeeId} itemId={s.item_id} version={photoVersion} />
             {/* Правка №2: завершённая работа — только просмотр. Ни смены статуса,
                 ни правки размеров; остаётся кнопка фото (см. правку №6). */}
             {readOnly ? (
@@ -791,6 +810,12 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
     const [description, setDesc]  = useState(s.item_description || '')
     const [defects, setDefects]   = useState(s.item_defects || '')
     const [saving, setSaving]     = useState(false)
+    // Правка №2 (17.09): фактический материал часто выясняется только в цеху —
+    // клиент сказал «синтетика», а ковёр шерстяной. Тип меняет применимую
+    // услугу, поэтому цена позиции пересчитывается на сервере.
+    const [typeId, setTypeId]     = useState<number>(s.item_type_id)
+    const [types, setTypes]       = useState<{ id: number; name: string }[]>([])
+    useEffect(() => { listItemTypes().then(setTypes).catch(() => setTypes([])) }, [])
 
     // Автопересчёт площади при вводе длины/ширины — как в OrderDetailPage.
     // Раньше на мобилке площадь не двигалась после изменения размеров, и оператор
@@ -817,6 +842,11 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
     const save = async () => {
         setSaving(true)
         try {
+            // Тип сохраняем первым: от него зависит подбор услуги, а размеры
+            // ниже дают финальный пересчёт уже по новому материалу.
+            if (typeId !== s.item_type_id) {
+                await updateItemType(employeeId, s.item_id, typeId)
+            }
             await updateItemDimensions(employeeId, s.item_id, {
                 length: length ? Number(length) : null,
                 width:  width  ? Number(width)  : null,
@@ -834,9 +864,32 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
     return (
         <div style={modalOverlayStyle} onClick={onClose}>
             <div style={modalContentStyle} onClick={e => e.stopPropagation()}>
-                <h3 style={{ marginTop: 0 }}>Размеры и описание</h3>
+                <h3 style={{ marginTop: 0 }}>Данные ковра</h3>
                 <div style={{ fontSize: 12, color: '#7f8c8d', marginBottom: 12 }}>
                     {s.item_type_name} в заказе #{s.order_id} ({s.client_name})
+                </div>
+                {/* Правка №2 (17.09): тип/материал ковра — то, что видно только
+                    вживую. Меняем здесь же, где размеры: обе правки про «как на
+                    самом деле», и обе пересчитывают цену позиции. */}
+                <div style={{ marginBottom: 12 }}>
+                    <label style={{ fontSize: 12, color: '#7f8c8d', display: 'block', marginBottom: 4 }}>
+                        Тип / материал ковра
+                    </label>
+                    <select
+                        value={typeId}
+                        onChange={e => setTypeId(Number(e.target.value))}
+                        style={selectStyle}
+                    >
+                        {/* Пока справочник не загрузился — показываем текущий тип,
+                            чтобы поле не выглядело пустым. */}
+                        {types.length === 0 && <option value={s.item_type_id}>{s.item_type_name}</option>}
+                        {types.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                    {typeId !== s.item_type_id && (
+                        <div style={{ fontSize: 11, color: '#a04000', marginTop: 4 }}>
+                            Цена позиции пересчитается по фактическому материалу
+                        </div>
+                    )}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
                     <Field label="Длина, м"  value={length} onChange={onLengthChange} />
@@ -863,6 +916,86 @@ function EditItemModal({ s, employeeId, onClose, onSaved }: {
     )
 }
 
+/**
+ * Правка №4 (19.09): лента прикреплённых фото ковра.
+ *
+ * Раньше работник снимал ковёр и не видел результата — было непонятно, ушло
+ * фото или нет, и он переснимал «на всякий случай». Теперь под карточкой
+ * миниатюры; тап открывает фото на весь экран, стрелки листают остальные.
+ * Сами файлы тянем по ссылке (<img src>), а не base64 в JSON: телефон
+ * кэширует их как обычные картинки.
+ */
+function ItemPhotoStrip({ employeeId, itemId, version }: {
+    employeeId: number
+    itemId: number
+    version: number
+}) {
+    const [photos, setPhotos] = useState<WorkerItemPhoto[]>([])
+    const [openIdx, setOpenIdx] = useState<number | null>(null)
+
+    useEffect(() => {
+        let alive = true
+        listItemPhotos(employeeId, itemId)
+            .then(p => { if (alive) setPhotos(p) })
+            .catch(() => { if (alive) setPhotos([]) })
+        return () => { alive = false }
+    }, [employeeId, itemId, version])
+
+    if (photos.length === 0) return null
+    const current = openIdx != null ? photos[openIdx] : null
+
+    return (
+        <>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8, overflowX: 'auto', paddingBottom: 2 }}>
+                {photos.map((p, i) => (
+                    <img
+                        key={p.id}
+                        src={itemPhotoUrl(employeeId, itemId, p.id)}
+                        alt=""
+                        onClick={() => setOpenIdx(i)}
+                        style={{
+                            width: 56, height: 56, objectFit: 'cover', borderRadius: 6,
+                            border: '1px solid #d6dbdf', flexShrink: 0, cursor: 'pointer',
+                        }}
+                    />
+                ))}
+                <span style={{ fontSize: 11, color: '#7f8c8d', alignSelf: 'center', marginLeft: 2 }}>
+                    {photos.length} фото
+                </span>
+            </div>
+            {current && (
+                <div style={modalOverlayStyle} onClick={() => setOpenIdx(null)}>
+                    <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520 }}>
+                        <img
+                            src={itemPhotoUrl(employeeId, itemId, current.id)}
+                            alt=""
+                            style={{ width: '100%', borderRadius: 8, background: '#000' }}
+                        />
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10, alignItems: 'center' }}>
+                            <button
+                                disabled={openIdx === 0}
+                                onClick={() => setOpenIdx(i => Math.max(0, (i ?? 0) - 1))}
+                                style={galleryBtnStyle}
+                            >←</button>
+                            <span style={{ color: '#fff', fontSize: 13 }}>
+                                {(openIdx ?? 0) + 1} / {photos.length}
+                            </span>
+                            <button
+                                disabled={(openIdx ?? 0) >= photos.length - 1}
+                                onClick={() => setOpenIdx(i => Math.min(photos.length - 1, (i ?? 0) + 1))}
+                                style={galleryBtnStyle}
+                            >→</button>
+                            <button onClick={() => setOpenIdx(null)} style={{ ...galleryBtnStyle, marginLeft: 'auto' }}>
+                                Закрыть
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </>
+    )
+}
+
 function Field({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
     return (
         <div>
@@ -883,6 +1016,20 @@ const modalContentStyle: React.CSSProperties = {
 }
 const textareaStyle: React.CSSProperties = {
     width: '100%', padding: 10, fontSize: 14, border: '1px solid #d6dbdf', borderRadius: 6, boxSizing: 'border-box', resize: 'vertical',
+}
+/** Кнопки просмотрщика фото — на тёмной подложке, под палец. */
+const galleryBtnStyle: React.CSSProperties = {
+    padding: '10px 14px', background: '#fff', color: '#2c3e50',
+    border: 'none', borderRadius: 6, fontSize: 15, cursor: 'pointer',
+}
+
+/** Выбор типа ковра в кабинете: крупный, под палец, как и остальные поля. */
+const selectStyle: React.CSSProperties = {
+    width: '100%', padding: 10, fontSize: 16, border: '1px solid #d6dbdf',
+    borderRadius: 6, boxSizing: 'border-box', background: '#fff',
+    // Без явной высоты и line-height название длинного типа («Шерстяной ковёр»)
+    // подрезалось снизу на телефоне.
+    height: 44, lineHeight: '22px',
 }
 /** Кнопка-стрелка отката статуса — серый «вторичный» стиль. */
 /** Кнопка «прикрепить фото» — компактная, рядом с основным действием. */

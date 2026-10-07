@@ -34,6 +34,12 @@ public class OrderService {
     private final AppUserRepository userRepository;
     private final NotificationService notificationService;
     private final PresenceService presenceService;
+    /** V45: возвраты и компенсации по претензиям (правка №3 от 19.09). */
+    private final OrderRefundRepository refundRepository;
+    /** V46: справочник причин отмены (правка №3 от 13.09). */
+    private final CancellationReasonRepository cancellationReasonRepository;
+    /** ТЗ v2: точки водителя следуют за датами выезда. */
+    private final PayrollService payrollService;
 
     public OrderService(
             OrderRepository repository,
@@ -50,7 +56,10 @@ public class OrderService {
             ClientEventRepository clientEventRepository,
             AppUserRepository userRepository,
             NotificationService notificationService,
-            PresenceService presenceService
+            PresenceService presenceService,
+            OrderRefundRepository refundRepository,
+            CancellationReasonRepository cancellationReasonRepository,
+            PayrollService payrollService
     ) {
         this.repository = repository;
         this.itemRepository = itemRepository;
@@ -67,6 +76,9 @@ public class OrderService {
         this.userRepository = userRepository;
         this.notificationService = notificationService;
         this.presenceService = presenceService;
+        this.refundRepository = refundRepository;
+        this.cancellationReasonRepository = cancellationReasonRepository;
+        this.payrollService = payrollService;
     }
 
     /**
@@ -155,6 +167,11 @@ public class OrderService {
 
     public long countAll(ru.carpet.repository.OrderQuery query) {
         return repository.countAll(query);
+    }
+
+    /** V46: плоские строки для выгрузки в Excel (правка №3 от 13.09). */
+    public List<java.util.Map<String, Object>> exportRows(ru.carpet.repository.OrderQuery query, int limit) {
+        return repository.exportRows(query, limit);
     }
 
     public Order findById(Long id) {
@@ -295,9 +312,12 @@ public class OrderService {
         // Отменяем старую (минимально — с reason, иначе бизнес-валидация на CANCELLED ругается).
         serviceInstanceRepository.updateStatusWithReason(oldServiceId, ServiceStatus.CANCELLED,
                 "Заменено на альтернативный способ доставки");
-        var newSku = skuService.findById(newSkuId);
+        // V42: новая услуга встаёт по прайсу заказа — замена доставки на самовывоз
+        // и обратно не должна переоценивать заказ по свежему прайсу.
+        var newSkuAsOf = skuService.findAsOf(newSkuId, orderItemService.priceDateOfItem(orderItemId));
+        var newSku = newSkuAsOf.sku();
         BigDecimal price = newSku.price() == null ? BigDecimal.ZERO : newSku.price();
-        Long newServiceId = serviceInstanceRepository.saveOne(orderItemId, newSkuId, price);
+        Long newServiceId = serviceInstanceRepository.saveOne(orderItemId, newSkuId, price, newSkuAsOf.versionId());
         orderItemService.recalculateItemPrice(orderItemId);
         String oldName = skuNameOr(oldSvc.skuId(), "услуга #" + oldServiceId);
         itemRepository.findById(orderItemId).ifPresent(item -> auditLogService.log("ORDER", item.orderId(), "LOGISTICS",
@@ -325,7 +345,12 @@ public class OrderService {
      */
     @Transactional
     public void recalculateDefaultItemPrices(Long orderId) {
-        var autoSkus = skuService.findAutoAdd();
+        // V42: цена приёма/доставки и порог бесплатной доставки — тоже по прайсу
+        // заказа: иначе старый заказ при любом пересчёте получал новую доставку.
+        java.time.LocalDate priceDate = repository.findById(orderId).map(Order::priceDate).orElse(null);
+        var autoSkus = skuService.findAutoAdd().stream()
+                .map(s -> skuService.findAsOf(s.id(), priceDate).sku())
+                .toList();
         if (autoSkus.isEmpty()) {
             BigDecimal total = itemRepository.sumPriceByOrderId(orderId);
             repository.updateBaseAmount(orderId, total);
@@ -378,9 +403,23 @@ public class OrderService {
         return updateStatus(orderId, newStatus, null);
     }
 
-    /** Ручное изменение статуса заказа. При CANCELLED reason обязателен (≥ 10 символов после trim). */
     @Transactional
     public Order updateStatus(Long orderId, OrderStatus newStatus, String cancellationReason) {
+        return updateStatus(orderId, newStatus, cancellationReason, null);
+    }
+
+    /**
+     * Ручное изменение статуса заказа.
+     *
+     * <p>V46 (правка №3 от 13.09): при отмене обязателен код причины из
+     * справочника — свободный текст в аналитику не годился. Уточнение нужно
+     * только там, где справочник его требует («Другая причина»). В
+     * {@code cancellation_reason} складываем человеческую формулировку: её
+     * читают в карточке заказа и печатных формах.
+     */
+    @Transactional
+    public Order updateStatus(Long orderId, OrderStatus newStatus, String cancellationReason,
+                              String cancelReasonCode) {
         Order order = findById(orderId);
         validateStatusTransition(order.status(), newStatus);
         // DELIVERED можно ставить только если назначена фактическая дата доставки —
@@ -391,16 +430,24 @@ public class OrderService {
                 "Назначьте её в разделе «Логистика и детали» или перетащите карточку на нужный день в Логистике."
             );
         }
-        // Для отмены требуем причину минимум 10 символов.
-        String reasonTrimmed = cancellationReason == null ? "" : cancellationReason.trim();
-        if (newStatus == OrderStatus.CANCELLED && reasonTrimmed.length() < 10) {
-            throw new BusinessRuleException(
-                "Для отмены заказа укажите причину (минимум 10 символов)."
-            );
+        String noteTrimmed = cancellationReason == null ? "" : cancellationReason.trim();
+        String reasonTrimmed = noteTrimmed;
+        ru.carpet.model.CancellationReason reason = null;
+        if (newStatus == OrderStatus.CANCELLED) {
+            reason = cancellationReasonRepository.findByCode(cancelReasonCode)
+                    .filter(ru.carpet.model.CancellationReason::isActive)
+                    .orElseThrow(() -> new BusinessRuleException(
+                            "Для отмены заказа выберите причину из списка."));
+            if (reason.requiresNote() && noteTrimmed.length() < 3) {
+                throw new BusinessRuleException(
+                        "Для причины «" + reason.name() + "» нужно уточнение — напишите, что случилось.");
+            }
+            reasonTrimmed = noteTrimmed.isEmpty() ? reason.name() : reason.name() + ": " + noteTrimmed;
         }
         OrderStatus oldStatus = order.status();
         if (newStatus == OrderStatus.CANCELLED) {
             repository.updateStatusWithReason(orderId, newStatus, reasonTrimmed);
+            repository.updateCancelReasonCode(orderId, reason.code());
         } else {
             repository.updateStatus(orderId, newStatus);
         }
@@ -637,6 +684,13 @@ public class OrderService {
             if (sku.triggersOrderStatus() == null) return;
             OrderItem item = itemRepository.findById(orderItemId).orElse(null);
             if (item == null) return;
+            // V43: услуги забора (Приём, Самовывоз-привоз, Доставка-забор) ведут
+            // заказ в IN_PROGRESS. Ковры забрали — подтверждение клиента больше
+            // не про этот выезд, впереди звонок про доставку готовых. Снимаем до
+            // проверки статуса ниже: заказ мог уже уехать вперёд, а флажок снять надо.
+            if ("IN_PROGRESS".equals(sku.triggersOrderStatus())) {
+                resetClientConfirmation(item.orderId(), "ковры забраны");
+            }
             OrderStatus targetStatus = OrderStatus.valueOf(sku.triggersOrderStatus());
             Order order = findById(item.orderId());
             // Не понижаем статус (например, не переводим DELIVERED→CREATED)
@@ -847,8 +901,134 @@ public class OrderService {
                 .collect(java.util.stream.Collectors.joining("; "));
         if (!changes.isEmpty()) {
             auditLogService.log("ORDER", orderId, "LOGISTICS", "Логистика, заказ " + orderNo(orderId) + ": " + changes);
+            // ТЗ v2: перенос дня двигает и точку водителя, а снятие даты её убирает.
+            payrollService.syncOrderPoints(orderId);
+            // V43: день выезда поменялся — старое подтверждение недействительно,
+            // клиента надо обзванивать заново.
+            resetClientConfirmation(orderId, "перенос дня выезда");
+            after = repository.findById(orderId).orElseThrow();
         }
         return after;
+    }
+
+    /**
+     * V43: флажок «клиент подтвердил день выезда» (правка №1 от 17.09).
+     *
+     * <p>Не статус заказа, а рабочий признак логистики: оператор обзванивает
+     * клиентов накануне и отмечает, кто подтвердил. Подпись оператора храним —
+     * с клиентами работают несколько человек, и важно, кто именно звонил.
+     */
+    @Transactional
+    public Order setClientConfirmed(Long orderId, boolean confirmed) {
+        findById(orderId);
+        String actor = ru.carpet.audit.AuditUser.current();
+        repository.updateClientConfirmed(orderId, confirmed, confirmed ? actor : null);
+        auditLogService.log("ORDER", orderId, "LOGISTICS", "Заказ " + orderNo(orderId) + ": "
+                + (confirmed ? "клиент подтвердил день выезда" : "подтверждение снято — уточнить"));
+        return repository.findById(orderId).orElseThrow();
+    }
+
+    /**
+     * V46 (правка №3 от 13.09): повод обращения по заказу.
+     *
+     * <p>Отдельный метод, а не поле в «деталях»: повод спрашивают у клиента
+     * при оформлении, а адреса и даты правят потом, и мешать их в одно
+     * сохранение незачем.
+     */
+    @Transactional
+    public Order setOrderReason(Long orderId, String reason, String note) {
+        Order before = findById(orderId);
+        repository.updateOrderReason(orderId, blankToNull(reason), blankToNull(note));
+        Order after = repository.findById(orderId).orElseThrow();
+        if (!java.util.Objects.equals(before.orderReason(), after.orderReason())
+                || !java.util.Objects.equals(before.orderReasonNote(), after.orderReasonNote())) {
+            auditLogService.log("ORDER", orderId, "UPDATE", "Заказ " + orderNo(orderId)
+                    + ": повод обращения — " + (after.orderReason() == null ? "не указан" : after.orderReason())
+                    + (after.orderReasonNote() != null ? " (" + after.orderReasonNote() + ")" : ""));
+        }
+        return after;
+    }
+
+    /** V45: типы событий по претензиям (правка №3 от 19.09). */
+    private static final Set<String> REFUND_KINDS =
+            Set.of("FULL_REFUND", "PARTIAL_REFUND", "ITEM_COMPENSATION", "OTHER");
+
+    /**
+     * V45: зафиксировать возврат денег или компенсацию по заказу.
+     *
+     * <p>Это финансовая потеря компании по претензии клиента: вернули деньги
+     * целиком или частично, заплатили за испорченный ковёр. Записи попадают в
+     * карточку заказа и в аналитику потерь.
+     */
+    @Transactional
+    public ru.carpet.model.OrderRefund addRefund(Long orderId, String kind, BigDecimal amount, String reason,
+                                                 String comment, java.time.LocalDate occurredOn) {
+        Order order = findById(orderId);
+        if (kind == null || !REFUND_KINDS.contains(kind)) {
+            throw new BusinessRuleException("Неизвестный тип события: " + kind);
+        }
+        if (amount == null || amount.signum() <= 0) {
+            throw new BusinessRuleException("Сумма возврата должна быть больше нуля.");
+        }
+        String reasonText = reason == null ? "" : reason.trim();
+        if (reasonText.length() < 3) {
+            throw new BusinessRuleException("Укажите причину возврата или компенсации.");
+        }
+        // Возврат больше суммы заказа — почти всегда опечатка в сумме. Для
+        // компенсации ковра это законно: ковёр может стоить дороже стирки.
+        boolean overOrder = order.totalAmount() != null && amount.compareTo(order.totalAmount()) > 0;
+        if (overOrder && ("FULL_REFUND".equals(kind) || "PARTIAL_REFUND".equals(kind))) {
+            throw new BusinessRuleException("Возврат больше суммы заказа (" + money(order.totalAmount())
+                    + " ₽). Если компенсируете стоимость ковра — выберите соответствующий тип события.");
+        }
+        Long id = refundRepository.save(orderId, kind, amount, reasonText, blankToNull(comment),
+                occurredOn, ru.carpet.audit.AuditUser.current());
+        auditLogService.log("ORDER", orderId, "REFUND", "Заказ " + orderNo(orderId) + ": "
+                + refundLabel(kind) + " " + money(amount) + " ₽ (" + reasonText + ")");
+        return refundRepository.findByOrderId(orderId).stream()
+                .filter(r -> r.id().equals(id)).findFirst().orElseThrow();
+    }
+
+    /** V45: убрать ошибочно заведённую запись о возврате. */
+    @Transactional
+    public void deleteRefund(Long orderId, Long refundId) {
+        findById(orderId);
+        var refund = refundRepository.findByOrderId(orderId).stream()
+                .filter(r -> r.id().equals(refundId)).findFirst()
+                .orElseThrow(() -> new EntityNotFoundException("Refund not found: " + refundId));
+        refundRepository.delete(refundId);
+        auditLogService.log("ORDER", orderId, "REFUND", "Заказ " + orderNo(orderId) + ": удалена запись — "
+                + refundLabel(refund.kind()) + " " + money(refund.amount()) + " ₽");
+    }
+
+    /** Человеческое название типа события — для лога действий. */
+    private static String refundLabel(String kind) {
+        return switch (kind == null ? "" : kind) {
+            case "FULL_REFUND"       -> "полный возврат";
+            case "PARTIAL_REFUND"    -> "частичный возврат";
+            case "ITEM_COMPENSATION" -> "компенсация за ковёр";
+            case "OTHER"             -> "прочая выплата по претензии";
+            default                  -> kind;
+        };
+    }
+
+    /** V43: снять подтверждение после забора — вызывается и из кабинета водителя. */
+    @Transactional
+    public void resetClientConfirmationAfterPickup(Long orderId) {
+        resetClientConfirmation(orderId, "ковры забраны");
+    }
+
+    /**
+     * V43: снять подтверждение автоматически. Вызывается при переносе дня выезда
+     * и после забора ковров — оба раза с клиентом предстоит говорить заново.
+     * Если подтверждения не было, ничего не пишем: лог не должен шуметь.
+     */
+    private void resetClientConfirmation(Long orderId, String reason) {
+        Order order = repository.findById(orderId).orElse(null);
+        if (order == null || !order.clientConfirmed()) return;
+        repository.updateClientConfirmed(orderId, false, null);
+        auditLogService.log("ORDER", orderId, "LOGISTICS",
+                "Заказ " + orderNo(orderId) + ": подтверждение клиента снято (" + reason + ")");
     }
 
     /** «забор → 03.09.2026 14:00-18:00», «доставка снята с даты»; null — ничего не поменялось. */
@@ -930,22 +1110,64 @@ public class OrderService {
             itemRepository.updateDescription(newItem.id(), original.description(), original.defects());
         }
         // V10: копируем услуги вместе с sku_id — цена пересчитывается через PricingHelper.
+        // V42: по прайсу того заказа, в который копируем (у гарантийного заказа он свой).
+        java.time.LocalDate priceDate = repository.findById(orderId).map(Order::priceDate).orElse(null);
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(original.id());
         for (OrderItemServiceInstance svc : services) {
             if (svc.skuId() == null) continue;
-            ru.carpet.model.Sku sku = null;
-            try { sku = skuService.findById(svc.skuId()); } catch (Exception ignored) {}
-            if (sku == null) continue;
+            SkuService.SkuAsOf asOf = null;
+            try { asOf = skuService.findAsOf(svc.skuId(), priceDate); } catch (Exception ignored) {}
+            if (asOf == null) continue;
+            ru.carpet.model.Sku sku = asOf.sku();
             OrderItem freshItem = itemRepository.findById(newItem.id()).orElseThrow();
             BigDecimal newPrice = PricingHelper.calculate(sku.price(), sku.pricingType(), freshItem);
-            Long newSvcId = serviceInstanceRepository.saveOne(newItem.id(), svc.skuId(), newPrice);
+            Long newSvcId = serviceInstanceRepository.saveOne(newItem.id(), svc.skuId(), newPrice, asOf.versionId());
             if (newSvcId != null) {
-                serviceInstanceRepository.updateCalculatedPrice(newSvcId, newPrice);
+                serviceInstanceRepository.updateCalculatedPrice(newSvcId, newPrice, asOf.versionId());
             }
         }
         // Пересчитать стоимость позиции
         orderItemService.recalculateItemPrice(newItem.id());
         return itemRepository.findById(newItem.id()).orElseThrow();
+    }
+
+    /**
+     * V42: перевести заказ на сегодняшний прайс и пересчитать цены.
+     *
+     * <p>Обычные пересчёты идут по прайсу на дату заказа — цена, названная
+     * клиенту, не должна меняться сама по себе. Этот метод — осознанное
+     * действие оператора: сдвигаем дату прайса на сегодня и пересчитываем
+     * услуги. Услуги с ручной ценой не трогаем: их поставили руками, и прайс
+     * к ним отношения не имеет.
+     */
+    @Transactional
+    public Order repriceToCurrent(Long orderId) {
+        Order order = findById(orderId);
+        if (order.status() == OrderStatus.COMPLETED) {
+            throw new BusinessRuleException("Заказ завершён и оплачен — пересчёт цен закрыт.");
+        }
+        BigDecimal before = order.totalAmount();
+        java.time.LocalDate today = java.time.LocalDate.now();
+        repository.updatePriceDate(orderId, today);
+        for (OrderItem item : itemRepository.findByOrderId(orderId)) {
+            if (item.status() == OrderItemStatus.CANCELLED) continue;
+            orderItemService.recalculateServicePrices(item.id());
+        }
+        recalculateTotalAmount(orderId);
+        Order updated = repository.findById(orderId).orElseThrow();
+        auditLogService.log("ORDER", orderId, "PRICE_CHANGE",
+                "Заказ " + orderNo(orderId) + ": пересчёт по прайсу от " + dateText(today)
+                        + " (был прайс от " + dateText(order.priceDate()) + ") — "
+                        + money(before) + " ₽ → " + money(updated.totalAmount()) + " ₽");
+        return updated;
+    }
+
+    private static String dateText(java.time.LocalDate d) {
+        return d == null ? "—" : d.format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy"));
+    }
+
+    private static String money(BigDecimal v) {
+        return v == null ? "0" : v.stripTrailingZeros().toPlainString();
     }
 
     /** Пересчёт итоговой суммы заказа */

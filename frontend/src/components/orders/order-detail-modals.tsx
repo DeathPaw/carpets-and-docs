@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import { addOrderItem } from '../../api/orders'
-import type { OrderItem, ItemType, PaymentType } from '../../types'
+import type { OrderItem, ItemType, PaymentType, RefundKind } from '../../types'
 import Tiles, { hashColor } from '../Tiles'
 import TimeSlotSelect from '../TimeSlotSelect'
 import { useEscapeClose } from '../../hooks/useEscapeClose'
+import { todayIso } from '../../utils/format'
 
 /**
  * Опции для выбора типа оплаты — 3 варианта, дроп-даун заменён на плитки
@@ -286,6 +287,95 @@ function pluralPositions(n: number): string {
   return 'позиций'
 }
 
+// ---- Возврат или компенсация по претензии (правка №3 от 19.09) ----
+
+const REFUND_OPTIONS: { value: RefundKind; label: string }[] = [
+  { value: 'FULL_REFUND',       label: 'Полный возврат' },
+  { value: 'PARTIAL_REFUND',    label: 'Частичный возврат' },
+  { value: 'ITEM_COMPENSATION', label: 'Компенсация за ковёр' },
+  { value: 'OTHER',             label: 'Другое' },
+]
+
+/**
+ * Фиксация финансовой потери по претензии: вернули деньги или заплатили за
+ * испорченный ковёр. Сумма всегда положительная — знак задаёт тип события.
+ * Для полного возврата подставляем сумму заказа: чаще всего возвращают именно её.
+ */
+export function RefundModal({
+  orderTotal, onClose, onSubmit,
+}: {
+  orderTotal: number
+  onClose: () => void
+  onSubmit: (data: { kind: RefundKind; amount: number; reason: string; comment: string; occurred_on: string }) => void
+}) {
+  const today = todayIso()
+  const [kind, setKind] = useState<RefundKind>('FULL_REFUND')
+  const [amount, setAmount] = useState(String(Math.round(orderTotal)))
+  const [reason, setReason] = useState('')
+  const [comment, setComment] = useState('')
+  const [occurredOn, setOccurredOn] = useState(today)
+  const [error, setError] = useState('')
+  useEscapeClose(true, onClose)
+
+  const submit = () => {
+    const sum = Number(amount)
+    if (!sum || sum <= 0) { setError('Укажите сумму больше нуля'); return }
+    if (reason.trim().length < 3) { setError('Укажите причину — по ней потом считается статистика потерь'); return }
+    onSubmit({ kind, amount: sum, reason: reason.trim(), comment: comment.trim(), occurred_on: occurredOn })
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 520 }}>
+        <h2>Возврат или компенсация</h2>
+        <div className="form-group">
+          <label>Тип события</label>
+          <Tiles<RefundKind>
+            options={REFUND_OPTIONS}
+            value={kind}
+            onChange={v => {
+              setKind(v)
+              // Полный возврат — это вся сумма заказа; для остальных пусть
+              // оператор введёт свою, подставленная сумма только мешала бы.
+              if (v === 'FULL_REFUND') setAmount(String(Math.round(orderTotal)))
+            }}
+          />
+        </div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ flex: '1 1 160px' }}>
+            <label>Сумма, ₽</label>
+            <input
+              type="number" min="0" step="1" value={amount}
+              onChange={e => { setAmount(e.target.value); setError('') }}
+            />
+          </div>
+          <div className="form-group" style={{ flex: '1 1 160px' }}>
+            <label>Дата выплаты</label>
+            <input type="date" value={occurredOn} onChange={e => setOccurredOn(e.target.value)} />
+          </div>
+        </div>
+        <div className="form-group">
+          <label>Причина</label>
+          <input
+            value={reason}
+            onChange={e => { setReason(e.target.value); setError('') }}
+            placeholder="Например: некачественная стирка"
+          />
+        </div>
+        <div className="form-group">
+          <label>Комментарий</label>
+          <textarea rows={2} value={comment} onChange={e => setComment(e.target.value)} placeholder="Подробности, если нужны" />
+        </div>
+        {error && <div className="notice notice-error" style={{ marginBottom: 10 }}>{error}</div>}
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Отмена</button>
+          <button className="btn-danger" onClick={submit}>Зафиксировать</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ---- Простое окно «Оплатить» (на странице DELIVERED) ----
 export function PayModal({ onClose, onPay }: { onClose: () => void; onPay: (pt: PaymentType) => void }) {
   const [paymentType, setPaymentType] = useState<PaymentType>('CARD')
@@ -318,7 +408,7 @@ export function DeliverAndPayModal({
   onClose: () => void
   onSubmit: (data: { date: string; slot: string; paymentType: PaymentType }) => void
 }) {
-  const today = new Date().toISOString().slice(0, 10)
+  const today = todayIso()
   const [date, setDate] = useState(today)
   const [slot, setSlot] = useState('')
   const [paymentType, setPaymentType] = useState<PaymentType>('CARD')

@@ -30,3 +30,15 @@ export function extractApiError(e: unknown, fallback = 'Произошла ош�
   if (e instanceof Error && e.message) return e.message
   return fallback
 }
+
+/**
+ * Сегодняшняя дата в формате YYYY-MM-DD по ЛОКАЛЬНОЙ зоне.
+ *
+ * `toISOString().slice(0, 10)` даёт дату по UTC: с полуночи до трёх ночи по
+ * Москве она отстаёт на день. Из-за этого, например, у только что созданного
+ * заказа кнопка «Пересчитать по текущему прайсу» показывалась зря.
+ * Локаль sv-SE выбрана потому, что её формат даты — ровно YYYY-MM-DD.
+ */
+export function todayIso(): string {
+  return new Date().toLocaleDateString('sv-SE')
+}

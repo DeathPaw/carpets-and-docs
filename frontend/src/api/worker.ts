@@ -66,6 +66,36 @@ export const updateItemDimensions = (
 ) =>
     client.patch(`/api/worker/${employeeId}/items/${itemId}/dimensions`, dims).then(r => r.data)
 
+/** Мета уже прикреплённых фото ковра (правка №4 от 19.09). */
+export interface WorkerItemPhoto {
+    id: number
+    filename: string | null
+    content_type: string | null
+    created_at: string
+}
+
+export const listItemPhotos = (employeeId: number, itemId: number) =>
+    client.get<WorkerItemPhoto[]>(`/api/worker/${employeeId}/items/${itemId}/photos`).then(r => r.data)
+
+/**
+ * Адрес самого файла. Отдаём его в <img src>, а не тащим base64 в JSON:
+ * браузер сам кэширует картинку и не держит её в памяти страницы.
+ */
+export const itemPhotoUrl = (employeeId: number, itemId: number, photoId: number) =>
+    `/api/worker/${employeeId}/items/${itemId}/photos/${photoId}`
+
+/** Типы ковров для выбора в кабинете — без служебных (правка №2 от 17.09). */
+export const listItemTypes = () =>
+    client.get<{ id: number; name: string }[]>('/api/worker/item-types').then(r => r.data)
+
+/**
+ * Уточнить тип/материал ковра (правка №2 от 17.09). Цена позиции
+ * пересчитается по фактическому материалу, изменение попадёт в историю
+ * корректировок — оператор увидит, что было, что стало и как изменилась цена.
+ */
+export const updateItemType = (employeeId: number, itemId: number, itemTypeId: number) =>
+    client.patch(`/api/worker/${employeeId}/items/${itemId}/type`, { item_type_id: itemTypeId }).then(r => r.data)
+
 /** Обновить описание/дефекты позиции. */
 export const updateItemDescription = (
     employeeId: number,

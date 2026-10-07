@@ -26,18 +26,72 @@ public class OrderController {
     private final OrderItemPhotoRepository photoRepository;
     private final NamedParameterJdbcTemplate jdbc;
     private final ru.carpet.service.AuditLogService auditLogService;
+    private final ru.carpet.repository.OrderItemAdjustmentRepository adjustmentRepository;
+    private final ru.carpet.repository.OrderRefundRepository refundRepository;
+    /** ТЗ v2: точки водителя пересобираются при смене водителя. */
+    private final ru.carpet.service.PayrollService payrollService;
 
     public OrderController(OrderService service, OrderItemService orderItemService,
                            OrderItemServiceInstanceService serviceInstanceService,
                            OrderItemPhotoRepository photoRepository,
                            NamedParameterJdbcTemplate jdbc,
-                           ru.carpet.service.AuditLogService auditLogService) {
+                           ru.carpet.service.AuditLogService auditLogService,
+                           ru.carpet.repository.OrderItemAdjustmentRepository adjustmentRepository,
+                           ru.carpet.repository.OrderRefundRepository refundRepository,
+                           ru.carpet.service.PayrollService payrollService) {
+        this.adjustmentRepository = adjustmentRepository;
+        this.refundRepository = refundRepository;
+        this.payrollService = payrollService;
         this.service = service;
         this.orderItemService = orderItemService;
         this.serviceInstanceService = serviceInstanceService;
         this.photoRepository = photoRepository;
         this.jdbc = jdbc;
         this.auditLogService = auditLogService;
+    }
+
+    /**
+     * V46 (правка №3 от 13.09): выгрузка заказов в Excel — плоские строки со
+     * всеми маркетинговыми полями, скидками, надбавками и доставкой.
+     *
+     * <p>Фильтры те же, что у списка: оператор сначала отбирает заказы на
+     * странице, потом выгружает ровно их. Параметры дублируются осознанно —
+     * так видно, что выгрузка и список отбирают одинаково.
+     */
+    @GetMapping("/export")
+    public List<Map<String, Object>> export(
+            @RequestParam(required = false) OrderStatus status,
+            @RequestParam(required = false) List<OrderStatus> statuses,
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo,
+            @RequestParam(required = false) String dateField,
+            @RequestParam(required = false) Long legacyId,
+            @RequestParam(required = false) Long orderId,
+            @RequestParam(required = false) String paymentType,
+            @RequestParam(required = false) String clientPhone,
+            @RequestParam(required = false) String clientName,
+            @RequestParam(required = false) Long clientId,
+            @RequestParam(required = false) Boolean noCoords,
+            @RequestParam(required = false) Boolean overdueActual,
+            @RequestParam(required = false) Boolean badAddress,
+            @RequestParam(required = false) Boolean stuck,
+            @RequestParam(required = false) String search,
+            @RequestParam(required = false) List<String> districts,
+            @RequestParam(required = false) Boolean onlyWarranty,
+            @RequestParam(required = false) Boolean adjustedByProduction,
+            @RequestParam(defaultValue = "50000") int limit
+    ) {
+        List<OrderStatus> effectiveStatuses = (statuses != null && !statuses.isEmpty())
+                ? statuses
+                : (status != null ? List.of(status) : null);
+        ru.carpet.repository.OrderQuery query = ru.carpet.repository.OrderQuery.builder()
+                .statuses(effectiveStatuses).dateFrom(dateFrom).dateTo(dateTo).dateField(dateField)
+                .legacyId(legacyId).orderId(orderId).paymentType(paymentType)
+                .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
+                .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress).stuck(stuck)
+                .search(search).districts(districts)
+                .onlyWarranty(onlyWarranty).adjustedByProduction(adjustedByProduction).build();
+        return service.exportRows(query, Math.min(limit, 50000));
     }
 
     @GetMapping
@@ -69,6 +123,8 @@ public class OrderController {
             @RequestParam(required = false) List<String> districts,
             // V19: только гарантийные (клик из аналитики).
             @RequestParam(required = false) Boolean onlyWarranty,
+            // V44: только заказы, где производство поправило размеры/материал.
+            @RequestParam(required = false) Boolean adjustedByProduction,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "20") int size
     ) {
@@ -82,7 +138,7 @@ public class OrderController {
                 .clientPhone(clientPhone).clientName(clientName).clientId(clientId)
                 .sortBy(sortBy).sortDir(sortDir)
                 .noCoords(noCoords).overdueActual(overdueActual).badAddress(badAddress).stuck(stuck).search(search).districts(districts)
-                .onlyWarranty(onlyWarranty).build();
+                .onlyWarranty(onlyWarranty).adjustedByProduction(adjustedByProduction).build();
 
         List<Order> content = service.findAll(query, page, size);
         long totalElements = service.countAll(query);
@@ -92,9 +148,14 @@ public class OrderController {
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
     public Order create(@Valid @RequestBody CreateOrderRequest request) {
-        return service.create(request.clientId(), request.clientName(), request.comment(),
+        Order order = service.create(request.clientId(), request.clientName(), request.comment(),
                 request.pickupAddress(), request.deliveryAddress(), request.legacyId(),
                 request.createdAt());
+        // V46: повод обращения спрашивают при оформлении — пишем сразу, если указан.
+        if (request.orderReason() != null && !request.orderReason().isBlank()) {
+            return service.setOrderReason(order.id(), request.orderReason(), request.orderReasonNote());
+        }
+        return order;
     }
 
     @GetMapping("/{id}")
@@ -104,7 +165,17 @@ public class OrderController {
 
     @PatchMapping("/{id}/status")
     public Order updateStatus(@PathVariable Long id, @Valid @RequestBody UpdateOrderStatusRequest request) {
-        return service.updateStatus(id, request.status(), request.cancellationReason());
+        return service.updateStatus(id, request.status(), request.cancellationReason(),
+                request.cancelReasonCode());
+    }
+
+    /**
+     * V46 (правка №3 от 13.09): основной повод обращения по заказу.
+     * body: {"order_reason": "PET", "order_reason_note": "..."}.
+     */
+    @PatchMapping("/{id}/reason")
+    public Order setOrderReason(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return service.setOrderReason(id, body.get("order_reason"), body.get("order_reason_note"));
     }
 
     /**
@@ -193,12 +264,65 @@ public class OrderController {
         Object driverName = result.get("driver_name");
         auditLogService.log("ORDER", id, "LOGISTICS", "Логистика, заказ #" + String.format("%05d", id) + ": "
                 + (employeeId == null ? "водитель снят" : "водитель → " + (driverName != null ? driverName : "#" + employeeId)));
+        // ТЗ v2: точки водителя идут за назначением — смена водителя переносит
+        // их на нового, снятие убирает.
+        payrollService.syncOrderPoints(id);
         return result;
     }
 
     @PostMapping("/{id}/pay")
     public Order pay(@PathVariable Long id, @Valid @RequestBody PayOrderRequest request) {
         return service.pay(id, request.paymentType());
+    }
+
+    /**
+     * V45: возвраты и компенсации по заказу (правка №3 от 19.09) —
+     * финансовые потери по претензиям клиента.
+     */
+    @GetMapping("/{id}/refunds")
+    public List<ru.carpet.model.OrderRefund> refunds(@PathVariable Long id) {
+        return refundRepository.findByOrderId(id);
+    }
+
+    @PostMapping("/{id}/refunds")
+    @ResponseStatus(HttpStatus.CREATED)
+    public ru.carpet.model.OrderRefund addRefund(@PathVariable Long id,
+                                                 @Valid @RequestBody CreateRefundRequest request) {
+        return service.addRefund(id, request.kind(), request.amount(), request.reason(),
+                request.comment(), request.occurredOn());
+    }
+
+    @DeleteMapping("/{id}/refunds/{refundId}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void deleteRefund(@PathVariable Long id, @PathVariable Long refundId) {
+        service.deleteRefund(id, refundId);
+    }
+
+    /**
+     * V44: корректировки ковров по заказу (правка №2 от 17.09) — что поправило
+     * производство: размеры, тип/материал, и как от этого изменилась цена.
+     */
+    @GetMapping("/{id}/adjustments")
+    public List<ru.carpet.model.OrderItemAdjustment> adjustments(@PathVariable Long id) {
+        return adjustmentRepository.findByOrderId(id);
+    }
+
+    /**
+     * V43: флажок подтверждения клиента по дню выезда (правка №1 от 17.09).
+     * {@code confirmed=false} — вернуть в «Уточнить».
+     */
+    @PatchMapping("/{id}/client-confirmed")
+    public Order setClientConfirmed(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        return service.setClientConfirmed(id, Boolean.TRUE.equals(body.get("confirmed")));
+    }
+
+    /**
+     * V42: пересчитать заказ по сегодняшнему прайсу. Обычно заказ считается по
+     * прайсу на дату оформления — это осознанный переход на новые цены.
+     */
+    @PostMapping("/{id}/reprice")
+    public Order reprice(@PathVariable Long id) {
+        return service.repriceToCurrent(id);
     }
 
     @PostMapping("/{id}/duplicate")

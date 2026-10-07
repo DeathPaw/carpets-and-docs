@@ -20,6 +20,7 @@ public class OrderItemService {
     private final OrderService orderService;
     private final SkuService skuService;
     private final AuditLogService auditLogService;
+    private final OrderItemAdjustmentRepository adjustmentRepository;
 
     public OrderItemService(
             OrderItemRepository orderItemRepository,
@@ -28,7 +29,8 @@ public class OrderItemService {
             ItemTypeRepository itemTypeRepository,
             @Lazy OrderService orderService,
             SkuService skuService,
-            AuditLogService auditLogService
+            AuditLogService auditLogService,
+            OrderItemAdjustmentRepository adjustmentRepository
     ) {
         this.orderItemRepository = orderItemRepository;
         this.serviceInstanceRepository = serviceInstanceRepository;
@@ -37,6 +39,7 @@ public class OrderItemService {
         this.orderService = orderService;
         this.skuService = skuService;
         this.auditLogService = auditLogService;
+        this.adjustmentRepository = adjustmentRepository;
     }
 
     @Transactional
@@ -108,6 +111,20 @@ public class OrderItemService {
     @Transactional
     public OrderItem updateDimensions(Long itemId, BigDecimal length, BigDecimal width, BigDecimal weight,
                                        BigDecimal area, BigDecimal runningMeters) {
+        return updateDimensions(itemId, length, width, weight, area, runningMeters, false);
+    }
+
+    /**
+     * V44 (правка №2 от 17.09): {@code fromProduction} — перемер ковра в цеху.
+     *
+     * <p>Такая правка попадает в историю корректировок (было/стало и цена до и
+     * после) и считается по ТЕКУЩЕМУ прайсу: производство фиксирует фактические
+     * данные ковра, и работа по ним оценивается сегодняшними ценами. Правка
+     * оператора в карточке, наоборот, остаётся на прайсе заказа (V42).
+     */
+    @Transactional
+    public OrderItem updateDimensions(Long itemId, BigDecimal length, BigDecimal width, BigDecimal weight,
+                                       BigDecimal area, BigDecimal runningMeters, boolean fromProduction) {
         OrderItem item = findById(itemId);
         Order order = orderRepository.findById(item.orderId())
                 .orElseThrow(() -> new EntityNotFoundException("Order not found: " + item.orderId()));
@@ -132,11 +149,66 @@ public class OrderItemService {
         // recalculateServicePrices умеет считать только не-manual услуги, поэтому сначала
         // сбрасываем флаги, потом он пройдётся по всем как по чистому списку.
         serviceInstanceRepository.clearAllManualPriceFlagsForItem(itemId);
-        lastSwitches = recalculateServicePrices(itemId);
+        lastSwitches = recalculateServicePrices(itemId, fromProduction);
         OrderItem updated = orderItemRepository.findById(itemId).orElseThrow();
         auditLogService.log("ORDER", item.orderId(), "ITEM", "Заказ " + OrderService.orderNo(item.orderId())
                 + ", позиция #" + itemId + ": размеры " + dimensionsText(updated) + ", цена " + plain(updated.price()) + " ₽");
+        recordAdjustment(itemId, "DIMENSIONS", dimensionsText(item), dimensionsText(updated),
+                item.price(), updated.price(), fromProduction);
         return updated;
+    }
+
+    /**
+     * V44: смена типа/материала ковра (правка №2 от 17.09).
+     *
+     * <p>Фактический материал часто выясняется только на производстве: клиент
+     * сказал «синтетика», а ковёр шерстяной. От типа зависит, какая услуга
+     * применима, поэтому после смены пересчитываем услуги — подходящая SKU
+     * подбирается автоматически ({@link #recalculateServicePrices}).
+     */
+    @Transactional
+    public OrderItem updateItemType(Long itemId, Long newTypeId, boolean fromProduction) {
+        OrderItem item = findById(itemId);
+        Order order = orderRepository.findById(item.orderId())
+                .orElseThrow(() -> new EntityNotFoundException("Order not found: " + item.orderId()));
+        if (order.status() == OrderStatus.COMPLETED) {
+            throw new ru.carpet.exception.BusinessRuleException(
+                    "Заказ завершён и оплачен — редактирование позиций закрыто. "
+                    + "Для корректировки оформите гарантийный возврат.");
+        }
+        ItemType newType = itemTypeRepository.findById(newTypeId)
+                .orElseThrow(() -> new EntityNotFoundException("ItemType not found: " + newTypeId));
+        if (java.util.Objects.equals(item.itemTypeId(), newTypeId)) return item;
+        String oldTypeName = itemTypeRepository.findById(item.itemTypeId())
+                .map(ItemType::name).orElse("—");
+
+        orderItemRepository.updateItemType(itemId, newTypeId);
+        // Тип поменялся — прежняя ручная цена относилась к другому ковру.
+        serviceInstanceRepository.clearAllManualPriceFlagsForItem(itemId);
+        lastSwitches = recalculateServicePrices(itemId, fromProduction);
+        OrderItem updated = orderItemRepository.findById(itemId).orElseThrow();
+
+        auditLogService.log("ORDER", item.orderId(), "ITEM", "Заказ " + OrderService.orderNo(item.orderId())
+                + ", позиция #" + itemId + ": тип «" + oldTypeName + "» → «" + newType.name()
+                + "», цена " + plain(item.price()) + " ₽ → " + plain(updated.price()) + " ₽");
+        recordAdjustment(itemId, "ITEM_TYPE", oldTypeName, newType.name(),
+                item.price(), updated.price(), fromProduction);
+        return updated;
+    }
+
+    /**
+     * V44: запись в историю корректировок. Пишем только реальные изменения —
+     * блок в карточке заказа должен показывать расхождения, а не каждое
+     * сохранение формы.
+     */
+    private void recordAdjustment(Long itemId, String field, String oldValue, String newValue,
+                                  BigDecimal priceBefore, BigDecimal priceAfter, boolean fromProduction) {
+        if (java.util.Objects.equals(oldValue, newValue)) return;
+        // Первичный ввод размеров оператором — это не корректировка, а заполнение
+        // карточки: в блоке «данные скорректированы» такие строки только шумят.
+        if (!fromProduction && "DIMENSIONS".equals(field) && "не заданы".equals(oldValue)) return;
+        adjustmentRepository.save(itemId, field, oldValue, newValue, priceBefore, priceAfter,
+                ru.carpet.audit.AuditUser.current(), fromProduction ? "PRODUCTION" : "OPERATOR");
     }
 
     /** «2 × 3 м, 6 м², 2,5 кг» — для лога действий. */
@@ -163,6 +235,9 @@ public class OrderItemService {
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
         if (newStatus != item.status()) {
             orderItemRepository.updateStatus(orderItemId, newStatus);
+            // V50: фиксируем момент, когда работа по ковру закончена — по этой
+            // дате считаются обработанные метры месяца для себестоимости.
+            orderItemRepository.updateCompletedAt(orderItemId, newStatus == OrderItemStatus.DONE);
             orderService.recalculateOrderStatus(item.orderId());
         }
     }
@@ -183,23 +258,72 @@ public class OrderItemService {
     }
 
     /**
+     * V42: дата прайса заказа, которому принадлежит позиция. По ней берутся
+     * цены услуг — см. {@link ru.carpet.model.Order#priceDate()}.
+     * null — заказ не найден, считаем по текущему прайсу.
+     */
+    public java.time.LocalDate priceDateOfItem(Long orderItemId) {
+        OrderItem item = orderItemRepository.findById(orderItemId).orElse(null);
+        if (item == null) return null;
+        return orderRepository.findById(item.orderId()).map(Order::priceDate).orElse(null);
+    }
+
+    /**
+     * ТЗ v2 (блок 6): договорная цена за м² заказа, если он идёт по контракту.
+     * null — считаем по обычному прайсу.
+     */
+    public BigDecimal contractPriceOfItem(Long orderItemId) {
+        OrderItem item = orderItemRepository.findById(orderItemId).orElse(null);
+        if (item == null) return null;
+        return orderRepository.contractPricePerSqm(item.orderId());
+    }
+
+    /**
+     * Цена за единицу для расчёта услуги.
+     *
+     * <p>У контрактного заказа чистка считается по договорной ставке за м², а
+     * не по прайсу: это и есть смысл договора. Служебные услуги (приём,
+     * доставка, оформление) и услуги с другим типом расчёта остаются на прайсе.
+     */
+    public static BigDecimal unitPrice(Sku sku, BigDecimal contractPricePerSqm) {
+        if (contractPricePerSqm == null) return sku.price();
+        if (!"BY_AREA".equals(sku.pricingType()) || sku.excludeFromStatusCalc()) return sku.price();
+        return contractPricePerSqm;
+    }
+
+    @Transactional
+    public List<SkuSwitchInfo> recalculateServicePrices(Long orderItemId) {
+        return recalculateServicePrices(orderItemId, false);
+    }
+
+    /**
      * V10+V11: при изменении размеров пересчитываем + автозамена SKU.
      *
      * <p>Логика: для каждой услуги (не manual, не exclude) проверяем, подходит ли
      * текущая SKU к обновлённым параметрам позиции через {@link SkuService#findMatching}.
      * Если нет — ищем замену и подменяем. Возвращаем список замен для тоста на фронте.
+     *
+     * <p>V42: цена берётся по прайсу на дату заказа, а не по текущему. Иначе
+     * любой перемер старого заказа пересчитывал его по новым ценам, и смена
+     * типа позиции туда-обратно меняла сумму. {@code useCurrentPrices = true} —
+     * осознанный переход на свежий прайс (перерасчёт заказа, корректировка
+     * данных ковра производством): версия прайса у услуг тоже обновляется.
      */
     @Transactional
-    public List<SkuSwitchInfo> recalculateServicePrices(Long orderItemId) {
+    public List<SkuSwitchInfo> recalculateServicePrices(Long orderItemId, boolean useCurrentPrices) {
         OrderItem item = orderItemRepository.findById(orderItemId).orElseThrow();
+        java.time.LocalDate priceDate = useCurrentPrices ? null : priceDateOfItem(orderItemId);
+        // ТЗ v2: у контрактного заказа чистка идёт по договорной ставке за м².
+        BigDecimal contractPrice = orderRepository.contractPricePerSqm(item.orderId());
         List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(orderItemId);
         List<SkuSwitchInfo> switches = new java.util.ArrayList<>();
 
         for (OrderItemServiceInstance service : services) {
             if (service.isManualPrice()) continue;
             if (service.skuId() == null) continue;
-            Sku currentSku;
-            try { currentSku = skuService.findById(service.skuId()); } catch (Exception e) { continue; }
+            SkuService.SkuAsOf current;
+            try { current = skuService.findAsOf(service.skuId(), priceDate); } catch (Exception e) { continue; }
+            Sku currentSku = current.sku();
             if (currentSku.excludeFromStatusCalc()) {
                 // Lifecycle-SKU (доставка/приём/оформление) — не трогаем, цена от размеров не зависит
                 continue;
@@ -209,21 +333,26 @@ public class OrderItemService {
             boolean matches = skuService.checkMatch(currentSku, item);
             if (matches) {
                 // Подходит — просто пересчитываем цену
-                BigDecimal newPrice = PricingHelper.calculate(currentSku.price(), currentSku.pricingType(), item);
-                serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+                BigDecimal newPrice = PricingHelper.calculate(
+                        unitPrice(currentSku, contractPrice), currentSku.pricingType(), item);
+                serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice, current.versionId());
             } else {
                 // Не подходит — ищем замену
                 Sku replacement = skuService.findBestReplacement(currentSku, item);
                 if (replacement != null) {
-                    // Подменяем SKU
-                    serviceInstanceRepository.switchSku(service.id(), replacement.id());
-                    BigDecimal newPrice = PricingHelper.calculate(replacement.price(), replacement.pricingType(), item);
-                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+                    // Подменяем SKU — с ценой и версией прайса на дату заказа
+                    SkuService.SkuAsOf replacementAsOf = skuService.findAsOf(replacement.id(), priceDate);
+                    Sku replacementAtDate = replacementAsOf.sku();
+                    serviceInstanceRepository.switchSku(service.id(), replacement.id(), replacementAsOf.versionId());
+                    BigDecimal newPrice = PricingHelper.calculate(
+                            unitPrice(replacementAtDate, contractPrice), replacementAtDate.pricingType(), item);
+                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice, replacementAsOf.versionId());
                     switches.add(new SkuSwitchInfo(currentSku.name(), replacement.name(), newPrice));
                 } else {
                     // Не нашли замену — пересчитываем как есть, помечать будем на фронте
-                    BigDecimal newPrice = PricingHelper.calculate(currentSku.price(), currentSku.pricingType(), item);
-                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice);
+                    BigDecimal newPrice = PricingHelper.calculate(
+                            unitPrice(currentSku, contractPrice), currentSku.pricingType(), item);
+                    serviceInstanceRepository.updateCalculatedPrice(service.id(), newPrice, current.versionId());
                     switches.add(new SkuSwitchInfo(currentSku.name(), null, newPrice));
                 }
             }

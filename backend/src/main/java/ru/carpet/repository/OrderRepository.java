@@ -80,6 +80,41 @@ public class OrderRepository {
         try { isProblem            = rs.getBoolean("is_problem"); } catch (Exception ignored) {}
         try { problemReason        = rs.getString("problem_reason"); } catch (Exception ignored) {}
 
+        // V42: дата прайса. try/catch — как и у остальных поздних колонок:
+        // часть выборок тянет не весь o.*.
+        java.time.LocalDate priceDate = null;
+        try {
+            Date priceDateSql = rs.getDate("price_date");
+            priceDate = priceDateSql != null ? priceDateSql.toLocalDate() : null;
+        } catch (Exception ignored) {}
+
+        // V43: подтверждение клиента по дню выезда.
+        boolean clientConfirmed = false;
+        String clientConfirmedBy = null;
+        java.time.LocalDateTime clientConfirmedAt = null;
+        try { clientConfirmed   = rs.getBoolean("client_confirmed"); } catch (Exception ignored) {}
+        try { clientConfirmedBy = rs.getString("client_confirmed_by"); } catch (Exception ignored) {}
+
+        // V46: маркетинговые поля заказа.
+        String orderReason = null, orderReasonNote = null, cancelReasonCode = null;
+        try { orderReason      = rs.getString("order_reason"); } catch (Exception ignored) {}
+        try { orderReasonNote  = rs.getString("order_reason_note"); } catch (Exception ignored) {}
+        try { cancelReasonCode = rs.getString("cancel_reason_code"); } catch (Exception ignored) {}
+        Long contractId = null;
+        java.math.BigDecimal contractPricePerSqm = null;
+        java.time.LocalDateTime contractDeliveredAt = null;
+        try {
+            long v = rs.getLong("contract_id");
+            if (!rs.wasNull()) contractId = v;
+            contractPricePerSqm = rs.getBigDecimal("contract_price_per_sqm");
+            Timestamp deliveredTs = rs.getTimestamp("contract_delivered_at");
+            contractDeliveredAt = deliveredTs != null ? deliveredTs.toLocalDateTime() : null;
+        } catch (Exception ignored) {}
+        try {
+            Timestamp confirmedTs = rs.getTimestamp("client_confirmed_at");
+            clientConfirmedAt = confirmedTs != null ? confirmedTs.toLocalDateTime() : null;
+        } catch (Exception ignored) {}
+
         return new Order(
                 rs.getLong("id"),
                 clientId,
@@ -125,7 +160,17 @@ public class OrderRepository {
                 problemReason,
                 version,
                 rs.getTimestamp("created_at").toLocalDateTime(),
-                rs.getTimestamp("updated_at").toLocalDateTime()
+                rs.getTimestamp("updated_at").toLocalDateTime(),
+                priceDate,
+                clientConfirmed,
+                clientConfirmedBy,
+                clientConfirmedAt,
+                orderReason,
+                orderReasonNote,
+                cancelReasonCode,
+                contractId,
+                contractPricePerSqm,
+                contractDeliveredAt
         );
     };
 
@@ -151,6 +196,71 @@ public class OrderRepository {
                 .append(" LIMIT :limit OFFSET :offset");
 
         return jdbc.query(sql.toString(), params, ROW_MAPPER);
+    }
+
+    /**
+     * V46 (правка №3 от 13.09): плоские строки для выгрузки заказов в Excel.
+     *
+     * <p>Собираем на стороне базы: скидки, надбавки, стоимость доставки и
+     * признак «повторный клиент» живут в разных таблицах, и на фронте это
+     * означало бы запрос на каждый заказ. Каждое значение — в своей колонке,
+     * чтобы в Excel по ним можно было фильтровать и сортировать.
+     */
+    public List<Map<String, Object>> exportRows(OrderQuery query, int limit) {
+        Map<String, Object> params = new HashMap<>();
+        params.put("limit", limit);
+
+        StringBuilder sql = new StringBuilder("""
+            SELECT o.id,
+                   o.created_at,
+                   o.client_id,
+                   o.client_name,
+                   o.status,
+                   o.base_amount,
+                   o.total_amount,
+                   o.paid,
+                   o.payment_type,
+                   o.is_warranty,
+                   COALESCE(NULLIF(o.pickup_address, ''), NULLIF(o.delivery_address, ''), c.address) AS address,
+                   COALESCE(NULLIF(o.pickup_district, ''), NULLIF(o.delivery_district, ''), c.district) AS district,
+                   c.restart_status,
+                   c.source,
+                   c.source_note,
+                   o.order_reason,
+                   o.order_reason_note,
+                   o.cancel_reason_code,
+                   cr.name AS cancel_reason_name,
+                   o.cancellation_reason,
+                   -- «Повторный» = у клиента был заказ раньше этого (отменённые не в счёт).
+                   EXISTS (SELECT 1 FROM orders prev
+                            WHERE prev.client_id = o.client_id AND prev.id < o.id
+                              AND prev.status <> 'CANCELLED') AS is_repeat_client,
+                   -- Стоимость доставки: позиция с авто-услугой отвоза.
+                   COALESCE((SELECT SUM(oi.price) FROM order_items oi
+                              WHERE oi.order_id = o.id AND oi.status <> 'CANCELLED'
+                                AND EXISTS (SELECT 1 FROM order_item_services ois
+                                              JOIN skus s ON s.id = ois.sku_id
+                                             WHERE ois.order_item_id = oi.id
+                                               AND s.is_auto_add = TRUE
+                                               AND s.triggers_order_status = 'DELIVERED'
+                                               AND ois.status <> 'CANCELLED')), 0) AS delivery_price,
+                   (SELECT string_agg(om.modifier_name || ' (' || trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%)', ', ')
+                      FROM order_modifiers om WHERE om.order_id = o.id AND om.percent < 0) AS discounts,
+                   COALESCE((SELECT SUM(o.base_amount * om.percent / 100)
+                               FROM order_modifiers om WHERE om.order_id = o.id AND om.percent < 0), 0) AS discount_sum,
+                   (SELECT string_agg(om.modifier_name || ' (' || trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%)', ', ')
+                      FROM order_modifiers om WHERE om.order_id = o.id AND om.percent > 0) AS surcharges,
+                   COALESCE((SELECT SUM(o.base_amount * om.percent / 100)
+                               FROM order_modifiers om WHERE om.order_id = o.id AND om.percent > 0), 0) AS surcharge_sum
+              FROM orders o
+              LEFT JOIN clients c ON c.id = o.client_id
+              LEFT JOIN cancellation_reasons cr ON cr.code = o.cancel_reason_code
+             WHERE 1=1
+            """);
+
+        appendWhereClause(sql, params, query);
+        sql.append(" ORDER BY o.id LIMIT :limit");
+        return jdbc.queryForList(sql.toString(), params);
     }
 
     public long countAll(OrderQuery query) {
@@ -317,6 +427,13 @@ public class OrderRepository {
         if (Boolean.TRUE.equals(q.onlyWarranty())) {
             sql.append("AND o.is_warranty = TRUE ");
         }
+        // V44: заказы, где производство поправило размеры или материал ковра —
+        // по ним менялась цена, и оператору стоит их просмотреть отдельно.
+        if (Boolean.TRUE.equals(q.adjustedByProduction())) {
+            sql.append("AND EXISTS (SELECT 1 FROM order_item_adjustments a " +
+                       "             JOIN order_items oi ON oi.id = a.order_item_id " +
+                       "            WHERE oi.order_id = o.id AND a.source = 'PRODUCTION') ");
+        }
         // Район: заказ подходит, если совпал район забора ИЛИ доставки —
         // оператор ищет «что у нас в Красносельском», не разделяя направления.
         if (q.districts() != null && !q.districts().isEmpty()) {
@@ -370,6 +487,68 @@ public class OrderRepository {
                 "UPDATE orders SET status = :status, cancellation_reason = :reason, " +
                 "version = version + 1, updated_at = NOW() WHERE id = :id",
                 params
+        );
+    }
+
+    /**
+     * V43: подтверждение клиента по дню выезда. {@code by} — оператор, который
+     * дозвонился; при сбросе в «Уточнить» подпись и время затираем, чтобы в
+     * карточке не висело имя от старого подтверждения.
+     */
+    public void updateClientConfirmed(Long id, boolean confirmed, String by) {
+        jdbc.update("""
+            UPDATE orders
+               SET client_confirmed = :c,
+                   client_confirmed_by = CASE WHEN :c THEN :by ELSE NULL END,
+                   client_confirmed_at = CASE WHEN :c THEN NOW() ELSE NULL END,
+                   updated_at = NOW()
+             WHERE id = :id
+        """, new MapSqlParameterSource()
+                .addValue("c", confirmed)
+                .addValue("by", by)
+                .addValue("id", id));
+    }
+
+    /**
+     * V46: повод обращения по заказу (правка №3 от 13.09). Уточнение имеет
+     * смысл только у повода «Другой» — остальные говорят сами за себя.
+     */
+    public void updateOrderReason(Long id, String reason, String note) {
+        jdbc.update("""
+            UPDATE orders
+               SET order_reason = :reason,
+                   order_reason_note = CASE WHEN :reason = 'OTHER' THEN :note ELSE NULL END,
+                   updated_at = NOW()
+             WHERE id = :id
+        """, new MapSqlParameterSource()
+                .addValue("reason", reason)
+                .addValue("note", note)
+                .addValue("id", id));
+    }
+
+    /**
+     * ТЗ v2 (блок 6): договорная цена за м², зафиксированная на заказе при
+     * привязке к контракту. null — обычный заказ по прайсу.
+     */
+    public java.math.BigDecimal contractPricePerSqm(Long orderId) {
+        var rows = jdbc.queryForList(
+                "SELECT contract_price_per_sqm FROM orders WHERE id = :id", Map.of("id", orderId));
+        if (rows.isEmpty()) return null;
+        Object v = rows.get(0).get("contract_price_per_sqm");
+        return v == null ? null : new java.math.BigDecimal(String.valueOf(v));
+    }
+
+    /** V46: код причины отмены из справочника — пишется вместе со статусом CANCELLED. */
+    public void updateCancelReasonCode(Long id, String code) {
+        jdbc.update("UPDATE orders SET cancel_reason_code = :code, updated_at = NOW() WHERE id = :id",
+                new MapSqlParameterSource().addValue("code", code).addValue("id", id));
+    }
+
+    /** V42: перевести заказ на прайс другой даты (кнопка «Пересчитать по текущему прайсу»). */
+    public void updatePriceDate(Long id, java.time.LocalDate priceDate) {
+        jdbc.update(
+                "UPDATE orders SET price_date = :d, version = version + 1, updated_at = NOW() WHERE id = :id",
+                Map.of("d", priceDate, "id", id)
         );
     }
 

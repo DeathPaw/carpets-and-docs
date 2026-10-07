@@ -23,6 +23,11 @@ import ProfitabilityPage from './pages/ProfitabilityPage'
 import FeedbackPage from './pages/FeedbackPage'
 import UsersPage from './pages/UsersPage'
 import ExpensesPage from './pages/ExpensesPage'
+import PayrollPage from './pages/PayrollPage'
+import ContractsPage from './pages/ContractsPage'
+import ReportsPage from './pages/ReportsPage'
+import ImportPage from './pages/ImportPage'
+import OnsiteCleaningsPage from './pages/OnsiteCleaningsPage'
 import WorkerLoginPage from './pages/worker/WorkerLoginPage'
 import WorkerHomePage from './pages/worker/WorkerHomePage'
 import WorkerRoutePage from './pages/worker/WorkerRoutePage'
@@ -93,10 +98,20 @@ export default function App() {
               <Route path="audit-log"  element={<RequireSupervisor><AuditLogPage /></RequireSupervisor>} />
               <Route path="users"      element={<RequireSupervisor><UsersPage /></RequireSupervisor>} />
               <Route path="expenses"   element={<RequireSupervisor><ExpensesPage /></RequireSupervisor>} />
+              {/* ТЗ v2: ведомость и схемы оплаты — данные по деньгам сотрудников. */}
+              <Route path="payroll"    element={<RequireSupervisor><PayrollPage /></RequireSupervisor>} />
+              {/* ТЗ v2, блок 6: договоры юрлиц ведут админы — это условия и деньги. */}
+              <Route path="contracts"  element={<RequireAdmin><ContractsPage /></RequireAdmin>} />
+              {/* ТЗ v2, блок 7: отчёты с деньгами — только супервайзеру. */}
+              <Route path="reports"    element={<RequireSupervisor><ReportsPage /></RequireSupervisor>} />
+              {/* ТЗ v2, блок 8: загрузка пакетов меняет данные массово — только админам. */}
+              <Route path="import"     element={<RequireAdmin><ImportPage /></RequireAdmin>} />
               {/* Все операторы и выше */}
               <Route path="clients"    element={<ClientsPage />} />
               {/* V33: заявки на закупку ведёт обычный оператор — не админский раздел. */}
               <Route path="supply"     element={<SupplyRequestsPage />} />
+              {/* ТЗ v2, блок 5: выездные чистки оформляет обычный оператор. */}
+              <Route path="onsite"     element={<OnsiteCleaningsPage />} />
             </Route>
           </Routes>
         </BrowserRouter>

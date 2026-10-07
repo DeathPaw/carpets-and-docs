@@ -116,7 +116,10 @@ public class OrderItemServiceInstanceService {
     public OrderItemServiceInstance addService(Long orderItemId, Long skuId) {
         OrderItem orderItem = orderItemRepository.findById(orderItemId)
                 .orElseThrow(() -> new EntityNotFoundException("OrderItem not found: " + orderItemId));
-        Sku sku = skuService.findById(skuId);
+        // V42: цена — по прайсу на дату заказа. Услуга, добавленная в старый
+        // заказ сегодня, считается по тем ценам, которые называли клиенту.
+        SkuService.SkuAsOf asOf = skuService.findAsOf(skuId, orderItemService.priceDateOfItem(orderItemId));
+        Sku sku = asOf.sku();
 
         // Запрет дублей: одну и ту же SKU нельзя повесить на позицию дважды.
         boolean alreadyExists = repository.findByOrderItemId(orderItemId).stream()
@@ -126,8 +129,10 @@ public class OrderItemServiceInstanceService {
             throw new BusinessRuleException("Эта услуга уже добавлена к позиции");
         }
 
-        BigDecimal price = PricingHelper.calculate(sku.price(), sku.pricingType(), orderItem);
-        Long newId = repository.saveOne(orderItemId, skuId, price);
+        BigDecimal price = PricingHelper.calculate(
+                OrderItemService.unitPrice(sku, orderItemService.contractPriceOfItem(orderItemId)),
+                sku.pricingType(), orderItem);
+        Long newId = repository.saveOne(orderItemId, skuId, price, asOf.versionId());
         orderItemService.recalculateItemPrice(orderItemId);
         return repository.findById(newId).orElseThrow();
     }

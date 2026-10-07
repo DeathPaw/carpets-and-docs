@@ -38,6 +38,41 @@ public class SkuService {
         return repository.findById(id).orElseThrow(() -> new EntityNotFoundException("Sku not found: " + id));
     }
 
+    /**
+     * SKU с ценой по прайсу на дату + id версии прайса, из которой эта цена взята.
+     *
+     * @param versionId версия, которую надо записать в услугу заказа —
+     *                  по ней в карточке видно, по какому прайсу считали
+     */
+    public record SkuAsOf(Sku sku, Long versionId) {}
+
+    /**
+     * SKU по состоянию прайса на дату (V42, историческая цена).
+     *
+     * <p>Цена, тип расчёта, себестоимость и порог бесплатной доставки берутся из
+     * версии, действовавшей на эту дату; правила применимости (атрибуты,
+     * lifecycle-флаги, активность) — из текущего мастера: они не про деньги, а
+     * про то, к чему услуга крепится.
+     *
+     * <p>{@code priceDate == null} или версий нет — возвращаем текущий SKU.
+     */
+    public SkuAsOf findAsOf(Long skuId, java.time.LocalDate priceDate) {
+        Sku master = findById(skuId);
+        if (priceDate == null) return new SkuAsOf(master, master.currentVersionId());
+        var version = repository.priceAsOf(skuId, priceDate).orElse(null);
+        if (version == null) return new SkuAsOf(master, master.currentVersionId());
+        Sku atDate = new Sku(
+                master.id(), master.groupId(), master.groupName(),
+                version.name() != null ? version.name() : master.name(),
+                version.pricingType() != null ? version.pricingType() : master.pricingType(),
+                version.price(), version.costPrice(),
+                master.isAutoAdd(), version.freeThreshold(),
+                master.isActive(), master.isDeleted(), master.currentVersionId(),
+                master.autoCompleteOnStatus(), master.triggersOrderStatus(), master.excludeFromStatusCalc(),
+                master.createdAt(), master.updatedAt(), master.attributes());
+        return new SkuAsOf(atDate, version.versionId());
+    }
+
     @Transactional
     public Sku create(Long groupId, String name, String pricingType, BigDecimal price,
                       BigDecimal costPrice, boolean isAutoAdd, BigDecimal freeThreshold,

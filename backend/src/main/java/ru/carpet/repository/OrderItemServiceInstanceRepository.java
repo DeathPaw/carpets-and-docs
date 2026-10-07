@@ -91,14 +91,26 @@ public class OrderItemServiceInstanceRepository {
      * заказа — там цена уже может быть посчитана с учётом free_threshold).
      */
     public Long saveOne(Long orderItemId, Long skuId, java.math.BigDecimal price) {
+        return saveOne(orderItemId, skuId, price, null);
+    }
+
+    /**
+     * V42: {@code versionId} — версия прайса, по которой посчитана цена.
+     * null — берём текущую версию SKU (новый заказ считается по свежему прайсу).
+     */
+    public Long saveOne(Long orderItemId, Long skuId, java.math.BigDecimal price, Long versionId) {
         return jdbc.queryForObject("""
             INSERT INTO order_item_services
               (order_item_id, sku_id, sku_version_id, status, price, is_manual_price)
             VALUES (:oid, :sku,
-                    (SELECT current_version_id FROM skus WHERE id = :sku),
+                    COALESCE(:ver, (SELECT current_version_id FROM skus WHERE id = :sku)),
                     'CREATED', :p, FALSE)
             RETURNING id
-        """, Map.of("oid", orderItemId, "sku", skuId, "p", price), Long.class);
+        """, new MapSqlParameterSource()
+                .addValue("oid", orderItemId)
+                .addValue("sku", skuId)
+                .addValue("p", price)
+                .addValue("ver", versionId), Long.class);
     }
 
     /** V11: назначить исполнителя на услугу (для auto-add lifecycle). */
@@ -177,13 +189,42 @@ public class OrderItemServiceInstanceRepository {
 
     /** V11: подменить SKU на услуге (auto-switch при смене размеров). */
     public void switchSku(Long serviceId, Long newSkuId) {
+        switchSku(serviceId, newSkuId, null);
+    }
+
+    /**
+     * V42: подмена SKU с явной версией прайса. Раньше сюда всегда вставлялась
+     * текущая версия — и заказ, посчитанный по старому прайсу, после автозамены
+     * услуги молча переезжал на новые цены.
+     */
+    public void switchSku(Long serviceId, Long newSkuId, Long versionId) {
         jdbc.update("""
             UPDATE order_item_services
                SET sku_id = :sku,
-                   sku_version_id = (SELECT current_version_id FROM skus WHERE id = :sku),
+                   sku_version_id = COALESCE(:ver, (SELECT current_version_id FROM skus WHERE id = :sku)),
                    updated_at = NOW()
              WHERE id = :id
-        """, Map.of("id", serviceId, "sku", newSkuId));
+        """, new MapSqlParameterSource()
+                .addValue("id", serviceId)
+                .addValue("sku", newSkuId)
+                .addValue("ver", versionId));
+    }
+
+    /**
+     * V42: цена + версия прайса одной записью. Нужна там, где услуга остаётся
+     * прежней, а меняется прайс, по которому её считают.
+     */
+    public void updateCalculatedPrice(Long id, java.math.BigDecimal price, Long versionId) {
+        jdbc.update("""
+            UPDATE order_item_services
+               SET price = :price,
+                   sku_version_id = COALESCE(:ver, sku_version_id),
+                   updated_at = NOW()
+             WHERE id = :id AND is_manual_price = FALSE
+        """, new MapSqlParameterSource()
+                .addValue("price", price)
+                .addValue("ver", versionId)
+                .addValue("id", id));
     }
 
     public java.math.BigDecimal sumPriceByOrderItemId(Long orderItemId) {

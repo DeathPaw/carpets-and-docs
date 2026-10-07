@@ -52,7 +52,13 @@ public record OrderQuery(
         /** Район забора или доставки. */
         List<String> districts,
         /** V19: фильтр только по гарантийным заказам (из аналитики, клик по «Гарантийных»). */
-        Boolean onlyWarranty
+        Boolean onlyWarranty,
+        /**
+         * V44 (правка №2 от 17.09): только заказы, где производство поправило
+         * размеры или материал ковра. Оператору нужно пройтись именно по ним —
+         * там менялась цена, и это повод созвониться с клиентом.
+         */
+        Boolean adjustedByProduction
 ) {
     public static Builder builder() { return new Builder(); }
 
@@ -78,6 +84,7 @@ public record OrderQuery(
         private String search;
         private List<String> districts;
         private Boolean onlyWarranty;
+        private Boolean adjustedByProduction;
 
         public Builder statuses(List<OrderStatus> v) { this.statuses = v; return this; }
         public Builder status(OrderStatus v) { this.statuses = v == null ? null : List.of(v); return this; }
@@ -99,11 +106,13 @@ public record OrderQuery(
         public Builder search(String v) { this.search = v; return this; }
         public Builder districts(List<String> v) { this.districts = v; return this; }
         public Builder onlyWarranty(Boolean v) { this.onlyWarranty = v; return this; }
+        public Builder adjustedByProduction(Boolean v) { this.adjustedByProduction = v; return this; }
 
         public OrderQuery build() {
             return new OrderQuery(statuses, dateFrom, dateTo, dateField, legacyId, orderId,
                     paymentType, clientPhone, clientName, clientId, sortBy, sortDir,
-                    noCoords, overdueActual, badAddress, stuck, search, districts, onlyWarranty);
+                    noCoords, overdueActual, badAddress, stuck, search, districts, onlyWarranty,
+                    adjustedByProduction);
         }
     }
 }

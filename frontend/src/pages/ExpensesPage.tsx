@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react'
 import { useToast } from '../components/Toast'
 import client from '../api/client'
+import CostRegistry from '../components/expenses/CostRegistry'
+import CostPerMeterReport from '../components/expenses/CostPerMeterReport'
 
 interface ExpenseCategory { id: number; name: string; is_fixed: boolean; default_amount: number | null; sort_order: number }
 interface MonthlyExpense { id: number; category_id: number; category_name: string; year_month: string; amount: number; comment: string }
@@ -11,6 +13,8 @@ export default function ExpensesPage() {
   const [yearMonth, setYearMonth] = useState(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
   const [categories, setCategories] = useState<ExpenseCategory[]>([])
   const [expenses, setExpenses] = useState<MonthlyExpense[]>([])
+  /** ТЗ v2: два новых реестра и отчёт себестоимости рядом со старым помесячным учётом. */
+  const [tab, setTab] = useState<'MONTHLY' | 'MATERIAL' | 'OTHER' | 'COST'>('MATERIAL')
   const [newCatName, setNewCatName] = useState('')
   const [newCatFixed, setNewCatFixed] = useState(false)
   const [newCatDefault, setNewCatDefault] = useState('')
@@ -70,6 +74,31 @@ export default function ExpensesPage() {
   return (
     <div>
       <h1>Расходы</h1>
+      {/* ТЗ v2: реестры затрат и себестоимость живут здесь же, рядом со старым
+          помесячным учётом по категориям — он остаётся для отчёта P&L.
+          Одну и ту же затрату вести в обоих местах нельзя: в себестоимость
+          попадают только записи из реестров. */}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 16 }}>
+        {([
+          ['MONTHLY', 'Месяц по категориям'],
+          ['MATERIAL', 'Материальные закупки'],
+          ['OTHER', 'Прочие затраты'],
+          ['COST', 'Себестоимость'],
+        ] as const).map(([key, label]) => (
+          <button
+            key={key}
+            className={tab === key ? 'btn-primary' : 'btn-secondary'}
+            onClick={() => setTab(key)}
+          >{label}</button>
+        ))}
+      </div>
+
+      {tab === 'MATERIAL' && <CostRegistry kind="MATERIAL" categories={categories} />}
+      {tab === 'OTHER' && <CostRegistry kind="OTHER" categories={categories} />}
+      {tab === 'COST' && <CostPerMeterReport />}
+
+      {tab === 'MONTHLY' && (
+      <>
       <div style={{ display: 'flex', gap: 12, marginBottom: 16, alignItems: 'center' }}>
         <label>Месяц: <input type="month" value={yearMonth} onChange={e => setYearMonth(e.target.value)} /></label>
       </div>
@@ -117,6 +146,8 @@ export default function ExpensesPage() {
           <button className="btn-primary" onClick={createCategory}>Добавить</button>
         </div>
       </div>
+      </>
+      )}
     </div>
   )
 }

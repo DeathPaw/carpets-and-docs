@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier, getClientEvents, addClientEvent } from '../api/clients'
 import { getPriceModifiers } from '../api/references'
 import { useToast } from '../components/Toast'
@@ -7,8 +7,11 @@ import PageFilterBar, { pageActionBtn } from '../components/PageFilterBar'
 import { getDistricts } from '../api/districts'
 import { formatPhone } from '../components/PhoneInput'
 import ClientFormFields, { type ClientFormState, emptyClientForm, validateClientForm } from '../components/ClientFormFields'
+import ClientAnalyticsPanel from '../components/clients/ClientAnalyticsPanel'
 import { formatOrderNumber } from '../utils/format'
 import type { Client, Order, CreateClientRequest } from '../types'
+import { contractsApi, CONTRACT_KIND_LABELS } from '../api/contracts'
+import type { Contract } from '../api/contracts'
 
 function CreateClientModal({
   onClose,
@@ -37,6 +40,11 @@ function CreateClientModal({
           comment: editClient.comment || '',
           lat: editClient.lat,
           lon: editClient.lon,
+          restart_status: editClient.restart_status || '',
+          source: editClient.source || '',
+          source_note: editClient.source_note || '',
+          gender: editClient.gender || '',
+          age: editClient.age != null ? String(editClient.age) : '',
         }
       : emptyClientForm()
   )
@@ -88,6 +96,12 @@ function CreateClientModal({
         comment: form.comment || undefined,
         lat: form.lat,
         lon: form.lon,
+        // V46: пустая строка в селекте = «не заполнено», в базе пусть будет null.
+        restart_status: (form.restart_status || null) as CreateClientRequest['restart_status'],
+        source: (form.source || null) as CreateClientRequest['source'],
+        source_note: form.source === 'OTHER' ? (form.source_note || null) : null,
+        gender: (form.gender || null) as CreateClientRequest['gender'],
+        age: form.age ? Number(form.age) : null,
         ...flags,
       }
       const client = editClient
@@ -279,12 +293,19 @@ function ClientCardModal({
   onShowOrders: (c: Client) => void
 }) {
   const [clientMods, setClientMods] = useState<import('../types').PriceModifier[]>([])
+  /** ТЗ v2, блок 6: у юрлица в карточке видны его договоры и их выполнение. */
+  const [contracts, setContracts] = useState<Contract[]>([])
   const [events, setEvents] = useState<{id: number, client_id: number, event_type: string, description: string, created_at: string}[]>([])
   const [newNote, setNewNote] = useState('')
 
   useEffect(() => {
     getClientModifiers(client.id).then(setClientMods).catch(() => {})
     getClientEvents(client.id).then(evts => setEvents(evts.slice(0, 10))).catch(() => {})
+    if (client.client_type === 'LEGAL_ENTITY') {
+      contractsApi.list({ clientId: client.id }).then(setContracts).catch(() => setContracts([]))
+    } else {
+      setContracts([])
+    }
   }, [client.id])
 
   const handleAddNote = () => {
@@ -368,6 +389,38 @@ function ClientCardModal({
           </div>
         )}
 
+        {isLegal && (
+          <div style={{ marginTop: 16 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <strong>Контракты</strong>
+              <Link to="/contracts" onClick={onClose} style={{ fontSize: 'var(--font-sm)' }}>
+                Перейти в реестр →
+              </Link>
+            </div>
+            {contracts.length === 0 ? (
+              <div style={{ color: '#999', fontSize: 'var(--font-sm)', marginTop: 4 }}>Контрактов нет</div>
+            ) : (
+              <table style={{ width: '100%', fontSize: 'var(--font-sm)', marginTop: 6 }}>
+                <thead>
+                  <tr><th>Номер</th><th>Вид</th><th>Срок</th><th>План, м²</th><th>Цена, ₽/м²</th><th>Статус</th></tr>
+                </thead>
+                <tbody>
+                  {contracts.map(c => (
+                    <tr key={c.id}>
+                      <td>№ {c.number}</td>
+                      <td>{CONTRACT_KIND_LABELS[c.kind]}</td>
+                      <td>{c.signed_on}{c.expires_on ? ` — ${c.expires_on}` : ' — бессрочно'}</td>
+                      <td>{c.planned_sqm != null ? Number(c.planned_sqm).toLocaleString('ru') : '—'}</td>
+                      <td>{Number(c.price_per_sqm).toLocaleString('ru')}</td>
+                      <td>{c.is_active ? 'Действует' : 'В архиве'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        )}
+
         {/* Client Events */}
         <div style={{ marginTop: 16 }}>
           <strong>События клиента</strong>
@@ -414,7 +467,9 @@ export default function ClientsPage() {
   const [viewClient, setViewClient] = useState<Client | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [searchTimeout, setSearchTimeout] = useState<ReturnType<typeof setTimeout> | null>(null)
-  const [tab, setTab] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY'>('INDIVIDUAL')
+  // ANALYTICS — портрет базы (правки №1 и №2 от 13.09): свой набор фильтров,
+  // агрегаты по заказам и выгрузка отобранного сегмента.
+  const [tab, setTab] = useState<'INDIVIDUAL' | 'LEGAL_ENTITY' | 'ANALYTICS'>('INDIVIDUAL')
   // V19 (#5): раздельные фильтры — имя, телефон, № заказа.
   const [orderIdFilter, setOrderIdFilter] = useState('')
   // Район — клиентская фильтрация: список клиентов грузится целиком.
@@ -601,11 +656,22 @@ export default function ClientsPage() {
             >
               Юридические лица ({clients.filter(c => c.client_type === 'LEGAL_ENTITY').length})
             </button>
+            {/* Правки №1 и №2 (13.09): портрет базы — кто наши клиенты, по
+                районам, источникам и скидкам, с выгрузкой отобранного сегмента. */}
+            <button
+              className={tab === 'ANALYTICS' ? 'btn-primary' : 'btn-secondary'}
+              onClick={() => setTab('ANALYTICS')}
+              style={{ marginLeft: 'auto' }}
+            >
+              Портрет базы
+            </button>
           </div>
         }
       />
 
-      {loading ? (
+      {tab === 'ANALYTICS' ? (
+        <ClientAnalyticsPanel districtNames={districtNames} />
+      ) : loading ? (
         <div className="loading">Загрузка...</div>
       ) : tab === 'INDIVIDUAL' ? renderIndividualsTable(filtered) : renderLegalTable(filtered)}
 

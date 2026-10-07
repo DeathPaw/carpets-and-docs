@@ -138,6 +138,32 @@ public class OrderItemRepository {
         );
     }
 
+    /**
+     * V50: отметка «работа по ковру закончена» — база для себестоимости на метр.
+     *
+     * <p>Ставим при переходе позиции в DONE и снимаем при откате: метры месяца
+     * считаются именно по этой дате, и откатанная позиция не должна оставаться
+     * в базе распределения. Повторный переход в DONE дату не сдвигает —
+     * иначе правка соседней услуги переносила бы ковёр в другой месяц.
+     */
+    public void updateCompletedAt(Long id, boolean done) {
+        jdbc.update(done
+                ? "UPDATE order_items SET completed_at = COALESCE(completed_at, NOW()) WHERE id = :id"
+                : "UPDATE order_items SET completed_at = NULL WHERE id = :id",
+                Map.of("id", id));
+    }
+
+    /**
+     * V44: смена типа/материала ковра (правка №2 от 17.09). Цены услуг после
+     * этого пересчитывает сервис — от типа зависит, какая услуга применима.
+     */
+    public void updateItemType(Long id, Long itemTypeId) {
+        jdbc.update(
+                "UPDATE order_items SET item_type_id = :type, version = version + 1, updated_at = NOW() WHERE id = :id",
+                Map.of("type", itemTypeId, "id", id)
+        );
+    }
+
     public void updateDimensions(Long id, BigDecimal length, BigDecimal width, BigDecimal weight,
                                   BigDecimal area, BigDecimal runningMeters) {
         var params = new MapSqlParameterSource()

@@ -2,7 +2,8 @@ import client from './client'
 import type {
   Order, OrderItem, OrderStatusHistory,
   CreateOrderRequest, AddOrderItemRequest, UpdateOrderItemDimensionsRequest,
-  UpdateStatusRequest, PayOrderRequest, PreliminaryPaymentType
+  UpdateStatusRequest, PayOrderRequest, PreliminaryPaymentType, OrderItemAdjustment,
+  OrderRefund, RefundKind
 } from '../types'
 
 // Orders
@@ -39,6 +40,8 @@ export interface OrdersQuery {
   districts?: string[]
   /** V19: только гарантийные заказы (для аналитики). */
   onlyWarranty?: boolean
+  /** V44: только заказы, где производство поправило размеры или материал ковра. */
+  adjustedByProduction?: boolean
 }
 
 export const getOrdersQuery = (q: OrdersQuery = {}) => {
@@ -66,10 +69,77 @@ export const getOrdersQuery = (q: OrdersQuery = {}) => {
   if (q.search) params.append('search', q.search)
   if (q.districts && q.districts.length > 0) q.districts.forEach(d => params.append('districts', d))
   if (q.onlyWarranty) params.append('onlyWarranty', 'true')
+  if (q.adjustedByProduction) params.append('adjustedByProduction', 'true')
   params.append('page', String(q.page ?? 0))
   params.append('size', String(q.size ?? 20))
 
   return client.get<{content: Order[], total_elements: number, page: number, size: number}>(`/api/orders?${params.toString()}`).then(r => r.data)
+}
+
+/**
+ * V46 (правка №3 от 13.09): строки выгрузки заказов в Excel.
+ *
+ * Бэкенд отдаёт всё сразу и плоско — маркетинговые поля клиента, повод,
+ * причину отмены, скидки, надбавки и доставку. Собирать это на фронте
+ * означало бы запрос на каждый заказ.
+ *
+ * Фильтры — те же, что у списка; постранично тянуть не нужно.
+ */
+export const exportOrders = (q: OrdersQuery = {}) => {
+  const params = new URLSearchParams()
+  if (q.statuses && q.statuses.length > 0) {
+    q.statuses.forEach(s => params.append('statuses', s))
+  } else if (q.status) {
+    params.append('status', q.status)
+  }
+  if (q.dateFrom) params.append('dateFrom', q.dateFrom)
+  if (q.dateTo) params.append('dateTo', q.dateTo)
+  if (q.dateField) params.append('dateField', q.dateField)
+  if (q.legacyId) params.append('legacyId', q.legacyId.toString())
+  if (q.paymentType) params.append('paymentType', q.paymentType)
+  if (q.orderId) params.append('orderId', q.orderId.toString())
+  if (q.clientPhone) params.append('clientPhone', q.clientPhone)
+  if (q.clientName) params.append('clientName', q.clientName)
+  if (q.clientId) params.append('clientId', q.clientId.toString())
+  if (q.noCoords) params.append('noCoords', 'true')
+  if (q.overdueActual) params.append('overdueActual', 'true')
+  if (q.badAddress) params.append('badAddress', 'true')
+  if (q.stuck) params.append('stuck', 'true')
+  if (q.search) params.append('search', q.search)
+  if (q.districts && q.districts.length > 0) q.districts.forEach(d => params.append('districts', d))
+  if (q.onlyWarranty) params.append('onlyWarranty', 'true')
+  if (q.adjustedByProduction) params.append('adjustedByProduction', 'true')
+  return client.get<OrderExportRow[]>(`/api/orders/export?${params.toString()}`).then(r => r.data)
+}
+
+/** Строка выгрузки заказов — собирается запросом в OrderRepository.exportRows. */
+export interface OrderExportRow {
+  id: number
+  created_at: string
+  client_id: number | null
+  client_name: string
+  status: string
+  base_amount: number
+  total_amount: number
+  paid: boolean
+  payment_type: string | null
+  is_warranty: boolean
+  address: string | null
+  district: string | null
+  restart_status: string | null
+  source: string | null
+  source_note: string | null
+  order_reason: string | null
+  order_reason_note: string | null
+  cancel_reason_code: string | null
+  cancel_reason_name: string | null
+  cancellation_reason: string | null
+  is_repeat_client: boolean
+  delivery_price: number
+  discounts: string | null
+  discount_sum: number
+  surcharges: string | null
+  surcharge_sum: number
 }
 
 // Старая позиционная сигнатура — оставлена для обратной совместимости.
@@ -133,6 +203,40 @@ export const updateOrderItemDescription = (orderId: number, itemId: number, data
 // Order Item Dimensions
 export const updateOrderItemDimensions = (orderId: number, itemId: number, data: UpdateOrderItemDimensionsRequest) =>
   client.patch(`/api/orders/${orderId}/items/${itemId}/dimensions`, data).then(r => r.data)
+
+/** V46: основной повод обращения по заказу (правка №3 от 13.09). */
+export const setOrderReason = (id: number, reason: string | null, note?: string | null) =>
+  client.patch<Order>(`/api/orders/${id}/reason`, {
+    order_reason: reason,
+    order_reason_note: note ?? null,
+  }).then(r => r.data)
+
+/** V45: возвраты и компенсации по заказу (правка №3 от 19.09). */
+export const getOrderRefunds = (id: number) =>
+  client.get<OrderRefund[]>(`/api/orders/${id}/refunds`).then(r => r.data)
+
+export const addOrderRefund = (id: number, data: {
+  kind: RefundKind
+  amount: number
+  reason: string
+  comment?: string | null
+  occurred_on?: string | null
+}) => client.post<OrderRefund>(`/api/orders/${id}/refunds`, data).then(r => r.data)
+
+export const deleteOrderRefund = (id: number, refundId: number) =>
+  client.delete(`/api/orders/${id}/refunds/${refundId}`).then(r => r.data)
+
+/** V44: что производство поправило в коврах заказа (правка №2 от 17.09). */
+export const getOrderAdjustments = (id: number) =>
+  client.get<OrderItemAdjustment[]>(`/api/orders/${id}/adjustments`).then(r => r.data)
+
+/** V43: отметить, что клиент подтвердил день выезда (или вернуть в «Уточнить»). */
+export const setClientConfirmed = (id: number, confirmed: boolean) =>
+  client.patch<Order>(`/api/orders/${id}/client-confirmed`, { confirmed }).then(r => r.data)
+
+/** V42: перевести заказ на сегодняшний прайс и пересчитать цены услуг. */
+export const repriceOrder = (id: number) =>
+  client.post<Order>(`/api/orders/${id}/reprice`).then(r => r.data)
 
 export const duplicateOrder = (id: number) =>
   client.post<Order>(`/api/orders/${id}/duplicate`).then(r => r.data)

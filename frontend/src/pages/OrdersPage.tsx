@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
-import { getOrdersQuery } from '../api/orders'
+import { getOrdersQuery, exportOrders } from '../api/orders'
 import { getFilteredItems } from '../api/services'
 import { useToast } from '../components/Toast'
 import MultiSelectFilter from '../components/MultiSelectFilter'
@@ -9,7 +9,7 @@ import PageFilterBar, { pageActionBtn } from '../components/PageFilterBar'
 import { getDistricts } from '../api/districts'
 import CreateOrderModal from '../components/orders/CreateOrderModal'
 import { useAuth } from '../auth/AuthContext'
-import type { Order, OrderStatus, OrderItemPositioned } from '../types'
+import type { Order, OrderStatus, OrderItemPositioned, PaymentType } from '../types'
 
 // Подписи и список статусов теперь общие — см. constants/statuses.ts
 import {
@@ -17,6 +17,9 @@ import {
   ALL_ORDER_STATUSES as ALL_STATUSES,
   PAYMENT_LABELS,
   ITEM_STATUS_LABELS,
+  RESTART_STATUS_LABELS,
+  CLIENT_SOURCE_LABELS,
+  ORDER_REASON_LABELS,
 } from '../constants/statuses'
 import { formatOrderNumber } from '../utils/format'
 
@@ -73,6 +76,13 @@ export default function OrdersPage() {
   // V19: фильтр «только гарантийные» — переход из аналитики (клик по числу гарантийных).
   const [onlyWarrantyFilter, setOnlyWarrantyFilter] = useState<boolean>(
     searchParams.get('onlyWarranty') === 'true'
+  )
+  /**
+   * Правка №2 (17.09): заказы, где производство поправило размеры или материал.
+   * По ним пересчитывалась цена — оператору нужно пройтись именно по этим.
+   */
+  const [adjustedFilter, setAdjustedFilter] = useState<boolean>(
+    searchParams.get('adjusted') === 'true'
   )
   // «Висящие» — переход с плитки на Главной. Критерий считает бэк, чтобы число
   // на плитке и число в списке совпадали.
@@ -180,53 +190,96 @@ export default function OrdersPage() {
   const exportXLSX = async () => {
     setExporting(true)
     try {
-    // Выгружаем ВСЕ страницы под текущими фильтрами, а не только видимую.
-    // Раньше в файл попадали только 20 строк текущей страницы, и оператору
-    // приходилось экспортировать каждую страницу отдельно.
-    const CHUNK = 500
-    const all: Order[] = []
-    for (let p = 0; ; p++) {
-      const chunk = await getOrdersQuery(buildQuery(p, CHUNK))
-      all.push(...chunk.content)
-      if (chunk.content.length < CHUNK) break
-      if (all.length >= 50000) break  // предохранитель от бесконечного цикла
-    }
+    // Все заказы под текущими фильтрами одним запросом: бэкенд собирает
+    // маркетинговые поля, скидки, надбавки и доставку сам (правка №3 от 13.09).
+    // Раньше фронт тянул заказы постранично и знал только их базовые поля.
+    const all = await exportOrders(buildQuery(0, 0))
 
-    const headers = ['Номер', 'Клиент', 'Статус', 'Сумма, ₽', 'Оплачен', 'Тип оплаты', 'Гарантийный', 'Создан']
+    // Каждое значение — в своей колонке: файл читают фильтрами и сводными
+    // таблицами в Excel и Google Sheets.
+    const headers = [
+      'ID заказа', 'Номер', 'Создан', 'ID клиента', 'Клиент', 'Новый / повторный',
+      'Статус относительно перезапуска', 'Источник обращения', 'Уточнение источника',
+      'Повод обращения', 'Уточнение повода',
+      'Статус', 'Причина отмены', 'Комментарий к отмене',
+      'Адрес', 'Район',
+      'Сумма позиций, ₽', 'Вид скидки', 'Сумма скидки, ₽',
+      'Виды надбавок', 'Сумма надбавок, ₽', 'Доставка, ₽', 'ИТОГО, ₽',
+      'Оплачен', 'Тип оплаты', 'Гарантийный',
+    ]
     const rows = all.map(o => [
       o.id,
+      formatOrderNumber(o.id, o.created_at),
+      new Date(o.created_at),
+      o.client_id ?? '',
       o.client_name,
-      STATUS_LABELS[o.status] || o.status,
+      o.is_repeat_client ? 'Повторный' : 'Новый',
+      o.restart_status ? (RESTART_STATUS_LABELS[o.restart_status] || o.restart_status) : '',
+      o.source ? (CLIENT_SOURCE_LABELS[o.source] || o.source) : '',
+      o.source_note ?? '',
+      o.order_reason ? (ORDER_REASON_LABELS[o.order_reason] || o.order_reason) : '',
+      o.order_reason_note ?? '',
+      STATUS_LABELS[o.status as OrderStatus] || o.status,
+      o.cancel_reason_name ?? '',
+      o.cancellation_reason ?? '',
+      o.address ?? '',
+      o.district ?? '',
+      Number(o.base_amount),
+      o.discounts ?? '',
+      Number(o.discount_sum),
+      o.surcharges ?? '',
+      Number(o.surcharge_sum),
+      Number(o.delivery_price),
       Number(o.total_amount),
       o.paid ? 'Да' : 'Нет',
-      o.paid ? ((o.payment_type ? PAYMENT_LABELS[o.payment_type] : '') ?? '') : '',
+      o.paid ? ((o.payment_type ? PAYMENT_LABELS[o.payment_type as PaymentType] : '') ?? '') : '',
       o.is_warranty ? 'Да' : '',
-      new Date(o.created_at),
     ])
     // cellDates: без него aoa_to_sheet кладёт Date как строку, а последующее
     // проставление t='d' заставляло Excel читать её как серийный номер 0 —
     // отсюда одинаковая дата 01.01.1900 во всех строках выгрузки.
     const ws = XLSX.utils.aoa_to_sheet([headers, ...rows], { cellDates: true })
 
-    // \u0428\u0438\u0440\u0438\u043D\u044B \u043A\u043E\u043B\u043E\u043D\u043E\u043A (\u0432 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u0445)
+    // \u0428\u0438\u0440\u0438\u043D\u044B \u043A\u043E\u043B\u043E\u043D\u043E\u043A (\u0432 \u0441\u0438\u043C\u0432\u043E\u043B\u0430\u0445) \u2014 \u043F\u043E \u043F\u043E\u0440\u044F\u0434\u043A\u0443 headers \u0432\u044B\u0448\u0435.
     ws['!cols'] = [
-      { wch: 8 },   // \u041D\u043E\u043C\u0435\u0440
-      { wch: 32 },  // \u041A\u043B\u0438\u0435\u043D\u0442
+      { wch: 9 },   // ID \u0437\u0430\u043A\u0430\u0437\u0430
+      { wch: 20 },  // \u041D\u043E\u043C\u0435\u0440
+      { wch: 12 },  // \u0421\u043E\u0437\u0434\u0430\u043D
+      { wch: 10 },  // ID \u043A\u043B\u0438\u0435\u043D\u0442\u0430
+      { wch: 30 },  // \u041A\u043B\u0438\u0435\u043D\u0442
+      { wch: 16 },  // \u041D\u043E\u0432\u044B\u0439 / \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u044B\u0439
+      { wch: 32 },  // \u0421\u0442\u0430\u0442\u0443\u0441 \u043E\u0442\u043D\u043E\u0441\u0438\u0442\u0435\u043B\u044C\u043D\u043E \u043F\u0435\u0440\u0435\u0437\u0430\u043F\u0443\u0441\u043A\u0430
+      { wch: 28 },  // \u0418\u0441\u0442\u043E\u0447\u043D\u0438\u043A \u043E\u0431\u0440\u0430\u0449\u0435\u043D\u0438\u044F
+      { wch: 24 },  // \u0423\u0442\u043E\u0447\u043D\u0435\u043D\u0438\u0435 \u0438\u0441\u0442\u043E\u0447\u043D\u0438\u043A\u0430
+      { wch: 26 },  // \u041F\u043E\u0432\u043E\u0434 \u043E\u0431\u0440\u0430\u0449\u0435\u043D\u0438\u044F
+      { wch: 24 },  // \u0423\u0442\u043E\u0447\u043D\u0435\u043D\u0438\u0435 \u043F\u043E\u0432\u043E\u0434\u0430
       { wch: 16 },  // \u0421\u0442\u0430\u0442\u0443\u0441
-      { wch: 12 },  // \u0421\u0443\u043C\u043C\u0430
+      { wch: 28 },  // \u041F\u0440\u0438\u0447\u0438\u043D\u0430 \u043E\u0442\u043C\u0435\u043D\u044B
+      { wch: 30 },  // \u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u043E\u0442\u043C\u0435\u043D\u0435
+      { wch: 40 },  // \u0410\u0434\u0440\u0435\u0441
+      { wch: 18 },  // \u0420\u0430\u0439\u043E\u043D
+      { wch: 14 },  // \u0421\u0443\u043C\u043C\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u0439
+      { wch: 26 },  // \u0412\u0438\u0434 \u0441\u043A\u0438\u0434\u043A\u0438
+      { wch: 14 },  // \u0421\u0443\u043C\u043C\u0430 \u0441\u043A\u0438\u0434\u043A\u0438
+      { wch: 26 },  // \u0412\u0438\u0434\u044B \u043D\u0430\u0434\u0431\u0430\u0432\u043E\u043A
+      { wch: 14 },  // \u0421\u0443\u043C\u043C\u0430 \u043D\u0430\u0434\u0431\u0430\u0432\u043E\u043A
+      { wch: 12 },  // \u0414\u043E\u0441\u0442\u0430\u0432\u043A\u0430
+      { wch: 14 },  // \u0418\u0422\u041E\u0413\u041E
       { wch: 10 },  // \u041E\u043F\u043B\u0430\u0447\u0435\u043D
       { wch: 12 },  // \u0422\u0438\u043F \u043E\u043F\u043B\u0430\u0442\u044B
       { wch: 12 },  // \u0413\u0430\u0440\u0430\u043D\u0442\u0438\u0439\u043D\u044B\u0439
-      { wch: 12 },  // \u0421\u043E\u0437\u0434\u0430\u043D
     ]
 
     // \u0424\u043E\u0440\u043C\u0430\u0442 \u0434\u0435\u043D\u0435\u0436\u043D\u043E\u0439 \u043A\u043E\u043B\u043E\u043D\u043A\u0438 \u0438 \u0434\u0430\u0442\u044B. \u0422\u0438\u043F \u044F\u0447\u0435\u0439\u043A\u0438 \u043D\u0435 \u043F\u0435\u0440\u0435\u043E\u043F\u0440\u0435\u0434\u0435\u043B\u044F\u0435\u043C \u2014 \u043E\u043D \u0443\u0436\u0435
     // \u0432\u044B\u0441\u0442\u0430\u0432\u043B\u0435\u043D \u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u043E \u0441\u0430\u043C\u0438\u043C aoa_to_sheet, \u0437\u0430\u0434\u0430\u0451\u043C \u0442\u043E\u043B\u044C\u043A\u043E \u0444\u043E\u0440\u043C\u0430\u0442 \u043E\u0442\u043E\u0431\u0440\u0430\u0436\u0435\u043D\u0438\u044F.
     for (let i = 0; i < rows.length; i++) {
       const r = i + 1 // \u0441\u0442\u0440\u043E\u043A\u0430 \u0441 \u0434\u0430\u043D\u043D\u044B\u043C\u0438 (\u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A \u2014 0)
-      const sumCell = ws[XLSX.utils.encode_cell({ r, c: 3 })]
-      if (sumCell) { sumCell.z = '#,##0.00' }
-      const dateCell = ws[XLSX.utils.encode_cell({ r, c: 7 })]
+      // \u0414\u0435\u043D\u0435\u0436\u043D\u044B\u0435 \u043A\u043E\u043B\u043E\u043D\u043A\u0438: \u0441\u0443\u043C\u043C\u044B \u043F\u043E\u0437\u0438\u0446\u0438\u0439, \u0441\u043A\u0438\u0434\u043E\u043A, \u043D\u0430\u0434\u0431\u0430\u0432\u043E\u043A, \u0434\u043E\u0441\u0442\u0430\u0432\u043A\u0430 \u0438 \u0438\u0442\u043E\u0433.
+      for (const c of [16, 18, 20, 21, 22]) {
+        const cell = ws[XLSX.utils.encode_cell({ r, c })]
+        if (cell) cell.z = '#,##0.00'
+      }
+      const dateCell = ws[XLSX.utils.encode_cell({ r, c: 2 })]
       if (dateCell) { dateCell.z = 'dd.mm.yyyy' }
     }
 
@@ -310,6 +363,7 @@ export default function OrdersPage() {
     overdueActual: overdueActualFilter || undefined,
     badAddress: badAddressFilter || undefined,
     onlyWarranty: onlyWarrantyFilter || undefined,
+    adjustedByProduction: adjustedFilter || undefined,
     stuck: stuckFilter || undefined,
   })
 
@@ -341,7 +395,7 @@ export default function OrdersPage() {
     }
   }
 
-  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, searchText, districtFilter, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter, onlyWarrantyFilter, stuckFilter])
+  useEffect(() => { void load() }, [statusFilters, clientIdFilter, paymentFilters, orderIdSearch, searchText, districtFilter, dateFrom, dateTo, dateField, page, sortKeys, noCoordsFilter, overdueActualFilter, badAddressFilter, onlyWarrantyFilter, stuckFilter, adjustedFilter])
 
   const handleCreated = (order: Order) => {
     setShowCreate(false)
@@ -443,6 +497,23 @@ export default function OrdersPage() {
                 }}
               >Снять все</button>
             )}
+            {/* Правка №2 (17.09): отдельный срез — заказы, где производство
+                поправило размеры или материал ковра. Там менялась цена, и по
+                таким заказам оператору стоит пройтись отдельно. Чип стоит в
+                ряду статусов: это такой же быстрый срез списка. */}
+            <button
+              type="button"
+              className="chip"
+              onClick={() => { setAdjustedFilter(v => !v); setPage(0) }}
+              title="Заказы, в которых производство скорректировало размеры или материал ковра"
+              style={{
+                marginLeft: 'auto',
+                border: `2px solid ${adjustedFilter ? '#d35400' : '#e5e7e9'}`,
+                background: adjustedFilter ? '#fdf2e9' : '#fff',
+                color: adjustedFilter ? '#a04000' : '#555',
+                fontWeight: adjustedFilter ? 700 : 500,
+              }}
+            >🛠 Поправлено производством</button>
           </div>
         </div>
         <div style={{ display: 'flex', alignItems: 'flex-end', gap: 12, flexWrap: 'wrap' }}>

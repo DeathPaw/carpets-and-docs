@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import {
   getItemTypes, createItemType, updateItemType, deleteItemType,
   getPriceModifiers, createPriceModifier, updatePriceModifier, deletePriceModifier,
+  getCancellationReasons, createCancellationReason, updateCancellationReason, deactivateCancellationReason,
 } from '../api/references'
 import {
   getSkus, createSku, updateSku, deleteSku, getSkuHistory,
@@ -24,7 +25,7 @@ import { getCompanySettings, updateCompanySettings, type CompanySettings } from 
 import { printAcceptance } from '../print/printDocs'
 import type {
   ItemType, PriceModifier, District,
-  Sku, SkuGroup, AttributeDefinition, SkuPricingType,
+  Sku, SkuGroup, AttributeDefinition, SkuPricingType, CancellationReason,
 } from '../types'
 
 /**
@@ -71,13 +72,17 @@ export default function ReferencesPage() {
   const [districts, setDistricts] = useState<District[]>([])
   const [slots, setSlots] = useState<DeliverySlot[]>([])
   const [banners, setBanners] = useState<UpdateBanner[]>([])
+  /** Правка №3 (13.09): причины отмены заказа — владелец правит формулировки сам. */
+  const [cancelReasons, setCancelReasons] = useState<CancellationReason[]>([])
 
   const load = async () => {
-    const [ts, sks, gs, ads, mods, dists, slts, bnrs] = await Promise.all([
+    const [ts, sks, gs, ads, mods, dists, slts, bnrs, crs] = await Promise.all([
       getItemTypes(), getSkus(), getSkuGroups(), getAttributeDefinitions(),
       getPriceModifiers(), getDistricts(false), getAllDeliverySlots(),
       getAllBanners().catch(() => [] as UpdateBanner[]),
+      getCancellationReasons(false).catch(() => [] as CancellationReason[]),
     ])
+    setCancelReasons(crs)
     setTypes(ts)
     setSkus(sks)
     setGroups(gs)
@@ -103,6 +108,7 @@ export default function ReferencesPage() {
       <PriceModifiersCard modifiers={modifiers} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DeliverySlotsCard slots={slots} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <DistrictsCard districts={districts} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
+      <CancellationReasonsCard reasons={cancelReasons} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <CompanySettingsCard showToast={showToast} />
       <UpdateBannersCard banners={banners} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
 
@@ -936,6 +942,124 @@ function DistrictsCard({ districts, reload, setConfirm, showToast }: CardProps<{
                         setEditId(d.id); setEditName(d.name); setEditActive(d.is_active)
                       }}>✏️</button>
                       <button className="btn-danger btn-sm" onClick={() => remove(d.id)}>✕</button>
+                    </>
+                  )}
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ============================================================================
+// Причины отмены заказа (правка №3 от 13.09).
+//
+// При отмене оператор выбирает причину отсюда — свободный текст в аналитику
+// не годился. Причины не удаляются, а скрываются: на них ссылаются уже
+// отменённые заказы, и статистика прошлых периодов не должна терять строки.
+// ============================================================================
+
+function CancellationReasonsCard({ reasons, reload, setConfirm, showToast }: CardProps<{ reasons: CancellationReason[] }>) {
+  const [newName, setNewName] = useState('')
+  const [editId, setEditId] = useState<number | null>(null)
+  const [editName, setEditName] = useState('')
+  const [editActive, setEditActive] = useState(true)
+  const [editNote, setEditNote] = useState(false)
+  const [err, setErr] = useState('')
+
+  const create = async () => {
+    if (!newName.trim()) { setErr('Введите формулировку причины'); return }
+    try {
+      const maxSort = reasons.reduce((m, r) => Math.max(m, r.sort_order), 0)
+      await createCancellationReason({ name: newName.trim(), sort_order: maxSort + 10, is_active: true })
+      setNewName(''); setErr(''); await reload()
+    } catch (e: unknown) {
+      setErr((e as any)?.response?.data?.message || 'Ошибка создания причины')
+    }
+  }
+  const save = async (id: number) => {
+    if (!editName.trim()) return
+    try {
+      const existing = reasons.find(r => r.id === id)
+      await updateCancellationReason(id, {
+        name: editName.trim(),
+        requires_note: editNote,
+        sort_order: existing?.sort_order ?? 0,
+        is_active: editActive,
+      })
+      setEditId(null); await reload()
+    } catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка сохранения', 'error') }
+  }
+  const hide = (id: number) => setConfirm({
+    title: 'Скрыть причину',
+    message: 'Причина исчезнет из списка при отмене заказа. В уже отменённых заказах и в статистике она останется.',
+    danger: true,
+    action: async () => {
+      try { await deactivateCancellationReason(id); await reload() }
+      catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка', 'error') }
+    },
+  })
+
+  return (
+    <div className="card">
+      <h2>Причины отмены заказа</h2>
+      <div style={{ color: '#666', fontSize: 'var(--font-sm)', marginBottom: 8 }}>
+        Оператор выбирает причину при отмене заказа. «Нужно уточнение» — к выбору
+        обязательно дописать текст (как у «Другой причины»).
+      </div>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+        <input
+          value={newName} onChange={e => setNewName(e.target.value)}
+          placeholder="Формулировка причины" style={{ flex: '1 1 260px' }}
+          onKeyDown={e => { if (e.key === 'Enter') void create() }}
+        />
+        <button className="btn-primary" onClick={create} style={{ whiteSpace: 'nowrap' }}>+ Добавить</button>
+      </div>
+      {err && <div className="error-msg" style={{ marginBottom: 8 }}>{err}</div>}
+      <table>
+        <thead>
+          <tr><th>#</th><th>Причина</th><th>Нужно уточнение</th><th>Активна</th><th>Действия</th></tr>
+        </thead>
+        <tbody>
+          {reasons.length === 0 ? (
+            <tr><td colSpan={5} className="empty">Нет причин</td></tr>
+          ) : reasons.map(r => (
+            <tr key={r.id} style={{ opacity: r.is_active ? 1 : 0.5 }}>
+              <td>{r.id}</td>
+              <td>
+                {editId === r.id
+                  ? <input value={editName} onChange={e => setEditName(e.target.value)} style={{ width: '100%' }} />
+                  : r.name}
+              </td>
+              <td>
+                {editId === r.id
+                  ? <input type="checkbox" checked={editNote} onChange={e => setEditNote(e.target.checked)} />
+                  : (r.requires_note ? '✓' : '—')}
+              </td>
+              <td>
+                {editId === r.id
+                  ? <input type="checkbox" checked={editActive} onChange={e => setEditActive(e.target.checked)} />
+                  : (r.is_active ? '✓' : '—')}
+              </td>
+              <td>
+                <div className="actions">
+                  {editId === r.id ? (
+                    <>
+                      <button className="btn-success btn-sm" onClick={() => void save(r.id)}>✓</button>
+                      <button className="btn-secondary btn-sm" onClick={() => setEditId(null)}>✕</button>
+                    </>
+                  ) : (
+                    <>
+                      <button className="btn-secondary btn-sm" onClick={() => {
+                        setEditId(r.id); setEditName(r.name)
+                        setEditActive(r.is_active); setEditNote(r.requires_note)
+                      }}>✏️</button>
+                      {r.is_active && (
+                        <button className="btn-danger btn-sm" title="Скрыть" onClick={() => hide(r.id)}>✕</button>
+                      )}
                     </>
                   )}
                 </div>

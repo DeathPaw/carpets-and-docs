@@ -5,6 +5,11 @@ import ru.carpet.model.OrderStatus;
 
 public record UpdateOrderStatusRequest(
         @NotNull OrderStatus status,
-        /** Обязательна при переходе в CANCELLED, минимум 10 символов после trim. */
-        String cancellationReason
+        /**
+         * Уточнение к причине отмены. V46: обязательно только для причин, у
+         * которых в справочнике стоит requires_note («Другая причина»).
+         */
+        String cancellationReason,
+        /** V46: код причины отмены из справочника. Обязателен при CANCELLED. */
+        String cancelReasonCode
 ) {}

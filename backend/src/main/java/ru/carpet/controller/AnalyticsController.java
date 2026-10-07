@@ -25,15 +25,45 @@ public class AnalyticsController {
     private final DashboardRepository dashboardRepository;
     private final ProductionRepository productionRepository;
     private final ProfitabilityRepository profitabilityRepository;
+    /** V45: потери по претензиям (правка №3 от 19.09). */
+    private final ru.carpet.repository.OrderRefundRepository refundRepository;
 
     public AnalyticsController(AnalyticsRepository repository,
                                DashboardRepository dashboardRepository,
                                ProductionRepository productionRepository,
-                               ProfitabilityRepository profitabilityRepository) {
+                               ProfitabilityRepository profitabilityRepository,
+                               ru.carpet.repository.OrderRefundRepository refundRepository) {
         this.repository = repository;
         this.dashboardRepository = dashboardRepository;
         this.productionRepository = productionRepository;
         this.profitabilityRepository = profitabilityRepository;
+        this.refundRepository = refundRepository;
+    }
+
+    /**
+     * V45: возвраты и компенсации за период (правка №3 от 19.09).
+     *
+     * <p>Отдаём три среза сразу: по типам событий (сколько заказов и денег),
+     * по причинам (из-за чего теряем чаще всего) и сам список — из него
+     * оператор открывает конкретный заказ.
+     */
+    @GetMapping("/refunds")
+    public Map<String, Object> refunds(
+            @RequestParam(required = false) String dateFrom,
+            @RequestParam(required = false) String dateTo) {
+        java.time.LocalDate from = parseDate(dateFrom);
+        java.time.LocalDate to = parseDate(dateTo);
+        Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("by_kind", refundRepository.summaryByKind(from, to));
+        result.put("by_reason", refundRepository.summaryByReason(from, to));
+        result.put("items", refundRepository.findByPeriod(from, to));
+        return result;
+    }
+
+    /** Пустая строка/мусор в параметре даты — считаем «без границы». */
+    private static java.time.LocalDate parseDate(String v) {
+        if (v == null || v.isBlank()) return null;
+        try { return java.time.LocalDate.parse(v.trim()); } catch (Exception e) { return null; }
     }
 
     @GetMapping("/orders-by-district")

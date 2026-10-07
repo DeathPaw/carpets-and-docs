@@ -27,6 +27,7 @@ const ENTITY_LABELS: Record<string, string> = {
   PRICE_MODIFIER: 'Скидка/надбавка',
   DISTRICT: 'Район',
   DELIVERY_SLOT: 'Слот доставки',
+  CANCEL_REASON: 'Причина отмены',
   BANNER: 'Баннер',
   SETTINGS: 'Реквизиты',
 }
@@ -50,6 +51,7 @@ const ACTION_LABELS: Record<string, string> = {
   DEACTIVATE: 'Деактивация',
   PASSWORD_CHANGE: 'Смена пароля',
   PIN_SET: 'PIN',
+  REFUND: 'Возврат/компенсация',
 }
 
 const ACTION_COLORS: Record<string, string> = {
@@ -71,6 +73,7 @@ const ACTION_COLORS: Record<string, string> = {
   DEACTIVATE: '#d35400',
   PASSWORD_CHANGE: '#8e44ad',
   PIN_SET: '#8e44ad',
+  REFUND: '#c0392b',
 }
 
 const entityOptions = [{ value: '', label: 'Все объекты' },

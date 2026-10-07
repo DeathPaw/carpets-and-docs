@@ -1,4 +1,5 @@
 import client from './client'
+import type { OrderRefund } from '../types'
 
 // V8 аналитика: переключатель периода. Все endpoint'ы умеют dateFrom/dateTo (YYYY-MM-DD).
 export interface AnalyticsPeriod { dateFrom?: string; dateTo?: string }
@@ -26,6 +27,19 @@ export const getRevenueByMonth = (p?: AnalyticsPeriod) =>
 
 export const getTopClients = (p?: AnalyticsPeriod) =>
   client.get<{client_id: number, name: string, client_type: string, orders_count: number, total_spent: number}[]>('/api/analytics/top-clients', periodParams(p)).then(r => r.data)
+
+/**
+ * V45: потери по претензиям за период (правка №3 от 19.09) — возвраты денег
+ * и компенсации за испорченные ковры.
+ */
+export interface RefundAnalytics {
+  by_kind: { kind: string, events: number, orders: number, total: number }[]
+  by_reason: { reason: string, events: number, total: number }[]
+  items: OrderRefund[]
+}
+
+export const getRefundAnalytics = (p?: AnalyticsPeriod) =>
+  client.get<RefundAnalytics>('/api/analytics/refunds', periodParams(p)).then(r => r.data)
 
 export const getDashboard = () =>
   client.get<Record<string, number>>('/api/analytics/dashboard').then(r => r.data)

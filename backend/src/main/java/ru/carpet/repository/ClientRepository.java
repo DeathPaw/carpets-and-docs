@@ -38,7 +38,12 @@ public class ClientRepository {
             rs.getBigDecimal("lat"),
             rs.getBigDecimal("lon"),
             rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
+            rs.getTimestamp("updated_at").toLocalDateTime(),
+            rs.getString("restart_status"),
+            rs.getString("source"),
+            rs.getString("source_note"),
+            rs.getString("gender"),
+            rs.getObject("age", Integer.class)
     );
 
     public ClientRepository(NamedParameterJdbcTemplate jdbc) {
@@ -127,6 +132,34 @@ public class ClientRepository {
                 params
         );
         return findById(id).orElseThrow();
+    }
+
+    /**
+     * V46: маркетинговые поля клиента (правка №3 от 13.09).
+     *
+     * <p>Отдельным методом, а не ещё тремя аргументами в {@code save}/{@code update}:
+     * там и так восемнадцать позиционных параметров, и перепутать порядок в
+     * двадцать первом — вопрос времени.
+     */
+    public void updateMarketing(Long id, String restartStatus, String source, String sourceNote,
+                                String gender, Integer age) {
+        jdbc.update("""
+            UPDATE clients
+               SET restart_status = :status,
+                   source         = :source,
+                   -- Уточнение имеет смысл только у «Другого источника».
+                   source_note    = CASE WHEN :source = 'OTHER' THEN :note ELSE NULL END,
+                   gender         = :gender,
+                   age            = :age,
+                   updated_at     = NOW()
+             WHERE id = :id
+        """, new MapSqlParameterSource()
+                .addValue("status", restartStatus)
+                .addValue("source", source)
+                .addValue("note", sourceNote)
+                .addValue("gender", gender)
+                .addValue("age", age)
+                .addValue("id", id));
     }
 
     public List<Client> search(String query) {

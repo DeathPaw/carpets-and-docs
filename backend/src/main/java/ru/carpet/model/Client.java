@@ -25,5 +25,23 @@ public record Client(
         BigDecimal lat,
         BigDecimal lon,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        /**
+         * V46 (правка №3 от 13.09): статус относительно перезапуска —
+         * REVIVAL_BEFORE (был клиентом «Возрождения»), NEW_AFTER (пришёл после
+         * перезапуска), UNKNOWN. Заполняется один раз руками: истории заказов
+         * до перезапуска в CRM нет, автоматика «новый/повторный» её не знает.
+         */
+        String restartStatus,
+        /** V46: откуда клиент узнал о компании (коды — см. фронт). */
+        String source,
+        /** V46: расшифровка для источника «Другой». */
+        String sourceNote,
+        /**
+         * V47 (правка №1 от 13.09): MALE | FEMALE | UNKNOWN. При заведении
+         * клиента предзаполняется по отчеству, оператор может поправить.
+         */
+        String gender,
+        /** V47: возраст, если известен. Для портрета базы по возрастным группам. */
+        Integer age
 ) {}

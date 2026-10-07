@@ -61,6 +61,7 @@ export default function Layout() {
           <NavLink to="/logistics"  className={navClass()} data-tour="nav-logistics">Логистика</NavLink>
           <NavLink to="/clients"    className={navClass()} data-tour="nav-clients">Клиенты</NavLink>
           <NavLink to="/supply"     className={navClass()}>Закупки</NavLink>
+          <NavLink to="/onsite"     className={navClass()}>Выездные чистки</NavLink>
           <NavLink to="/items"      className={navClass()} data-tour="nav-items">Позиции</NavLink>
           <NavLink to="/production" className={navClass()} data-tour="nav-production">Производство</NavLink>
           <NavLink to="/analytics"  className={navClass()} data-tour="nav-analytics">Аналитика</NavLink>
@@ -78,6 +79,10 @@ export default function Layout() {
               <NavLink to="/employees"     className={navClass('supervisor-link')}>Сотрудники</NavLink>
               <NavLink to="/feedback"      className={navClass('supervisor-link')}>Обращения</NavLink>
               {isSupervisor && <NavLink to="/expenses" className={navClass('supervisor-link')}>Расходы</NavLink>}
+              {isSupervisor && <NavLink to="/payroll" className={navClass('supervisor-link')}>Зарплата</NavLink>}
+              <NavLink to="/contracts"     className={navClass('supervisor-link')}>Контракты</NavLink>
+              {isSupervisor && <NavLink to="/reports" className={navClass('supervisor-link')}>Отчёты</NavLink>}
+              <NavLink to="/import"        className={navClass('supervisor-link')}>Импорт Excel</NavLink>
               {isSupervisor && <NavLink to="/users" className={navClass('supervisor-link')}>Пользователи</NavLink>}
               {isSupervisor && <NavLink to="/error-log"  className={navClass('supervisor-link')}>Лог ошибок</NavLink>}
               {isSupervisor && <NavLink to="/audit-log"  className={navClass('supervisor-link')}>Лог действий</NavLink>}

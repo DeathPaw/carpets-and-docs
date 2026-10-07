@@ -37,15 +37,18 @@ public class WorkerController {
     private final OrderItemServiceInstanceService serviceInstanceService;
     private final OrderItemService orderItemService;
     private final ru.carpet.service.AuditLogService auditLogService;
+    private final ru.carpet.service.OrderService orderService;
 
     public WorkerController(NamedParameterJdbcTemplate jdbc,
                             OrderItemServiceInstanceService serviceInstanceService,
                             OrderItemService orderItemService,
-                            ru.carpet.service.AuditLogService auditLogService) {
+                            ru.carpet.service.AuditLogService auditLogService,
+                            ru.carpet.service.OrderService orderService) {
         this.jdbc = jdbc;
         this.serviceInstanceService = serviceInstanceService;
         this.orderItemService = orderItemService;
         this.auditLogService = auditLogService;
+        this.orderService = orderService;
     }
 
     // ---------- 1. Список сотрудников для экрана выбора плитки ----------
@@ -194,12 +197,15 @@ public class WorkerController {
         // с телефона, а цена оставалась от старых габаритов.
         try {
             // Запись в лог делает сам сервис — подписываем её работником.
+            // fromProduction = true (V44): перемер попадает в историю корректировок
+            // (было/стало и цена до/после) и считается по текущему прайсу.
             ru.carpet.audit.AuditUser.as(workerLabel(employeeId), () -> orderItemService.updateDimensions(itemId,
                 asDecimal(body.get("length")),
                 asDecimal(body.get("width")),
                 asDecimal(body.get("weight")),
                 asDecimal(body.get("area")),
-                null));
+                null,
+                true));
         } catch (BusinessRuleException e) {
             return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
         }
@@ -207,6 +213,66 @@ public class WorkerController {
     }
 
     // ---------- 6. Описание и дефекты ----------
+
+    /**
+     * V44 (правка №2 от 17.09): стирщик уточняет тип/материал ковра.
+     *
+     * <p>Клиент сказал «синтетика», а на производстве видно, что ковёр
+     * шерстяной. От типа зависит применимая услуга, поэтому сервис сам
+     * подбирает подходящую SKU и пересчитывает позицию; что было, что стало и
+     * сколько стоило до и после — попадает в историю корректировок.
+     */
+    @PatchMapping("/{employeeId}/items/{itemId}/type")
+    public ResponseEntity<?> updateItemType(
+        @PathVariable Long employeeId,
+        @PathVariable Long itemId,
+        @RequestBody Map<String, Object> body
+    ) {
+        if (!isItemAssignee(employeeId, itemId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "Позиция не назначена на вас"));
+        }
+        Object raw = body.get("item_type_id");
+        if (raw == null) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Не указан тип ковра"));
+        }
+        final Long typeId;
+        try {
+            typeId = Long.valueOf(String.valueOf(raw));
+        } catch (NumberFormatException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Некорректный тип ковра"));
+        }
+        try {
+            ru.carpet.audit.AuditUser.as(workerLabel(employeeId),
+                    () -> orderItemService.updateItemType(itemId, typeId, true));
+        } catch (BusinessRuleException e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+        return ResponseEntity.ok(Map.of("ok", true));
+    }
+
+    /**
+     * Типы ковров для выбора в кабинете. Служебные типы (Приём, Доставка,
+     * Оформление) отфильтрованы — они принадлежат авто-добавляемым услугам,
+     * стирщику их предлагать незачем.
+     */
+    @GetMapping("/item-types")
+    public List<Map<String, Object>> itemTypes() {
+        return jdbc.queryForList("""
+            SELECT id, name FROM item_types
+             WHERE id NOT IN (
+                   SELECT CAST(sa.attr_value AS BIGINT)
+                     FROM sku_attributes sa
+                     JOIN skus s ON s.id = sa.sku_id
+                    WHERE sa.attr_key = 'item_type'
+                      AND s.is_auto_add = TRUE
+                      AND sa.attr_value ~ '^[0-9]+$'
+             )
+             -- COLLATE "C": на базе с en_US.UTF-8 обычный ORDER BY name выдаёт
+             -- кириллицу в непредсказуемом порядке (Тип, Плед, Тюль, Штора…),
+             -- а в селекте на телефоне список должен быть по алфавиту.
+             ORDER BY name COLLATE "C"
+        """, Map.of());
+    }
 
     @PatchMapping("/{employeeId}/items/{itemId}/description")
     public ResponseEntity<?> updateDescription(
@@ -275,6 +341,53 @@ public class WorkerController {
      *
      * <p>Поле {@code changed_by} в audit-логе — id работника (PIN-сессия).
      */
+    /**
+     * Правка №4 (19.09): список уже прикреплённых фото ковра.
+     *
+     * <p>Отдаём только мету — сами файлы тянутся по одному
+     * ({@link #itemPhoto}). Иначе карточка на телефоне грузила бы мегабайты
+     * base64 ради нескольких миниатюр.
+     */
+    @GetMapping("/{employeeId}/items/{itemId}/photos")
+    public ResponseEntity<?> itemPhotos(@PathVariable Long employeeId, @PathVariable Long itemId) {
+        if (!isItemAssignee(employeeId, itemId)) {
+            return ResponseEntity.status(403).body(Map.of("error", "Позиция не назначена на вас"));
+        }
+        return ResponseEntity.ok(jdbc.queryForList("""
+            SELECT id, filename, content_type, created_at
+              FROM order_item_photos
+             WHERE order_item_id = :id
+             ORDER BY created_at, id
+        """, Map.of("id", itemId)));
+    }
+
+    /** Правка №4 (19.09): само фото — картинкой, чтобы браузер кэшировал его как файл. */
+    @GetMapping("/{employeeId}/items/{itemId}/photos/{photoId}")
+    public ResponseEntity<byte[]> itemPhoto(@PathVariable Long employeeId, @PathVariable Long itemId,
+                                            @PathVariable Long photoId) {
+        if (!isItemAssignee(employeeId, itemId)) return ResponseEntity.status(403).build();
+        var rows = jdbc.queryForList(
+                "SELECT content_type, data FROM order_item_photos WHERE id = :pid AND order_item_id = :iid",
+                Map.of("pid", photoId, "iid", itemId));
+        if (rows.isEmpty()) return ResponseEntity.notFound().build();
+        String contentType = (String) rows.get(0).get("content_type");
+        String data = (String) rows.get(0).get("data");
+        if (data == null) return ResponseEntity.notFound().build();
+        // Фото с телефона приходит без префикса data:, но на всякий случай режем.
+        int comma = data.indexOf(',');
+        if (data.startsWith("data:") && comma > 0) data = data.substring(comma + 1);
+        byte[] bytes;
+        try {
+            bytes = java.util.Base64.getDecoder().decode(data.replaceAll("\\s", ""));
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.notFound().build();
+        }
+        return ResponseEntity.ok()
+                .header("Content-Type", contentType == null ? "image/jpeg" : contentType)
+                .header("Cache-Control", "private, max-age=3600")
+                .body(bytes);
+    }
+
     @PatchMapping("/{employeeId}/items/{itemId}/delivery-state")
     public ResponseEntity<?> setDeliveryState(
         @PathVariable Long employeeId,
@@ -721,6 +834,13 @@ public class WorkerController {
                 Map.of("oid", orderId));
         auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "LOGISTICS",
                 "Логистика, заказ " + orderNo(orderId) + ": водитель отметил забор");
+        // V43: ковры забрали — отметка обзвона снимается, впереди звонок про
+        // доставку готовых. Статус услуги тут ставится сырым UPDATE (см. выше),
+        // мимо сервиса, поэтому сбрасываем явно.
+        ru.carpet.audit.AuditUser.as(workerLabel(employeeId), () -> {
+            orderService.resetClientConfirmationAfterPickup(orderId);
+            return null;
+        });
 
         return ResponseEntity.ok(Map.of("ok", true, "message", "Забор зафиксирован"));
     }

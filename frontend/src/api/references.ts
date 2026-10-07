@@ -7,7 +7,28 @@ import type {
   CreateItemTypeRequest,
   CreateEmployeeRequest,
   UpdateEmployeeRequest,
+  CancellationReason,
 } from '../types'
+
+/**
+ * V46 (правка №3 от 13.09): справочник причин отмены заказа.
+ * Формулировки правит владелец в Справочниках, без релиза.
+ */
+export const getCancellationReasons = (activeOnly = false) =>
+  client.get<CancellationReason[]>('/api/cancellation-reasons', { params: { active_only: activeOnly } })
+    .then(r => r.data)
+
+export const createCancellationReason = (data: {
+  name: string; requires_note?: boolean; sort_order?: number; is_active?: boolean
+}) => client.post<CancellationReason>('/api/cancellation-reasons', data).then(r => r.data)
+
+export const updateCancellationReason = (id: number, data: {
+  name: string; requires_note?: boolean; sort_order?: number; is_active?: boolean
+}) => client.put<CancellationReason>(`/api/cancellation-reasons/${id}`, data).then(r => r.data)
+
+/** Причина не удаляется, а скрывается: на неё ссылаются отменённые заказы. */
+export const deactivateCancellationReason = (id: number) =>
+  client.delete(`/api/cancellation-reasons/${id}`).then(r => r.data)
 
 // V10: API service_definitions/price_list удалены вместе со старой моделью.
 // Каталог теперь живёт в SKU — см. api/sku.ts.

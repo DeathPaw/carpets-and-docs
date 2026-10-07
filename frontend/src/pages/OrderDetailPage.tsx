@@ -3,7 +3,8 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, rollbackOrderStatus, payOrder, createWarrantyOrder,
-  updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem,
+  updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem, repriceOrder, setClientConfirmed, getOrderAdjustments,
+  getOrderRefunds, addOrderRefund, deleteOrderRefund, setOrderReason,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
   getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem,
@@ -22,7 +23,7 @@ import DistrictSelect from '../components/DistrictSelect'
 import AddressInput from '../components/AddressInput'
 import TimeSlotSelect from '../components/TimeSlotSelect'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
-import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal } from '../components/orders/order-detail-modals'
+import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal, RefundModal } from '../components/orders/order-detail-modals'
 import SkuPicker from '../components/SkuPicker'
 import { getCompanySettings } from '../api/companySettings'
 import { buildInvoiceData, printAcceptance, printIssue } from '../print/printDocs'
@@ -30,7 +31,8 @@ import type {
   Order, OrderItem, OrderItemService, OrderStatusHistory,
   ItemType, Employee, OrderStatus, ServiceStatus,
   PaymentType, PreliminaryPaymentType,
-  PriceModifier, OrderModifier, Client, EmployeeRole,
+  PriceModifier, OrderModifier, Client, EmployeeRole, OrderItemAdjustment,
+  OrderRefund, RefundKind,
 } from '../types'
 
 // Подписи статусов и оплаты — общие, см. constants/statuses.ts
@@ -40,6 +42,8 @@ import {
   SERVICE_STATUS_LABELS,
   PAYMENT_LABELS,
   PRELIMINARY_PAYMENT_LABELS,
+  REFUND_KIND_LABELS,
+  ORDER_REASON_LABELS,
   ALL_PRELIMINARY_PAYMENTS,
 } from '../constants/statuses'
 
@@ -64,10 +68,12 @@ function Badge({ status, labels }: { status: string; labels: Record<string, stri
 }
 
 // formatOrderNumber теперь общая — см. utils/format.ts
-import { formatOrderNumber } from '../utils/format'
+import { formatOrderNumber, todayIso } from '../utils/format'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import StyledSelect from '../components/StyledSelect'
 import { useAuth } from '../auth/AuthContext'
+import { contractsApi } from '../api/contracts'
+import type { Contract } from '../api/contracts'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
 function checkDimensionsForPricing(pricingType: string | null | undefined, item: OrderItem): { ok: boolean; missing: string } {
@@ -1417,6 +1423,13 @@ export default function OrderDetailPage() {
   useEscapeClose(mapVisible, () => setMapVisible(false))
 
   const [confirmAction, setConfirmAction] = useState<{title: string, message: string, action: () => void} | null>(null)
+  /** V44: корректировки ковров производством — блок «что поправили в цеху». */
+  const [adjustments, setAdjustments] = useState<OrderItemAdjustment[]>([])
+  /** V45: возвраты и компенсации по претензиям (правка №3 от 19.09). */
+  const [refunds, setRefunds] = useState<OrderRefund[]>([])
+  /** V54 (ТЗ v2, блок 6): договоры этого юрлица — по ним считается цена за м². */
+  const [clientContracts, setClientContracts] = useState<Contract[]>([])
+  const [showRefund, setShowRefund] = useState(false)
   const [details, setDetails] = useState({
     pickup_address: '',
     delivery_address: '',
@@ -1466,6 +1479,10 @@ export default function OrderDetailPage() {
       })
       setPhotosByItemId(grouped)
       getOrderModifiers(orderId).then(setOrderModifiers).catch(() => {})
+      // V44: что поправило производство — список короткий, тянем вместе с заказом,
+      // чтобы блок обновлялся и после правок с телефона (страница живёт открытой).
+      getOrderAdjustments(orderId).then(setAdjustments).catch(() => {})
+      getOrderRefunds(orderId).then(setRefunds).catch(() => {})
       // V19: подгружаем модификаторы клиента, чтобы знать какие уже у него есть.
       if (o.client_id) {
         getClientModifiers(o.client_id).then(mods => {
@@ -1473,9 +1490,13 @@ export default function OrderDetailPage() {
         }).catch(() => setClientModifierIds(new Set()))
         // Флаг «Проблемный клиент» — для алерта на странице заказа.
         getClient(o.client_id).then(c => setClientIsProblem(!!c.is_problem)).catch(() => setClientIsProblem(false))
+        // Договоры юрлица: у частника список пустой и блок контракта не показывается.
+        contractsApi.list({ clientId: o.client_id, activeOnly: true })
+          .then(setClientContracts).catch(() => setClientContracts([]))
       } else {
         setClientModifierIds(new Set())
         setClientIsProblem(false)
+        setClientContracts([])
       }
       // Не затираем недописанную заметку: loadOrder дёргается после любой мутации
       // на странице (добавили позицию, сменили статус), а поле теперь открыто всегда.
@@ -1501,8 +1522,12 @@ export default function OrderDetailPage() {
       // иначе первый же уход фокуса после перезагрузки слал бы данные заново.
       savedDetailsRef.current = JSON.stringify(fresh)
       setDetails(fresh)
+      // Возвращаем свежий заказ: вызывающему иногда нужна новая сумма сразу
+      // после мутации, а setOrder к этому моменту ещё не применился.
+      return o
     } catch {
       setError('Ошибка загрузки заказа')
+      return undefined
     }
   }
 
@@ -1589,9 +1614,14 @@ export default function OrderDetailPage() {
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка смены статуса'; showToast(msg, 'error') }
   }
 
-  const confirmCancelOrder = async (reason: string) => {
+  /** Правка №3 (13.09): code — причина из справочника, reason — уточнение к ней. */
+  const confirmCancelOrder = async (reason: string, code?: string) => {
     try {
-      const updated = await updateOrderStatus(orderId, { status: 'CANCELLED', cancellation_reason: reason })
+      const updated = await updateOrderStatus(orderId, {
+        status: 'CANCELLED',
+        cancellation_reason: reason,
+        cancel_reason_code: code,
+      })
       setOrder(updated)
       const hist = await getOrderHistory(orderId)
       setHistory(hist)
@@ -1648,6 +1678,118 @@ export default function OrderDetailPage() {
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
       setError(msg ?? 'Ошибка оплаты')
+    }
+  }
+
+  /**
+   * V42: перевод заказа на сегодняшний прайс.
+   *
+   * Обычно заказ живёт на прайсе дня оформления: правка каталога не должна
+   * менять сумму, которую уже назвали клиенту. Здесь оператор пересчитывает
+   * осознанно; услуги с ручной ценой не трогаются.
+   */
+  const handleReprice = async () => {
+    const before = Number(order?.total_amount ?? 0)
+    try {
+      const updated = await repriceOrder(orderId)
+      setOrder(updated)
+      await loadOrder()
+      const after = Number(updated.total_amount)
+      showToast(after === before
+        ? 'Цены не изменились'
+        : `Пересчитано: ${before.toFixed(0)} ₽ → ${after.toFixed(0)} ₽`, 'success')
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Ошибка пересчёта по текущему прайсу', 'error')
+    }
+  }
+
+  /**
+   * V54 (ТЗ v2, блок 6): привязка заказа к контракту юрлица.
+   *
+   * Услуги за м² сразу пересчитываются по договорной цене, поэтому сумма
+   * заказа меняется на глазах у оператора — показываем это в тосте.
+   */
+  const handleContractChange = async (contractId: number | null) => {
+    if (!order) return
+    const before = Number(order.total_amount ?? 0)
+    try {
+      if (contractId == null) await contractsApi.unlinkOrder(orderId)
+      else {
+        const res = await contractsApi.linkOrder(contractId, orderId)
+        if (res.warning) showToast(res.warning, 'warning')
+      }
+      const updated = await loadOrder()
+      const after = Number(updated?.total_amount ?? before)
+      showToast(after === before
+        ? (contractId == null ? 'Контракт отвязан' : 'Контракт привязан')
+        : `${contractId == null ? 'Контракт отвязан' : 'Контракт привязан'}: `
+          + `${before.toFixed(0)} ₽ → ${after.toFixed(0)} ₽`, 'success')
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Не удалось изменить контракт заказа', 'error')
+    }
+  }
+
+  /** Отметка сдачи по контракту: до неё метры заказа в план-факт не идут. */
+  const handleContractDelivery = async (delivered: boolean) => {
+    if (!order?.contract_id) return
+    const reason = delivered ? undefined : (prompt('Причина отмены сдачи:') || undefined)
+    if (!delivered && !reason) return
+    try {
+      await contractsApi.deliverOrder(order.contract_id, orderId, delivered, reason)
+      await loadOrder()
+      showToast(delivered ? 'Сдача по контракту отмечена' : 'Отметка сдачи снята', 'success')
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Не удалось изменить отметку сдачи', 'error')
+    }
+  }
+
+  /**
+   * Правка №1 (17.09): отметка обзвона. Флажок операционный — на статус заказа
+   * не влияет и в маршрутный лист не попадает. Бэкенд снимает его сам при
+   * переносе дня выезда и после забора ковров.
+   */
+  const handleToggleClientConfirmed = async () => {
+    if (!order) return
+    try {
+      const updated = await setClientConfirmed(orderId, !order.client_confirmed)
+      setOrder(updated)
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Не удалось изменить отметку подтверждения', 'error')
+    }
+  }
+
+  /**
+   * Правка №3 (19.09): фиксация возврата или компенсации.
+   *
+   * Сумма не трогает стоимость заказа — это отдельная потеря компании по
+   * претензии, и в аналитике она считается именно так.
+   */
+  const handleAddRefund = async (data: {
+    kind: RefundKind; amount: number; reason: string; comment: string; occurred_on: string
+  }) => {
+    try {
+      await addOrderRefund(orderId, data)
+      setShowRefund(false)
+      const fresh = await getOrderRefunds(orderId)
+      setRefunds(fresh)
+      showToast('Запись добавлена', 'success')
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Не удалось сохранить запись', 'error')
+    }
+  }
+
+  const handleDeleteRefund = async (refundId: number) => {
+    try {
+      await deleteOrderRefund(orderId, refundId)
+      setRefunds(prev => prev.filter(r => r.id !== refundId))
+    } catch (e: unknown) {
+      const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
+      showToast(msg ?? 'Не удалось удалить запись', 'error')
     }
   }
 
@@ -2084,6 +2226,82 @@ export default function OrderDetailPage() {
               />
             </span>
           </div>
+          {/* Правка №1 (17.09): обзвон клиента перед выездом. Показываем, кто
+              именно подтвердил — с клиентами работают несколько операторов.
+              Отметка снимается сама при переносе дня и после забора ковров. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            marginBottom: 8, fontSize: 'var(--font-sm)',
+          }}>
+            <span style={{ color: 'var(--c-text-secondary)' }}>Клиент подтвердил день выезда:</span>
+            <button
+              type="button"
+              disabled={!isEditable}
+              onClick={() => void handleToggleClientConfirmed()}
+              title={order.client_confirmed
+                ? 'Клик — вернуть в «Уточнить»'
+                : 'Клик — отметить, что клиент подтвердил день'}
+              style={{
+                border: 'none', borderRadius: 4, padding: '3px 10px',
+                cursor: isEditable ? 'pointer' : 'default', fontWeight: 600,
+                fontSize: 'var(--font-sm)', whiteSpace: 'nowrap',
+                background: order.client_confirmed ? '#eafaf1' : '#fdf2e9',
+                color:      order.client_confirmed ? '#196f3d' : '#a04000',
+              }}
+            >
+              {order.client_confirmed ? '✓ Подтверждён' : '☎ Уточнить'}
+            </button>
+            {order.client_confirmed && order.client_confirmed_by && (
+              <span style={{ color: 'var(--c-text-secondary)' }}>
+                — {order.client_confirmed_by}
+                {order.client_confirmed_at && `, ${new Date(order.client_confirmed_at).toLocaleString('ru')}`}
+              </span>
+            )}
+          </div>
+          {/* Правка №3 (13.09): зачем клиент обратился. Поле заказа: сегодня
+              залили ковёр, через полгода — плановая чистка. Сохраняем сразу
+              по выбору, отдельной кнопки не надо. */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+            marginBottom: 8, fontSize: 'var(--font-sm)',
+          }}>
+            <span style={{ color: 'var(--c-text-secondary)' }}>Повод обращения:</span>
+            <select
+              value={order.order_reason ?? ''}
+              disabled={!isEditable}
+              style={{ height: 'var(--control-h)', maxWidth: 260 }}
+              onChange={async e => {
+                const value = e.target.value || null
+                try {
+                  setOrder(await setOrderReason(orderId, value, order.order_reason_note))
+                } catch {
+                  showToast('Не удалось сохранить повод обращения', 'error')
+                }
+              }}
+            >
+              <option value="">— не указан —</option>
+              {Object.entries(ORDER_REASON_LABELS).map(([code, label]) => (
+                <option key={code} value={code}>{label}</option>
+              ))}
+            </select>
+            {order.order_reason === 'OTHER' && (
+              <input
+                defaultValue={order.order_reason_note ?? ''}
+                disabled={!isEditable}
+                placeholder="Уточнение"
+                style={{ height: 'var(--control-h)', maxWidth: 260 }}
+                onBlur={async e => {
+                  const note = e.target.value.trim()
+                  if (note === (order.order_reason_note ?? '')) return
+                  try {
+                    setOrder(await setOrderReason(orderId, order.order_reason, note || null))
+                  } catch {
+                    showToast('Не удалось сохранить уточнение', 'error')
+                  }
+                }}
+              />
+            )}
+          </div>
           {/* Подсветка: для перевода в DELIVERED обязательна фактическая дата доставки.
               Если её ещё нет — даём подсказку с понятным следующим шагом. */}
           {order.status === 'DONE' && !order.actual_delivery_date && (
@@ -2439,6 +2657,59 @@ export default function OrderDetailPage() {
         )}
       </div>
 
+      {/* V44 (правка №2 от 17.09): что поправили по факту.
+          Оператору нужна не только новая цена, но и прежняя — иначе клиенту
+          не объяснить, почему сумма изменилась: перемерили ковёр или
+          определили другой материал. Правки оператора тоже попадают сюда,
+          но помечены отдельно. */}
+      {adjustments.length > 0 && (
+        <div className="card" style={{ borderLeft: '4px solid #e67e22' }}>
+          <h2 style={{ marginTop: 0 }}>Данные ковров скорректированы</h2>
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-sm)' }}>
+              <thead>
+                <tr>
+                  <th>Ковёр</th>
+                  <th style={{ width: 90 }}>Что</th>
+                  <th>Было</th>
+                  <th>Стало</th>
+                  <th style={{ width: 170 }}>Стоимость позиции</th>
+                  <th style={{ width: 180 }}>Кто и когда</th>
+                </tr>
+              </thead>
+              <tbody>
+                {adjustments.map(a => {
+                  const before = Number(a.price_before ?? 0)
+                  const after = Number(a.price_after ?? 0)
+                  const diff = after - before
+                  return (
+                    <tr key={a.id}>
+                      <td>{a.item_name || `позиция #${a.order_item_id}`}</td>
+                      <td>{a.field === 'DIMENSIONS' ? 'Размеры' : 'Материал'}</td>
+                      <td style={{ color: 'var(--c-text-secondary)' }}>{a.old_value || '—'}</td>
+                      <td style={{ fontWeight: 600 }}>{a.new_value || '—'}</td>
+                      <td style={{ whiteSpace: 'nowrap' }}>
+                        {before.toFixed(0)} → <strong>{after.toFixed(0)} ₽</strong>
+                        {diff !== 0 && (
+                          <span style={{ marginLeft: 6, color: diff > 0 ? '#c0392b' : '#27ae60' }}>
+                            {diff > 0 ? '+' : ''}{diff.toFixed(0)}
+                          </span>
+                        )}
+                      </td>
+                      <td style={{ color: 'var(--c-text-secondary)' }}>
+                        {a.changed_by || '—'}
+                        {a.source === 'OPERATOR' && ' · оператор'}
+                        <div>{new Date(a.created_at).toLocaleString('ru')}</div>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       {/* Items */}
       <div className="card" data-tour="order-items">
         <div className="page-header" style={{ marginBottom: 12 }}>
@@ -2512,6 +2783,99 @@ export default function OrderDetailPage() {
       {/* Расчёт стоимости */}
       <div className="card" data-tour="order-calc">
         <h2 style={{ marginTop: 0 }}>Расчёт стоимости</h2>
+        {/* V42: по какому прайсу считается заказ. Пока дата прайса не сегодняшняя,
+            цены берутся из версий каталога на тот день — правка прайса не меняет
+            уже оформленный заказ, и смена типа позиции туда-обратно возвращает
+            прежнюю сумму. Перевести заказ на новые цены можно только этой кнопкой. */}
+        {order.price_date && (
+          <div style={{
+            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+            gap: 8, marginBottom: 8, fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)',
+          }}>
+            <span title="Цены услуг считаются по прайсу на эту дату">
+              Прайс от {new Date(order.price_date).toLocaleDateString('ru')}
+            </span>
+            {isEditable && order.price_date !== todayIso() && (
+              <button
+                className="btn-secondary btn-sm"
+                title="Пересчитать услуги по сегодняшним ценам каталога"
+                onClick={() => setConfirmAction({
+                  title: 'Пересчитать по текущему прайсу?',
+                  message: 'Услуги заказа пересчитаются по сегодняшним ценам каталога — '
+                    + 'итоговая сумма может измениться. Услуги с ручной ценой останутся как есть.',
+                  action: () => { void handleReprice() },
+                })}
+              >Пересчитать по текущему прайсу</button>
+            )}
+          </div>
+        )}
+        {/* V54 (ТЗ v2, блок 6): заказ по контракту юрлица. Договорная цена за м²
+            фиксируется на заказе при привязке — правка контракта задним числом
+            уже учтённые заказы не трогает. Метры идут в план-факт только после
+            отметки сдачи заказчику. */}
+        {(clientContracts.length > 0 || order.contract_id) && (
+          <div style={{
+            marginBottom: 12, padding: 10, borderRadius: 6,
+            background: order.contract_id ? '#eaf4fd' : 'var(--c-bg-secondary, #f8f9fa)',
+            fontSize: 'var(--font-sm)',
+          }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+              <strong>Контракт:</strong>
+              {isEditable ? (
+                <select
+                  value={order.contract_id ?? ''}
+                  onChange={e => { void handleContractChange(e.target.value ? Number(e.target.value) : null) }}
+                  style={{ maxWidth: 320 }}
+                >
+                  <option value="">Без контракта (обычный прайс)</option>
+                  {clientContracts.map(c => (
+                    <option key={c.id} value={c.id}>
+                      № {c.number} — {Number(c.price_per_sqm).toLocaleString('ru')} ₽/м²
+                    </option>
+                  ))}
+                  {/* Контракт мог уйти в архив — показываем его, чтобы связь была видна. */}
+                  {order.contract_id != null && !clientContracts.some(c => c.id === order.contract_id) && (
+                    <option value={order.contract_id}>Контракт #{order.contract_id} (в архиве)</option>
+                  )}
+                </select>
+              ) : (
+                <span>{order.contract_id ? `Контракт #${order.contract_id}` : 'нет'}</span>
+              )}
+              {order.contract_price_per_sqm != null && (
+                <span title="Цена зафиксирована при привязке заказа к контракту">
+                  по {Number(order.contract_price_per_sqm).toLocaleString('ru')} ₽/м²
+                </span>
+              )}
+            </div>
+            {order.contract_id != null && (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginTop: 8, flexWrap: 'wrap' }}>
+                {order.contract_delivered_at ? (
+                  <>
+                    <span style={{ color: '#27ae60', fontWeight: 600 }}>
+                      Сдан по контракту {new Date(order.contract_delivered_at).toLocaleDateString('ru')}
+                    </span>
+                    {isEditable && (
+                      <button className="btn-secondary btn-sm" onClick={() => { void handleContractDelivery(false) }}>
+                        Отменить сдачу
+                      </button>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <span style={{ color: 'var(--c-text-secondary)' }}>
+                      Пока не сдан — метры в объём контракта не засчитаны
+                    </span>
+                    {isEditable && (
+                      <button className="btn-secondary btn-sm" onClick={() => { void handleContractDelivery(true) }}>
+                        Отметить сдачу
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0', borderBottom: '1px solid #eee' }}>
             <span>Сумма позиций (базовая):</span>
@@ -2626,6 +2990,77 @@ export default function OrderDetailPage() {
         </div>
       </div>
 
+      {/* V45 (правка №3 от 19.09): возвраты и компенсации.
+          Отдельный блок, а не строка в расчёте: это не скидка и не изменение
+          цены заказа, а деньги, которые компания отдала обратно. В аналитике
+          такие суммы считаются потерями по претензиям. */}
+      <div className="card">
+        <div className="page-header" style={{ marginBottom: 12 }}>
+          <h2 style={{ margin: 0 }}>Возвраты и компенсации</h2>
+          {!isReadonly && (
+            <button className="btn-secondary" onClick={() => setShowRefund(true)}>
+              + Зафиксировать
+            </button>
+          )}
+        </div>
+        {refunds.length === 0 ? (
+          <div style={{ color: 'var(--c-text-secondary)', fontSize: 'var(--font-sm)' }}>
+            По этому заказу возвратов и компенсаций не было.
+          </div>
+        ) : (
+          <>
+            <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-sm)' }}>
+              <thead>
+                <tr>
+                  <th style={{ width: 110 }}>Дата</th>
+                  <th style={{ width: 180 }}>Событие</th>
+                  <th style={{ width: 110 }}>Сумма</th>
+                  <th>Причина</th>
+                  <th style={{ width: 150 }}>Кто внёс</th>
+                  {!isReadonly && <th style={{ width: 40 }}></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {refunds.map(r => (
+                  <tr key={r.id}>
+                    <td style={{ whiteSpace: 'nowrap' }}>{new Date(r.occurred_on).toLocaleDateString('ru')}</td>
+                    <td>{REFUND_KIND_LABELS[r.kind] || r.kind}</td>
+                    <td style={{ whiteSpace: 'nowrap', color: '#c0392b', fontWeight: 600 }}>
+                      −{Number(r.amount).toFixed(0)} ₽
+                    </td>
+                    <td>
+                      {r.reason}
+                      {r.comment && (
+                        <div style={{ color: 'var(--c-text-secondary)' }}>{r.comment}</div>
+                      )}
+                    </td>
+                    <td style={{ color: 'var(--c-text-secondary)' }}>{r.created_by || '—'}</td>
+                    {!isReadonly && (
+                      <td>
+                        <button
+                          className="btn-secondary btn-sm"
+                          title="Удалить ошибочную запись"
+                          onClick={() => setConfirmAction({
+                            title: 'Удалить запись?',
+                            message: `${REFUND_KIND_LABELS[r.kind] || r.kind} на ${Number(r.amount).toFixed(0)} ₽ будет удалён из потерь по претензиям.`,
+                            action: () => { void handleDeleteRefund(r.id) },
+                          })}
+                        >✕</button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div style={{ marginTop: 10, textAlign: 'right', fontWeight: 600 }}>
+              Всего потерь по заказу: <span style={{ color: '#c0392b' }}>
+                {refunds.reduce((acc, r) => acc + Number(r.amount), 0).toFixed(0)} ₽
+              </span>
+            </div>
+          </>
+        )}
+      </div>
+
       {/* History */}
       <div className="card">
         <h2>История изменений статуса</h2>
@@ -2672,11 +3107,22 @@ export default function OrderDetailPage() {
         />
       )}
       {showPay && <PayModal onClose={() => setShowPay(false)} onPay={handlePay} />}
+
+      {/* Правка №3 (19.09): фиксация возврата или компенсации по претензии. */}
+      {showRefund && (
+        <RefundModal
+          orderTotal={Number(order.total_amount)}
+          onClose={() => setShowRefund(false)}
+          onSubmit={data => { void handleAddRefund(data) }}
+        />
+      )}
       {showDeliverAndPay && <DeliverAndPayModal onClose={() => setShowDeliverAndPay(false)} onSubmit={handleDeliverAndPay} />}
       {showCancelOrderModal && (
         <CancelReasonModal
           title="Отмена заказа"
           subject={`Заказ #${String(order.id).padStart(5, '0')} будет отменён.`}
+          /* Правка №3 (13.09): причина отмены заказа — из справочника. */
+          useCatalog
           onCancel={() => setShowCancelOrderModal(false)}
           onConfirm={confirmCancelOrder}
         />

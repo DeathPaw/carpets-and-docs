@@ -4,10 +4,10 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   PieChart, Pie, Cell,
 } from 'recharts'
-import { getOrdersByDistrict, getOrdersByStatus, getItemsByType, getEmployeeStats, getRevenueByMonth, getTopClients, getWarrantyStats, getMarginAnalysis } from '../api/analytics'
+import { getOrdersByDistrict, getOrdersByStatus, getItemsByType, getEmployeeStats, getRevenueByMonth, getTopClients, getWarrantyStats, getMarginAnalysis, getRefundAnalytics, type RefundAnalytics } from '../api/analytics'
 import { getEmployeeServices } from '../api/employees'
 import SpbDistrictMap from '../components/SpbDistrictMap'
-import { ORDER_STATUS_LABELS } from '../constants/statuses'
+import { ORDER_STATUS_LABELS, REFUND_KIND_LABELS } from '../constants/statuses'
 
 // На графике «активных» статусов используем общий справочник переводов из constants/statuses.
 // Раньше был локальный неполный — для COMPLETED не было перевода и в pie-chart
@@ -43,6 +43,8 @@ export default function AnalyticsPage() {
   const [topClients, setTopClients] = useState<{client_id: number, name: string, client_type: string, orders_count: number, total_spent: number}[]>([])
   const [warrantyData, setWarrantyData] = useState<{client_id: number, client_name: string, total_orders: number, warranty_orders: number, warranty_percent: number}[]>([])
   const [marginData, setMarginData] = useState<{service_name: string, count: number, revenue: number, cost: number}[]>([])
+  /** Правка №3 (19.09): потери по претензиям — возвраты денег и компенсации. */
+  const [refundData, setRefundData] = useState<RefundAnalytics | null>(null)
   const [loading, setLoading] = useState(true)
   const navigate = useNavigate()
   // useAuth удалён — теперь карточка сотрудника доступна и операторам тоже (читает services без редиректа).
@@ -78,6 +80,7 @@ export default function AnalyticsPage() {
       getTopClients(p).then(setTopClients).catch(() => {}),
       getWarrantyStats(p).then(setWarrantyData).catch(() => {}),
       getMarginAnalysis(p).then(setMarginData).catch(() => {}),
+      getRefundAnalytics(p).then(setRefundData).catch(() => {}),
     ]).finally(() => setLoading(false))
   }, [dateFrom, dateTo])
 
@@ -360,6 +363,84 @@ export default function AnalyticsPage() {
           )}
         </div>
       </div>
+
+      {/* Правка №3 (19.09): потери по претензиям — возвраты денег и компенсации
+          за испорченные ковры. Отдельный блок: это не выручка со знаком минус,
+          а деньги, отданные обратно, и смотреть на них нужно отдельно —
+          по суммам, по типам событий и по причинам. */}
+      {refundData && refundData.items.length > 0 && (
+        <div className="card" style={{ marginTop: 16, borderLeft: '4px solid #c0392b' }}>
+          <h2 style={{ marginTop: 0 }}>Возвраты и компенсации</h2>
+          <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap', marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)' }}>Всего потерь</div>
+              <div style={{ fontSize: '1.4em', fontWeight: 700, color: '#c0392b' }}>
+                {refundData.items.reduce((acc, r) => acc + Number(r.amount), 0).toFixed(0)} ₽
+              </div>
+            </div>
+            {refundData.by_kind.map(k => (
+              <div key={k.kind}>
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)' }}>
+                  {REFUND_KIND_LABELS[k.kind] || k.kind}
+                </div>
+                <div style={{ fontSize: '1.1em', fontWeight: 600 }}>
+                  {Number(k.total).toFixed(0)} ₽
+                  <span style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginLeft: 6 }}>
+                    · {k.orders} зак.
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {refundData.by_reason.length > 0 && (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ fontWeight: 600, marginBottom: 6 }}>Причины</div>
+              {refundData.by_reason.map(r => (
+                <div key={r.reason} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 'var(--font-sm)' }}>
+                  <span>{r.reason}</span>
+                  <span style={{ whiteSpace: 'nowrap' }}>
+                    {Number(r.total).toFixed(0)} ₽
+                    <span style={{ color: 'var(--c-text-secondary)', marginLeft: 6 }}>· {r.events}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 'var(--font-sm)' }}>
+            <thead>
+              <tr>
+                <th style={{ width: 110 }}>Дата</th>
+                <th style={{ width: 90 }}>Заказ</th>
+                <th>Клиент</th>
+                <th style={{ width: 170 }}>Событие</th>
+                <th style={{ width: 110 }}>Сумма</th>
+                <th>Причина</th>
+              </tr>
+            </thead>
+            <tbody>
+              {refundData.items.map(r => (
+                <tr
+                  key={r.id}
+                  style={{ cursor: 'pointer' }}
+                  onClick={() => navigate(`/orders/${r.order_id}`)}
+                  title="Открыть заказ"
+                >
+                  <td style={{ whiteSpace: 'nowrap' }}>{new Date(r.occurred_on).toLocaleDateString('ru')}</td>
+                  <td>#{String(r.order_id).padStart(5, '0')}</td>
+                  <td>{r.client_name || '—'}</td>
+                  <td>{REFUND_KIND_LABELS[r.kind] || r.kind}</td>
+                  <td style={{ whiteSpace: 'nowrap', color: '#c0392b', fontWeight: 600 }}>
+                    −{Number(r.amount).toFixed(0)} ₽
+                  </td>
+                  <td>{r.reason}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
       {/* V7: модалка карточки сотрудника — показывает все услуги в DONE за выбранный период. */}
       {employeeCard && (

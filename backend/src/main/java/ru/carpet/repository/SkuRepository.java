@@ -254,6 +254,51 @@ public class SkuRepository {
         return keyHolder.getKey().longValue();
     }
 
+    /**
+     * Ценовые поля версии SKU — снимок прайса на конкретную дату.
+     * Атрибуты (item_type, диапазоны) сюда не входят: они описывают, к чему
+     * услуга применима, и берутся из мастера — исторической ценой не являются.
+     */
+    public record VersionPrice(Long versionId, String name, String pricingType,
+                               BigDecimal price, BigDecimal costPrice, BigDecimal freeThreshold) {}
+
+    private static final RowMapper<VersionPrice> VERSION_PRICE_MAPPER = (rs, rn) -> new VersionPrice(
+            rs.getLong("id"),
+            rs.getString("name"),
+            rs.getString("pricing_type"),
+            rs.getBigDecimal("price"),
+            rs.getBigDecimal("cost_price"),
+            rs.getBigDecimal("free_threshold"));
+
+    private static final String VERSION_PRICE_COLS =
+            "id, name, pricing_type, price, cost_price, free_threshold";
+
+    /**
+     * Версия SKU, действовавшая на конец дня {@code date} — прайс «как было тогда».
+     *
+     * <p>Берём последнюю версию, начавшую действовать до конца этого дня. Если
+     * услуга появилась в каталоге позже даты заказа (версий «на тогда» нет),
+     * возвращаем самую первую версию: это ближайшая к дате цена из тех, что
+     * вообще существовали, и она хотя бы не скачет при каждой правке прайса.
+     */
+    public Optional<VersionPrice> priceAsOf(Long skuId, java.time.LocalDate date) {
+        if (skuId == null || date == null) return Optional.empty();
+        var params = new MapSqlParameterSource()
+                .addValue("id", skuId)
+                .addValue("ts", date.plusDays(1).atStartOfDay());
+        var onDate = jdbc.query(
+                "SELECT " + VERSION_PRICE_COLS + " FROM sku_versions " +
+                "WHERE master_id = :id AND valid_from < :ts " +
+                "ORDER BY valid_from DESC, version_num DESC LIMIT 1",
+                params, VERSION_PRICE_MAPPER);
+        if (!onDate.isEmpty()) return Optional.of(onDate.get(0));
+        var earliest = jdbc.query(
+                "SELECT " + VERSION_PRICE_COLS + " FROM sku_versions " +
+                "WHERE master_id = :id ORDER BY valid_from, version_num LIMIT 1",
+                Map.of("id", skuId), VERSION_PRICE_MAPPER);
+        return earliest.isEmpty() ? Optional.empty() : Optional.of(earliest.get(0));
+    }
+
     /** История версий — для popover'а в UI. */
     public List<Map<String, Object>> versions(Long skuId) {
         return jdbc.queryForList("""

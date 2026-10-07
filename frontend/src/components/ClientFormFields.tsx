@@ -3,6 +3,7 @@ import PhoneInput, { isValidPhone } from './PhoneInput'
 import AddressInput, { type AddressResolved } from './AddressInput'
 import DistrictSelect from './DistrictSelect'
 import { isValidInn } from '../utils/inn'
+import { CLIENT_SOURCE_LABELS, RESTART_STATUS_LABELS, GENDER_LABELS } from '../constants/statuses'
 
 /**
  * Состояние формы клиента — общая структура для модалки в ClientsPage и
@@ -30,6 +31,21 @@ export interface ClientFormState {
   comment: string
   lat: number | null
   lon: number | null
+  /**
+   * V46 (правка №3 от 13.09): маркетинг. Статус относительно перезапуска
+   * заполняется один раз, источник — при заведении клиента; у существующего
+   * клиента ранее выбранное значение подставляется само.
+   */
+  restart_status: string
+  source: string
+  /** Обязательное уточнение для источника «Другой». */
+  source_note: string
+  /**
+   * V47 (правка №1 от 13.09): пол и возраст — для портрета базы. Пустой пол
+   * при создании клиента бэкенд предположит по отчеству.
+   */
+  gender: string
+  age: string
 }
 
 export const emptyClientForm = (): ClientFormState => ({
@@ -48,6 +64,11 @@ export const emptyClientForm = (): ClientFormState => ({
   comment: '',
   lat: null,
   lon: null,
+  restart_status: '',
+  source: '',
+  source_note: '',
+  gender: '',
+  age: '',
 })
 
 /**
@@ -55,6 +76,10 @@ export const emptyClientForm = (): ClientFormState => ({
  * Вызывается из родителя перед submit'ом — сама форма ничего не отправляет.
  */
 export function validateClientForm(v: ClientFormState): string | null {
+  // Правка №3 (13.09): «Другой источник» без расшифровки бесполезен для аналитики.
+  if (v.source === 'OTHER' && !v.source_note.trim()) {
+    return 'Для источника «Другой» укажите уточнение'
+  }
   if (v.client_type === 'INDIVIDUAL') {
     if (!v.first_name.trim() && !v.name.trim()) return 'Имя клиента обязательно'
     if (!isValidPhone(v.phone)) return 'Укажите корректный телефон клиента в формате +7 (XXX) XXX-XX-XX'
@@ -247,6 +272,65 @@ export default function ClientFormFields({ value, onChange, phoneExtra, onPhoneV
           placeholder="Комментарий"
         />
       </div>
+      {/* Правка №3 (13.09): маркетинг. Откуда клиент пришёл и был ли он
+          клиентом «Возрождения» до перезапуска — CRM этого не знает, историю
+          заказов до перезапуска она не видела. Автоматику «новый/повторный»
+          эти поля не заменяют, они рядом. */}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+        <div className="form-group" style={{ flex: '1 1 240px' }}>
+          <label>Источник обращения</label>
+          <select value={v.source} onChange={e => set({ source: e.target.value })}>
+            <option value="">— не указан —</option>
+            {Object.entries(CLIENT_SOURCE_LABELS).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+        </div>
+        <div className="form-group" style={{ flex: '1 1 240px' }}>
+          <label>Статус относительно перезапуска</label>
+          <select value={v.restart_status} onChange={e => set({ restart_status: e.target.value })}>
+            <option value="">— не указан —</option>
+            {Object.entries(RESTART_STATUS_LABELS).map(([code, label]) => (
+              <option key={code} value={code}>{label}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      {v.source === 'OTHER' && (
+        <div className="form-group">
+          <label>Уточнение источника *</label>
+          <input
+            value={v.source_note}
+            onChange={e => set({ source_note: e.target.value })}
+            placeholder="Откуда именно узнал о нас"
+          />
+        </div>
+      )}
+      {/* Правка №1 (13.09): пол и возраст — только для портрета базы, оба
+          необязательные. Пол у нового клиента подставляется по отчеству
+          («…вна» / «…вич»), здесь его видно и можно поправить. */}
+      {v.client_type === 'INDIVIDUAL' && (
+        <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+          <div className="form-group" style={{ flex: '1 1 180px' }}>
+            <label>Пол</label>
+            <select value={v.gender} onChange={e => set({ gender: e.target.value })}>
+              <option value="">— определим по имени —</option>
+              {Object.entries(GENDER_LABELS).map(([code, label]) => (
+                <option key={code} value={code}>{label}</option>
+              ))}
+            </select>
+          </div>
+          <div className="form-group" style={{ flex: '0 0 120px' }}>
+            <label>Возраст</label>
+            <input
+              type="number" min="1" max="119"
+              value={v.age}
+              onChange={e => set({ age: e.target.value })}
+              placeholder="—"
+            />
+          </div>
+        </div>
+      )}
     </>
   )
 }
