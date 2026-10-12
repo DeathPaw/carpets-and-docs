@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 
 export interface SelectOption<T extends string | number> {
   value: T
@@ -18,7 +19,7 @@ export interface SelectOption<T extends string | number> {
  * закрывают, стрелки и Enter работают с клавиатуры.
  */
 export default function StyledSelect<T extends string | number>({
-  value, options, onChange, placeholder = '— не выбрано —', disabled, width, ariaLabel,
+  value, options, onChange, placeholder = '— не выбрано —', disabled, width, ariaLabel, portal = false,
 }: {
   value: T | null
   options: SelectOption<T>[]
@@ -27,17 +28,25 @@ export default function StyledSelect<T extends string | number>({
   disabled?: boolean
   width?: number | string
   ariaLabel?: string
+  /** Раскрывать поверх страницы, вне контейнеров с overflow (таблиц и модалок). */
+  portal?: boolean
 }) {
   const [open, setOpen] = useState(false)
   const [highlight, setHighlight] = useState(0)
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
+  const listId = useId()
+  const [menuPosition, setMenuPosition] = useState<{
+    left: number; top: number; width: number; maxHeight: number
+  } | null>(null)
 
   const selected = options.find(o => o.value === value) ?? null
 
   useEffect(() => {
     if (!open) return
     const onDocClick = (e: MouseEvent) => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false)
+      if (!wrapRef.current?.contains(e.target as Node)
+        && !menuRef.current?.contains(e.target as Node)) setOpen(false)
     }
     document.addEventListener('mousedown', onDocClick)
     return () => document.removeEventListener('mousedown', onDocClick)
@@ -46,6 +55,47 @@ export default function StyledSelect<T extends string | number>({
   useEffect(() => {
     if (open) setHighlight(Math.max(0, options.findIndex(o => o.value === value)))
   }, [open, options, value])
+
+  useLayoutEffect(() => {
+    if (!open || !portal) {
+      setMenuPosition(null)
+      return
+    }
+    const updatePosition = () => {
+      if (!wrapRef.current || !menuRef.current) return
+      const rect = wrapRef.current.getBoundingClientRect()
+      const margin = 8, gap = 4
+      const viewportWidth = document.documentElement.clientWidth
+      const viewportHeight = document.documentElement.clientHeight
+      const width = Math.min(rect.width, Math.max(0, viewportWidth - margin * 2))
+      const below = Math.max(0, viewportHeight - rect.bottom - gap - margin)
+      const above = Math.max(0, rect.top - gap - margin)
+      const desiredHeight = Math.min(280, menuRef.current.scrollHeight + 2)
+      const openAbove = desiredHeight > below && above > below
+      const maxHeight = Math.min(280, openAbove ? above : below, Math.max(0, viewportHeight - margin * 2))
+      const height = Math.min(desiredHeight, maxHeight)
+      setMenuPosition({
+        left: Math.max(margin, Math.min(rect.left, viewportWidth - width - margin)),
+        top: Math.max(margin, Math.min(
+          openAbove ? rect.top - gap - height : rect.bottom + gap,
+          viewportHeight - margin - height,
+        )),
+        width,
+        maxHeight,
+      })
+    }
+    updatePosition()
+    // Capture нужен и для прокрутки самой таблицы, а не только всей страницы.
+    window.addEventListener('scroll', updatePosition, true)
+    window.addEventListener('resize', updatePosition)
+    const observer = new ResizeObserver(updatePosition)
+    if (wrapRef.current) observer.observe(wrapRef.current)
+    return () => {
+      window.removeEventListener('scroll', updatePosition, true)
+      window.removeEventListener('resize', updatePosition)
+      observer.disconnect()
+    }
+  }, [open, portal, options.length])
 
   const pick = (v: T) => { onChange(v); setOpen(false) }
 
@@ -64,12 +114,76 @@ export default function StyledSelect<T extends string | number>({
     }
   }
 
+  const menu = open && (
+    <div
+      ref={menuRef}
+      id={listId}
+      role="listbox"
+      style={{
+        // z-index выше слоёв Leaflet (панели карты — 400+, контролы до 1000):
+        // иначе раскрытый список уходил под карту и было видно только первый пункт.
+        ...(portal ? {
+          position: 'fixed' as const,
+          left: menuPosition?.left ?? 0,
+          top: menuPosition?.top ?? 0,
+          width: menuPosition?.width,
+          maxHeight: menuPosition?.maxHeight ?? 280,
+          visibility: menuPosition ? 'visible' as const : 'hidden' as const,
+        } : {
+          position: 'absolute' as const, top: 'calc(100% + 4px)', left: 0,
+          minWidth: '100%', maxHeight: 280,
+        }),
+        zIndex: 2000,
+        background: '#fff', border: '1px solid var(--c-border)',
+        borderRadius: 'var(--radius)', boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
+        overflowY: 'auto', padding: 4,
+      }}
+    >
+      {options.length === 0 ? (
+        <div style={{ padding: '8px 10px', color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)' }}>
+          Нет вариантов
+        </div>
+      ) : options.map((o, i) => {
+        const isSelected = o.value === value
+        const isHot = i === highlight
+        return (
+          <div
+            key={String(o.value)}
+            id={`${listId}-${i}`}
+            role="option"
+            aria-selected={isSelected}
+            onMouseEnter={() => setHighlight(i)}
+            onClick={() => pick(o.value)}
+            style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+              padding: '7px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
+              fontSize: 14, whiteSpace: 'nowrap',
+              background: isSelected ? 'var(--c-primary)' : (isHot ? 'var(--c-primary-light)' : 'transparent'),
+              color: isSelected ? '#fff' : 'var(--c-text)',
+              fontWeight: isSelected ? 600 : 400,
+            }}
+          >
+            <span>{o.label}</span>
+            {o.hint && (
+              <span style={{
+                fontSize: 'var(--font-sm)',
+                color: isSelected ? 'rgba(255,255,255,0.85)' : 'var(--c-text-secondary)',
+              }}>{o.hint}</span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+
   return (
     <div ref={wrapRef} style={{ position: 'relative', width: width ?? '100%' }}>
       <button
         type="button"
         role="combobox"
         aria-expanded={open}
+        aria-controls={open ? listId : undefined}
+        aria-activedescendant={open && options[highlight] ? `${listId}-${highlight}` : undefined}
         aria-label={ariaLabel}
         disabled={disabled}
         onClick={() => !disabled && setOpen(o => !o)}
@@ -96,53 +210,7 @@ export default function StyledSelect<T extends string | number>({
         <span style={{ color: 'var(--c-primary)', fontSize: 'var(--font-sm)', flexShrink: 0 }}>▼</span>
       </button>
 
-      {open && (
-        <div
-          role="listbox"
-          style={{
-            // z-index выше слоёв Leaflet (панели карты — 400+, контролы до 1000):
-            // иначе раскрытый список уходил под карту и было видно только первый пункт.
-            position: 'absolute', top: 'calc(100% + 4px)', left: 0, minWidth: '100%', zIndex: 2000,
-            background: '#fff', border: '1px solid var(--c-border)',
-            borderRadius: 'var(--radius)', boxShadow: '0 6px 18px rgba(0,0,0,0.12)',
-            maxHeight: 280, overflowY: 'auto', padding: 4,
-          }}
-        >
-          {options.length === 0 ? (
-            <div style={{ padding: '8px 10px', color: 'var(--c-text-muted)', fontSize: 'var(--font-sm)' }}>
-              Нет вариантов
-            </div>
-          ) : options.map((o, i) => {
-            const isSelected = o.value === value
-            const isHot = i === highlight
-            return (
-              <div
-                key={String(o.value)}
-                role="option"
-                aria-selected={isSelected}
-                onMouseEnter={() => setHighlight(i)}
-                onClick={() => pick(o.value)}
-                style={{
-                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-                  padding: '7px 10px', borderRadius: 'var(--radius-sm)', cursor: 'pointer',
-                  fontSize: 14, whiteSpace: 'nowrap',
-                  background: isSelected ? 'var(--c-primary)' : (isHot ? 'var(--c-primary-light)' : 'transparent'),
-                  color: isSelected ? '#fff' : 'var(--c-text)',
-                  fontWeight: isSelected ? 600 : 400,
-                }}
-              >
-                <span>{o.label}</span>
-                {o.hint && (
-                  <span style={{
-                    fontSize: 'var(--font-sm)',
-                    color: isSelected ? 'rgba(255,255,255,0.85)' : 'var(--c-text-secondary)',
-                  }}>{o.hint}</span>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
+      {menu && (portal ? createPortal(menu, document.body) : menu)}
     </div>
   )
 }

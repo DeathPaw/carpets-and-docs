@@ -546,6 +546,7 @@ function ServicesPanel({
                           value={s.status}
                           width={130}
                           ariaLabel="Статус услуги"
+                          portal
                           options={[
                             { value: 'CREATED', label: 'Создана' },
                             ...(showAssignHint ? [] : [
@@ -1301,6 +1302,7 @@ function QuickItemActionsModal({
                       width={170}
                       disabled={busy || noAssignee}
                       ariaLabel="Перевести услугу в статус"
+                      portal
                       placeholder={noAssignee ? 'Нужен исполнитель' : 'Перевести в…'}
                       options={targets.map(s => ({ value: s, label: SERVICE_STATUS_LABELS[s] ?? s }))}
                       onChange={v => void changeStatus(svc, v as ServiceStatus)}
