@@ -32,13 +32,23 @@ public class OrderStatusHistoryRepository {
     }
 
     public void save(Long orderId, OrderStatus oldStatus, OrderStatus newStatus) {
+        insert(orderId, oldStatus, newStatus, false);
+    }
+
+    /** Запись отката (V57): помечается флагом, чтобы findPreviousStatus её пропускал. */
+    public void saveRollback(Long orderId, OrderStatus oldStatus, OrderStatus newStatus) {
+        insert(orderId, oldStatus, newStatus, true);
+    }
+
+    private void insert(Long orderId, OrderStatus oldStatus, OrderStatus newStatus, boolean isRollback) {
         var params = new MapSqlParameterSource()
                 .addValue("orderId", orderId)
                 .addValue("oldStatus", oldStatus != null ? oldStatus.name() : null)
-                .addValue("newStatus", newStatus.name());
+                .addValue("newStatus", newStatus.name())
+                .addValue("isRollback", isRollback);
         jdbc.update(
-                "INSERT INTO order_status_history (order_id, old_status, new_status) " +
-                "VALUES (:orderId, :oldStatus, :newStatus)",
+                "INSERT INTO order_status_history (order_id, old_status, new_status, is_rollback) " +
+                "VALUES (:orderId, :oldStatus, :newStatus, :isRollback)",
                 params
         );
     }
@@ -54,19 +64,35 @@ public class OrderStatusHistoryRepository {
 
     /**
      * Статус, из которого заказ пришёл в текущий — для кнопки «Откатить».
-     * Берём old_status последней записи. Сортируем по id, а не по changed_at:
-     * несколько переходов внутри одной транзакции получают одинаковый timestamp
-     * (NOW() в Postgres постоянен внутри транзакции), и по времени порядок был бы
-     * недетерминированным. Возвращает null, если истории нет или в ней null.
+     *
+     * <p>Идём по истории от новых записей к старым как по стеку: каждый откат
+     * отменяет ближайший к нему обычный переход, поэтому пару «переход + его
+     * откат» пропускаем. Первый неотменённый переход и даёт ответ. Так повторный
+     * откат идёт дальше назад (COMPLETED → DELIVERED → DONE), а не возвращает
+     * заказ туда, откуда его только что откатили.
+     *
+     * <p>Сортируем по id, а не по changed_at: несколько переходов внутри одной
+     * транзакции получают одинаковый timestamp (NOW() в Postgres постоянен внутри
+     * транзакции), и по времени порядок был бы недетерминированным. Возвращает
+     * null, если откатывать некуда.
      */
     public OrderStatus findPreviousStatus(Long orderId) {
-        List<String> rows = jdbc.queryForList(
-                "SELECT old_status FROM order_status_history " +
-                "WHERE order_id = :orderId ORDER BY id DESC LIMIT 1",
-                Map.of("orderId", orderId),
-                String.class
+        List<Map<String, Object>> rows = jdbc.queryForList(
+                "SELECT old_status, is_rollback FROM order_status_history " +
+                "WHERE order_id = :orderId ORDER BY id DESC",
+                Map.of("orderId", orderId)
         );
-        if (rows.isEmpty() || rows.get(0) == null) return null;
-        return OrderStatus.valueOf(rows.get(0));
+        int undone = 0;
+        for (Map<String, Object> row : rows) {
+            if (Boolean.TRUE.equals(row.get("is_rollback"))) {
+                undone++;
+            } else if (undone > 0) {
+                undone--;
+            } else {
+                String old = (String) row.get("old_status");
+                return old == null ? null : OrderStatus.valueOf(old);
+            }
+        }
+        return null;
     }
 }

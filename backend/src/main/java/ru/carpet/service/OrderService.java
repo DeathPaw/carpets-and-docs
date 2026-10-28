@@ -484,7 +484,10 @@ public class OrderService {
      * <ul>
      *   <li>берём предыдущий статус из order_status_history (последняя запись);</li>
      *   <li>причина обязательна — откат это исправление ошибки, оно должно быть объяснено;</li>
-     *   <li>из COMPLETED не откатываем: заказ оплачен, сначала нужен возврат оплаты;</li>
+     *   <li>из COMPLETED откатываем вместе с оплатой: заказ завершают ошибочно
+     *       (водитель выехал, машина сломалась по дороге), и без снятия отметки
+     *       об оплате его потом не провести через «Оплатить и завершить» заново;</li>
+     *   <li>обратно в COMPLETED откатом не попасть — только через оплату;</li>
      *   <li>снимаем cancellation_reason, если откатываем отмену.</li>
      * </ul>
      */
@@ -495,11 +498,6 @@ public class OrderService {
         if (trimmed.length() < 10) {
             throw new BusinessRuleException("Для отката статуса укажите причину (минимум 10 символов).");
         }
-        if (order.status() == OrderStatus.COMPLETED) {
-            throw new BusinessRuleException(
-                "Заказ завершён и оплачен — откат статуса невозможен. "
-                + "Если нужна корректировка, оформите гарантийный возврат.");
-        }
         OrderStatus previous = historyRepository.findPreviousStatus(orderId);
         if (previous == null) {
             throw new BusinessRuleException(
@@ -509,6 +507,10 @@ public class OrderService {
         if (previous == current) {
             throw new BusinessRuleException("Предыдущий статус совпадает с текущим — откат не нужен.");
         }
+        if (previous == OrderStatus.COMPLETED) {
+            throw new BusinessRuleException(
+                "Вернуть заказ в «Завершён» можно только оплатой — нажмите «Оплатить и завершить».");
+        }
         // Откат из CANCELLED должен снять причину отмены, иначе она «прилипнет»
         // к живому заказу и будет висеть в интерфейсе.
         if (current == OrderStatus.CANCELLED) {
@@ -516,10 +518,19 @@ public class OrderService {
         } else {
             repository.updateStatus(orderId, previous);
         }
-        historyRepository.save(orderId, current, previous);
+        String paymentNote = "";
+        if (current == OrderStatus.COMPLETED && order.paid()) {
+            repository.unpay(orderId);
+            paymentNote = "; оплата снята (" + order.paymentType()
+                    + (order.paymentDate() != null
+                        ? ", " + order.paymentDate().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
+                        : "")
+                    + ")";
+        }
+        historyRepository.saveRollback(orderId, current, previous);
         auditLogService.log("ORDER", orderId, "STATUS_ROLLBACK",
                 "Откат статуса заказа #" + orderId + ": " + current + " → " + previous
-                        + " (причина: " + trimmed + ")");
+                        + " (причина: " + trimmed + ")" + paymentNote);
         notifyOperators(
             "ORDER_STATUS_CHANGED",
             "Откат заказа #" + String.format("%05d", orderId) + ": " + current + " → " + previous,

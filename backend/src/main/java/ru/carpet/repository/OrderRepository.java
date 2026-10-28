@@ -632,6 +632,14 @@ public class OrderRepository {
         );
     }
 
+    /** Снять отметку об оплате — при откате заказа из COMPLETED. */
+    public void unpay(Long id) {
+        jdbc.update(
+                "UPDATE orders SET paid = false, payment_type = NULL, payment_date = NULL, version = version + 1, updated_at = NOW() WHERE id = :id",
+                Map.of("id", id)
+        );
+    }
+
     /**
      * V19 (#7): после переименования клиента — пробрасываем новое имя в денормализованную
      * колонку orders.client_name. Иначе старое имя останется в карточках всех его заказов.

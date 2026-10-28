@@ -2549,10 +2549,10 @@ export default function OrderDetailPage() {
               </div>
             )
           })()}
-          {/* Откат на шаг назад. Доступен во всех статусах кроме COMPLETED —
-              там заказ оплачен, корректировка только через гарантийный возврат.
+          {/* Откат на шаг назад. Доступен во всех статусах, включая COMPLETED —
+              там вместе со статусом снимается и оплата (бэкенд пишет это в журнал).
               Прячем при пустой истории: откатывать некуда. */}
-          {!isReadonly && order.status !== 'COMPLETED' && history.length > 0 && (
+          {!isReadonly && history.length > 0 && (
             <button
               className="btn-secondary"
               title="Вернуть заказ в предыдущий статус (нужно указать причину)"
@@ -3132,7 +3132,11 @@ export default function OrderDetailPage() {
       {showRollbackModal && (
         <CancelReasonModal
           title="Откат статуса"
-          subject={`Заказ #${String(order.id).padStart(5, '0')} вернётся в предыдущий статус. Причина попадёт в журнал действий.`}
+          subject={`Заказ #${String(order.id).padStart(5, '0')} вернётся в предыдущий статус.`
+            + (order.status === 'COMPLETED' && order.paid
+              ? ' Отметка об оплате будет снята — после доставки заказ нужно будет оплатить заново.'
+              : '')
+            + ' Причина попадёт в журнал действий.'}
           confirmLabel="Откатить"
           placeholder="Например: ошибочно нажал «Доставлен», клиент ещё не получил заказ"
           onCancel={() => setShowRollbackModal(false)}
