@@ -15,8 +15,10 @@ if not exist "%JAR%" (
     exit /b 1
 )
 
-REM Если уже запущен — выходим
-tasklist /FI "WINDOWTITLE eq CarpetOrders" 2>nul | findstr /I "cmd.exe" >nul
+REM Если уже запущен — выходим. Ищем свой java.exe по командной строке
+REM (app-process.ps1): заголовок окна CarpetOrders не виден, когда скрипт
+REM запускает Task Scheduler от SYSTEM, и раньше проверка давала ложное «не запущен».
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
 if not errorlevel 1 (
     echo Already running.
     exit /b 0

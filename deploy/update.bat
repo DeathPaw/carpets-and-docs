@@ -49,8 +49,25 @@ git fetch --quiet >> "%LOG%" 2>&1
 git reset --hard origin/main --quiet >> "%LOG%" 2>&1
 for /f %%i in ('git rev-parse HEAD 2^>nul') do set NEW_HASH=%%i
 
+REM Задача автозапуска при старте Windows. Её регистрирует setup.bat, но на
+REM серверах, поставленных до её появления, её нет — досоздаём здесь, чтобы
+REM не просить запускать setup.bat заново.
+schtasks /Query /TN "CarpetOrdersStart" >nul 2>&1
+if errorlevel 1 (
+    schtasks /Create /SC ONSTART /DELAY 0002:00 /TN "CarpetOrdersStart" /TR "\"%ROOT%\deploy\start.bat\"" /RL HIGHEST /RU SYSTEM /F >> "%LOG%" 2>&1
+    echo Registered CarpetOrdersStart task >> "%LOG%"
+)
+
+REM Сторож: если обновлений нет, но приложение не запущено (перезагрузка,
+REM падение, кто-то остановил), поднимаем его. Раньше без нового коммита оно
+REM так и лежало. Комментарий вне блока if: REM со скобками внутри блока ломает cmd.
 if "%OLD_HASH%"=="%NEW_HASH%" (
     echo No updates. >> "%LOG%"
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
+    if errorlevel 1 (
+        echo App is not running, starting... >> "%LOG%"
+        call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+    )
     del /F /Q "%LOCK%" >nul 2>&1
     exit /b 0
 )
@@ -75,8 +92,9 @@ echo Pre-update backup OK: deploy\backups\pre-update.dump >> "%LOG%"
 
 REM ─── Стопим Java РАНЬШЕ, до операций с файлами. На прошлой итерации java.exe
 REM держал файлы и rmdir/move ругались «занят другим процессом».
+REM Только свой процесс: `taskkill /IM java.exe` клал и «Верфь» на том же сервере.
 echo Stopping Java... >> "%LOG%"
-taskkill /F /IM java.exe /T >> "%LOG%" 2>&1
+call "%ROOT%\deploy\stop.bat" >> "%LOG%" 2>&1
 REM Ждём 3 секунды чтобы дескрипторы освободились.
 timeout /t 3 /nobreak >nul
 
@@ -103,9 +121,7 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Restart
-call "%ROOT%\deploy\stop.bat" >> "%LOG%" 2>&1
-timeout /t 2 /nobreak >nul
+REM Start (остановили выше, перед сборкой)
 call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
 
 echo Restart complete. >> "%LOG%"

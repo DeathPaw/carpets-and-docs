@@ -8,6 +8,7 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import ru.carpet.repository.ErrorLogRepository;
 
 import java.time.LocalDateTime;
@@ -52,9 +53,28 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<Map<String, Object>> handleGeneral(Exception ex, WebRequest request) {
+        // Клиент закрыл соединение, не дождавшись ответа (ушёл со страницы, пропала
+        // связь) — чаще всего на тяжёлых ответах с фото в base64. Это не ошибка
+        // приложения: отвечать уже некому, а стектрейс на 200 строк и запись в
+        // error_log только засоряют логи.
+        if (isClientDisconnect(ex)) {
+            log.debug("Client disconnected: {} {}", getPath(request), ex.getMessage());
+            return null;
+        }
         log.error("Unexpected error", ex);
         logError("INTERNAL_ERROR", ex.getMessage(), getPath(request));
         return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "INTERNAL_ERROR", "Internal server error", getPath(request));
+    }
+
+    private static boolean isClientDisconnect(Throwable ex) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof AsyncRequestNotUsableException
+                    || t.getClass().getSimpleName().equals("ClientAbortException")) {
+                return true;
+            }
+            if (t.getCause() == t) break;
+        }
+        return false;
     }
 
     private void logError(String errorType, String message, String requestPath) {

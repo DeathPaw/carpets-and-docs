@@ -19,9 +19,10 @@ set ROOT=%CD%
 set PGPASSWORD=postgres
 title Carpet Orders - Setup
 
-REM Ранняя очистка: убиваем все java.exe (могут держать файлы), чистим dist/target.
+REM Ранняя очистка: останавливаем свой java.exe (держит файлы), чистим dist/target.
 REM Без этого vite падает EPERM при попытке очистить frontend\dist\assets.
-taskkill /F /IM java.exe /T >nul 2>&1
+REM Только свой процесс: `taskkill /IM java.exe` клал и «Верфь» на том же сервере.
+call "%ROOT%\deploy\stop.bat" >nul 2>&1
 timeout /t 3 /nobreak >nul
 
 REM Несколько попыток rmdir с задержкой — Windows Defender может держать файл
@@ -108,6 +109,14 @@ schtasks /Delete /TN "CarpetOrdersBackup" /F >nul 2>&1
 schtasks /Create /SC DAILY /ST 04:00 /TN "CarpetOrdersBackup" /TR "\"%ROOT%\deploy\backup.bat\"" /RL HIGHEST /RU SYSTEM /F >nul || goto :err
 powershell -NoProfile -Command "$t=Get-ScheduledTask -TaskName 'CarpetOrdersBackup'; $t.Settings.DisallowStartIfOnBatteries=$false; $t.Settings.StopIfGoingOnBatteries=$false; $t.Settings.StartWhenAvailable=$true; Set-ScheduledTask -InputObject $t" >nul 2>&1
 echo Daily backup task registered (04:00, keeps 3 days).
+
+REM Автозапуск при старте Windows (после отключения электричества и т.п.).
+REM Задержка 2 минуты — даём подняться PostgreSQL, иначе Spring падает на
+REM подключении к БД. Если всё же упадёт — update.bat поднимет его в течение 5 минут.
+schtasks /Delete /TN "CarpetOrdersStart" /F >nul 2>&1
+schtasks /Create /SC ONSTART /DELAY 0002:00 /TN "CarpetOrdersStart" /TR "\"%ROOT%\deploy\start.bat\"" /RL HIGHEST /RU SYSTEM /F >nul || goto :err
+powershell -NoProfile -Command "$t=Get-ScheduledTask -TaskName 'CarpetOrdersStart'; $t.Settings.DisallowStartIfOnBatteries=$false; $t.Settings.StopIfGoingOnBatteries=$false; $t.Settings.ExecutionTimeLimit='PT0S'; Set-ScheduledTask -InputObject $t" >nul 2>&1
+echo Startup task registered (on boot, +2 min).
 
 echo.
 echo === [6/6] Starting application ===
