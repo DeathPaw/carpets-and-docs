@@ -99,14 +99,15 @@ export interface ContractClientRow {
 
 export interface ContractReportRow {
   id: number
-  number: string
-  kind: 'COMMERCIAL' | 'GOVERNMENT'
+  number?: string | null
+  kind?: 'COMMERCIAL' | 'GOVERNMENT' | null
   client_name: string
   client_inn: string | null
-  signed_on: string
+  signed_on?: string | null
   expires_on: string | null
   planned_sqm: number | null
-  price_per_sqm: number
+  price_per_sqm?: number | null
+  total_amount?: number | null
   is_active: boolean
   fact_sqm: number
   remaining_sqm: number

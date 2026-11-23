@@ -191,7 +191,8 @@ public class ReportRepository {
         return jdbc.queryForList("""
             SELECT k.id, k.number, k.kind, cl.name AS client_name, cl.inn AS client_inn,
                    k.signed_on::text AS signed_on, k.expires_on::text AS expires_on,
-                   k.planned_sqm, k.price_per_sqm, k.is_active,
+                   k.planned_sqm, k.price_per_sqm, k.total_amount, k.planned_dez, k.planned_dez_unit,
+                   k.planned_wash, k.planned_wash_unit, k.is_active,
                    COALESCE((SELECT SUM(i.area * i.quantity) FROM orders o
                                JOIN order_items i ON i.order_id = o.id
                               WHERE o.contract_id = k.id AND o.contract_delivered_at IS NOT NULL
@@ -200,7 +201,7 @@ public class ReportRepository {
                               WHERE c.contract_id = k.id AND c.status = 'DONE'), 0) AS fact_sqm
               FROM contracts k
               JOIN clients cl ON cl.id = k.client_id
-             ORDER BY k.signed_on DESC, k.id DESC
+             ORDER BY k.signed_on DESC NULLS FIRST, k.id DESC
         """, Map.of());
     }
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useToast } from '../components/Toast'
 import { onsiteApi, ONSITE_STATUS_LABELS } from '../api/onsite'
 import type { OnsiteCleaning, OnsiteStatus, OnsiteWorker } from '../api/onsite'
-import { contractsApi } from '../api/contracts'
+import { contractsApi, contractNo } from '../api/contracts'
 import type { Contract } from '../api/contracts'
 import { getEmployees } from '../api/references'
 import { searchClients } from '../api/clients'
@@ -273,7 +273,7 @@ function OnsiteModal({ value, employees, contracts, onChange, onClose, onSave }:
           >
             <option value="">Без контракта</option>
             {contracts.map(c => (
-              <option key={c.id} value={c.id}>№ {c.number} — {c.client_name}</option>
+              <option key={c.id} value={c.id}>{contractNo(c)} — {c.client_name}</option>
             ))}
           </select>
         </label>

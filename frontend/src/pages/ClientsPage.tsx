@@ -11,7 +11,7 @@ import ClientFormFields, { type ClientFormState, emptyClientForm, validateClient
 import ClientAnalyticsPanel from '../components/clients/ClientAnalyticsPanel'
 import { formatOrderNumber } from '../utils/format'
 import type { Client, Order, CreateClientRequest } from '../types'
-import { contractsApi, CONTRACT_KIND_LABELS } from '../api/contracts'
+import { contractsApi, CONTRACT_KIND_LABELS, contractNo } from '../api/contracts'
 import type { Contract } from '../api/contracts'
 
 function CreateClientModal({
@@ -408,11 +408,11 @@ function ClientCardModal({
                 <tbody>
                   {contracts.map(c => (
                     <tr key={c.id}>
-                      <td>№ {c.number}</td>
-                      <td>{CONTRACT_KIND_LABELS[c.kind]}</td>
-                      <td>{c.signed_on}{c.expires_on ? ` — ${c.expires_on}` : ' — бессрочно'}</td>
+                      <td>{contractNo(c)}</td>
+                      <td>{c.kind ? CONTRACT_KIND_LABELS[c.kind] : '—'}</td>
+                      <td>{c.signed_on ?? '…'}{c.expires_on ? ` — ${c.expires_on}` : ' — срок не указан'}</td>
                       <td>{c.planned_sqm != null ? Number(c.planned_sqm).toLocaleString('ru') : '—'}</td>
-                      <td>{Number(c.price_per_sqm).toLocaleString('ru')}</td>
+                      <td>{c.price_per_sqm != null ? Number(c.price_per_sqm).toLocaleString('ru') : '—'}</td>
                       <td>{c.is_active ? 'Действует' : 'В архиве'}</td>
                     </tr>
                   ))}

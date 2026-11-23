@@ -13,17 +13,30 @@ export const CONTRACT_KIND_LABELS: Record<ContractKind, string> = {
   GOVERNMENT: 'Государственный',
 }
 
+/** «№ 12/2026» или «б/н» — номер контракта необязателен (ПР-011). */
+export const contractNo = (c: { number?: string | null }) => c.number ? `№ ${c.number}` : 'б/н'
+
 export interface Contract {
   id: number
   client_id: number
   client_name: string
   client_inn: string | null
-  number: string
-  kind: ContractKind
-  signed_on: string
+  /** ПР-011: номер, вид, дата заключения и цена за м² необязательны. */
+  number?: string | null
+  kind?: ContractKind | null
+  signed_on?: string | null
+  /** Обязателен — по нему контролируют окончание обязательств. */
   expires_on: string | null
+  /** Плановый объём по коврам, м². */
   planned_sqm: number | null
-  price_per_sqm: number
+  price_per_sqm?: number | null
+  /** ПР-011: общая стоимость контракта отдельной суммой. */
+  total_amount?: number | null
+  /** ПР-011: плановые объёмы ДЭЗ и стирки, единицы — строкой. */
+  planned_dez?: number | null
+  planned_dez_unit?: string | null
+  planned_wash?: number | null
+  planned_wash_unit?: string | null
   comment: string | null
   is_active: boolean
   files_count?: number
@@ -65,8 +78,8 @@ export interface PlanFact {
   remaining_sqm: number
   over_sqm: number
   completion_percent: number | null
-  planned_amount: number
-  fact_amount: number
+  planned_amount?: number | null
+  fact_amount?: number | null
   works: ContractWork[]
   deliveries: ContractDelivery[]
 }

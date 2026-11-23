@@ -76,8 +76,7 @@ public class ContractController {
     public Map<String, Object> create(@RequestBody Map<String, Object> body) {
         validate(body);
         Long id = repository.save(body, AuditUser.current());
-        auditLogService.log("CONTRACT", id, "CREATE",
-                "Контракт № " + body.get("number") + " на " + body.get("price_per_sqm") + " ₽/м²");
+        auditLogService.log("CONTRACT", id, "CREATE", "Создан контракт " + label(body));
         return get(id);
     }
 
@@ -88,7 +87,7 @@ public class ContractController {
         repository.update(id, body);
         // Ранее учтённые заказы не пересчитываем: у них своя зафиксированная цена.
         auditLogService.log("CONTRACT", id, "UPDATE",
-                "Контракт № " + body.get("number") + " изменён; ранее учтённые заказы сохраняют прежнюю цену");
+                "Контракт " + label(body) + " изменён; ранее учтённые заказы сохраняют прежнюю цену");
         return get(id);
     }
 
@@ -105,8 +104,8 @@ public class ContractController {
     public Map<String, Object> planFact(@PathVariable Long id) {
         var raw = repository.planFact(id);
         BigDecimal planned = decimal(raw.get("planned_sqm"));
-        BigDecimal price = decimal(raw.get("price_per_sqm"));
         BigDecimal fact = decimal(raw.get("orders_sqm")).add(decimal(raw.get("onsite_sqm")));
+        var contract = repository.findById(id).orElse(Map.of());
 
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("planned_sqm", planned);
@@ -116,8 +115,10 @@ public class ContractController {
         // При нулевом плане процент не считаем — делить не на что.
         result.put("completion_percent", planned.signum() == 0 ? null
                 : fact.multiply(BigDecimal.valueOf(100)).divide(planned, 1, RoundingMode.HALF_UP));
-        result.put("planned_amount", planned.multiply(price));
-        result.put("fact_amount", fact.multiply(price));
+        // ПР-011: цена за м² необязательна, может быть только общая стоимость.
+        result.putAll(ContractRepository.amounts(
+                raw.get("planned_sqm") == null ? null : planned, fact,
+                nullableDecimal(contract.get("price_per_sqm")), nullableDecimal(contract.get("total_amount"))));
         result.put("works", repository.works(id));
         result.put("deliveries", repository.deliveries(id));
         return result;
@@ -130,7 +131,8 @@ public class ContractController {
     public Map<String, Object> linkOrder(@PathVariable Long id, @PathVariable Long orderId) {
         var contract = repository.findById(id)
                 .orElseThrow(() -> new EntityNotFoundException("Контракт не найден: " + id));
-        BigDecimal price = decimal(contract.get("price_per_sqm"));
+        // ПР-011: без цены за м² заказ считается по прайсу — договорную ставку не фиксируем.
+        BigDecimal price = nullableDecimal(contract.get("price_per_sqm"));
         repository.linkOrder(orderId, id, price);
         recalculateOrder(orderId);
 
@@ -155,11 +157,11 @@ public class ContractController {
         String warning = warnings.isEmpty() ? null : String.join(". ", warnings);
 
         auditLogService.log("ORDER", orderId, "UPDATE",
-                "Заказ #" + String.format("%05d", orderId) + " привязан к контракту № " + contract.get("number")
-                        + " по " + price.stripTrailingZeros().toPlainString() + " ₽/м²");
+                "Заказ #" + String.format("%05d", orderId) + " привязан к контракту " + label(contract)
+                        + (price == null ? " (цена по прайсу)" : " по " + price.stripTrailingZeros().toPlainString() + " ₽/м²"));
         Map<String, Object> result = new LinkedHashMap<>();
         result.put("ok", true);
-        result.put("price_per_sqm", price);
+        if (price != null) result.put("price_per_sqm", price);
         if (warning != null) result.put("warning", warning);
         return result;
     }
@@ -232,13 +234,35 @@ public class ContractController {
         auditLogService.log("CONTRACT", id, "UPDATE", "У контракта #" + id + " удалён файл");
     }
 
+    /**
+     * ПР-011: обязательны только юрлицо и срок действия — по нему контролируют
+     * окончание обязательств. Номер, дата заключения (часто известна лишь после
+     * подписи заказчика), вид, цена за м² и объёмы — по мере появления.
+     */
     private void validate(Map<String, Object> body) {
         if (body.get("client_id") == null) throw new BusinessRuleException("Выберите юрлицо");
-        if (body.get("number") == null || String.valueOf(body.get("number")).isBlank()) {
-            throw new BusinessRuleException("Укажите номер контракта");
+        if (body.get("expires_on") == null || String.valueOf(body.get("expires_on")).isBlank()) {
+            throw new BusinessRuleException("Укажите срок действия контракта");
         }
-        if (body.get("signed_on") == null) throw new BusinessRuleException("Укажите дату заключения");
-        if (body.get("price_per_sqm") == null) throw new BusinessRuleException("Укажите стоимость м²");
+        String signed = body.get("signed_on") == null ? "" : String.valueOf(body.get("signed_on"));
+        if (!signed.isBlank() && LocalDate.parse(String.valueOf(body.get("expires_on"))).isBefore(LocalDate.parse(signed))) {
+            throw new BusinessRuleException("Срок действия раньше даты заключения");
+        }
+        for (String f : List.of("price_per_sqm", "total_amount", "planned_sqm", "planned_dez", "planned_wash")) {
+            BigDecimal v = nullableDecimal(body.get(f));
+            if (v != null && v.signum() < 0) throw new BusinessRuleException("Суммы и объёмы не могут быть отрицательными");
+        }
+    }
+
+    /** «№ 12/2026» или «б/н» — номер необязателен (ПР-011). */
+    private static String label(Map<String, Object> c) {
+        Object n = c.get("number");
+        return n == null || String.valueOf(n).isBlank() ? "б/н" : "№ " + n;
+    }
+
+    private static BigDecimal nullableDecimal(Object v) {
+        if (v == null || String.valueOf(v).isBlank()) return null;
+        return v instanceof BigDecimal b ? b : new BigDecimal(String.valueOf(v));
     }
 
     private static BigDecimal decimal(Object v) {

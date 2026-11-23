@@ -30,6 +30,7 @@ public class ContractRepository {
         c.id, c.client_id, cl.name AS client_name, cl.inn AS client_inn,
         c.number, c.kind, c.signed_on::text AS signed_on, c.expires_on::text AS expires_on,
         c.planned_sqm, c.price_per_sqm,
+        c.total_amount, c.planned_dez, c.planned_dez_unit, c.planned_wash, c.planned_wash_unit,
         c.comment, c.is_active, c.created_by, c.created_at,
         (SELECT COUNT(*) FROM contract_files f WHERE f.contract_id = c.id) AS files_count
         """;
@@ -40,7 +41,7 @@ public class ContractRepository {
                 + " FROM contracts c JOIN clients cl ON cl.id = c.client_id WHERE 1=1 ");
         if (clientId != null) sql.append(" AND c.client_id = :client ");
         if (Boolean.TRUE.equals(activeOnly)) sql.append(" AND c.is_active = TRUE ");
-        sql.append(" ORDER BY c.signed_on DESC, c.id DESC");
+        sql.append(" ORDER BY c.signed_on DESC NULLS FIRST, c.id DESC");
         return jdbc.queryForList(sql.toString(), params);
     }
 
@@ -54,8 +55,10 @@ public class ContractRepository {
         var keyHolder = new GeneratedKeyHolder();
         jdbc.update("""
             INSERT INTO contracts
-                (client_id, number, kind, signed_on, expires_on, planned_sqm, price_per_sqm, comment, created_by)
-            VALUES (:client, :number, :kind, :signed, :expires, :planned, :price, :comment, :by)
+                (client_id, number, kind, signed_on, expires_on, planned_sqm, price_per_sqm, comment, created_by,
+                 total_amount, planned_dez, planned_dez_unit, planned_wash, planned_wash_unit)
+            VALUES (:client, :number, :kind, :signed, :expires, :planned, :price, :comment, :by,
+                    :total, :dez, :dezUnit, :wash, :washUnit)
         """, params(d).addValue("by", createdBy), keyHolder, new String[]{"id"});
         return keyHolder.getKey().longValue();
     }
@@ -65,6 +68,8 @@ public class ContractRepository {
             UPDATE contracts
                SET client_id = :client, number = :number, kind = :kind, signed_on = :signed,
                    expires_on = :expires, planned_sqm = :planned, price_per_sqm = :price,
+                   total_amount = :total, planned_dez = :dez, planned_dez_unit = :dezUnit,
+                   planned_wash = :wash, planned_wash_unit = :washUnit,
                    comment = :comment, is_active = COALESCE(:active, is_active), updated_at = NOW()
              WHERE id = :id
         """, params(d).addValue("id", id)
@@ -78,15 +83,55 @@ public class ContractRepository {
     private MapSqlParameterSource params(Map<String, Object> d) {
         return new MapSqlParameterSource()
                 .addValue("client", ((Number) d.get("client_id")).longValue())
-                .addValue("number", d.get("number"))
-                .addValue("kind", d.getOrDefault("kind", "COMMERCIAL"))
-                .addValue("signed", LocalDate.parse(String.valueOf(d.get("signed_on"))))
-                .addValue("expires", d.get("expires_on") == null
-                        ? null : LocalDate.parse(String.valueOf(d.get("expires_on"))))
-                .addValue("planned", d.get("planned_sqm") == null
-                        ? null : new BigDecimal(String.valueOf(d.get("planned_sqm"))))
-                .addValue("price", new BigDecimal(String.valueOf(d.get("price_per_sqm"))))
+                // ПР-011: номер, вид, дата заключения и цена за м² — необязательны.
+                .addValue("number", blank(d.get("number")))
+                .addValue("kind", blank(d.get("kind")))
+                .addValue("signed", date(d.get("signed_on")))
+                .addValue("expires", date(d.get("expires_on")))
+                .addValue("planned", decimalOrNull(d.get("planned_sqm")))
+                .addValue("price", decimalOrNull(d.get("price_per_sqm")))
+                .addValue("total", decimalOrNull(d.get("total_amount")))
+                .addValue("dez", decimalOrNull(d.get("planned_dez")))
+                .addValue("dezUnit", blank(d.get("planned_dez_unit")))
+                .addValue("wash", decimalOrNull(d.get("planned_wash")))
+                .addValue("washUnit", blank(d.get("planned_wash_unit")))
                 .addValue("comment", d.get("comment"));
+    }
+
+    private static String blank(Object v) {
+        return v == null || String.valueOf(v).isBlank() ? null : String.valueOf(v).trim();
+    }
+
+    private static LocalDate date(Object v) {
+        String s = blank(v);
+        return s == null ? null : LocalDate.parse(s);
+    }
+
+    private static BigDecimal decimalOrNull(Object v) {
+        String s = blank(v);
+        return s == null ? null : new BigDecimal(s);
+    }
+
+    /**
+     * ПР-011: суммы план-факта. План — общая стоимость контракта, если задана,
+     * иначе метры × цена за м². Факт — сданные метры × цена за м²; без цены за
+     * м² — доля общей стоимости пропорционально сданным метрам (если есть план).
+     * Нечем посчитать — null.
+     */
+    public static Map<String, Object> amounts(BigDecimal plannedSqm, BigDecimal factSqm, BigDecimal pricePerSqm,
+                                              BigDecimal totalAmount) {
+        Map<String, Object> m = new java.util.LinkedHashMap<>();
+        BigDecimal planned = totalAmount != null ? totalAmount
+                : (pricePerSqm != null && plannedSqm != null ? plannedSqm.multiply(pricePerSqm) : null);
+        BigDecimal fact = null;
+        if (pricePerSqm != null) {
+            fact = factSqm.multiply(pricePerSqm);
+        } else if (totalAmount != null && plannedSqm != null && plannedSqm.signum() > 0) {
+            fact = totalAmount.multiply(factSqm).divide(plannedSqm, 2, java.math.RoundingMode.HALF_UP);
+        }
+        m.put("planned_amount", planned);
+        m.put("fact_amount", fact);
+        return m;
     }
 
     // ---------------- файлы ----------------

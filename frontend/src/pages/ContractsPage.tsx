@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useToast } from '../components/Toast'
-import { contractsApi, CONTRACT_KIND_LABELS } from '../api/contracts'
+import { contractsApi, CONTRACT_KIND_LABELS, contractNo } from '../api/contracts'
 import type { Contract, ContractKind, PlanFact } from '../api/contracts'
 import { getClients } from '../api/clients'
 import type { Client } from '../types'
@@ -47,7 +47,7 @@ export default function ContractsPage() {
     return contracts.filter(c => {
       if (onlyActive && !c.is_active) return false
       if (!q) return true
-      return c.number.toLowerCase().includes(q) || (c.client_name || '').toLowerCase().includes(q)
+      return (c.number ?? '').toLowerCase().includes(q) || (c.client_name || '').toLowerCase().includes(q)
     })
   }, [contracts, onlyActive, search])
 
@@ -55,12 +55,17 @@ export default function ContractsPage() {
     if (!editing) return
     const body = {
       client_id: editing.client_id,
-      number: editing.number,
-      kind: editing.kind || 'COMMERCIAL',
-      signed_on: editing.signed_on,
+      number: editing.number || null,
+      kind: editing.kind || null,
+      signed_on: editing.signed_on || null,
       expires_on: editing.expires_on || null,
       planned_sqm: editing.planned_sqm ?? null,
-      price_per_sqm: editing.price_per_sqm,
+      price_per_sqm: editing.price_per_sqm ?? null,
+      total_amount: editing.total_amount ?? null,
+      planned_dez: editing.planned_dez ?? null,
+      planned_dez_unit: editing.planned_dez_unit || null,
+      planned_wash: editing.planned_wash ?? null,
+      planned_wash_unit: editing.planned_wash_unit || null,
       comment: editing.comment || null,
       is_active: editing.is_active ?? true,
     }
@@ -111,7 +116,7 @@ export default function ContractsPage() {
         </label>
         <button
           className="btn-primary"
-          onClick={() => setEditing({ kind: 'COMMERCIAL', signed_on: todayIso(), is_active: true })}
+          onClick={() => setEditing({ is_active: true })}
         >+ Контракт</button>
       </div>
 
@@ -132,15 +137,17 @@ export default function ContractsPage() {
                 }}
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                  <strong>№ {c.number}</strong>
+                  <strong>{contractNo(c)}</strong>
                   <span style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)' }}>
-                    {Number(c.price_per_sqm).toLocaleString('ru')} ₽/м²
+                    {c.price_per_sqm != null
+                      ? `${Number(c.price_per_sqm).toLocaleString('ru')} ₽/м²`
+                      : c.total_amount != null ? `${Number(c.total_amount).toLocaleString('ru')} ₽` : ''}
                   </span>
                 </div>
                 <div style={{ fontSize: 'var(--font-sm)' }}>{c.client_name}</div>
                 <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d' }}>
-                  {CONTRACT_KIND_LABELS[c.kind]} · с {c.signed_on}
-                  {c.expires_on ? ` по ${c.expires_on}` : ' — бессрочно'}
+                  {[c.kind && CONTRACT_KIND_LABELS[c.kind], c.signed_on && `с ${c.signed_on}`].filter(Boolean).join(' · ')}
+                  {c.expires_on ? ` по ${c.expires_on}` : ' — срок не указан'}
                   {c.planned_sqm != null && ` · план ${Number(c.planned_sqm).toLocaleString('ru')} м²`}
                 </div>
                 {!c.is_active && <span className="badge badge-cancelled">В архиве</span>}
@@ -232,11 +239,24 @@ function ContractCard({ contract, onEdit, onDelete, onChanged }: {
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
           <div>
-            <h3 style={{ marginBottom: 4 }}>№ {contract.number} — {contract.client_name}</h3>
+            <h3 style={{ marginBottom: 4 }}>{contractNo(contract)} — {contract.client_name}</h3>
             <div style={{ color: '#7f8c8d', fontSize: 'var(--font-sm)' }}>
-              {CONTRACT_KIND_LABELS[contract.kind]}
-              {contract.client_inn && ` · ИНН ${contract.client_inn}`}
-              {' · '}с {contract.signed_on}{contract.expires_on ? ` по ${contract.expires_on}` : ' — бессрочно'}
+              {[
+                contract.kind && CONTRACT_KIND_LABELS[contract.kind],
+                contract.client_inn && `ИНН ${contract.client_inn}`,
+                (contract.signed_on ? `с ${contract.signed_on}` : 'дата заключения не указана')
+                  + (contract.expires_on ? ` по ${contract.expires_on}` : ' — срок не указан'),
+              ].filter(Boolean).join(' · ')}
+            </div>
+            {/* ПР-011: стоимость и плановые объёмы по направлениям. */}
+            <div style={{ fontSize: 'var(--font-sm)', marginTop: 4 }}>
+              {[
+                contract.total_amount != null && `Стоимость контракта: ${Number(contract.total_amount).toLocaleString('ru')} ₽`,
+                contract.price_per_sqm != null && `цена ${Number(contract.price_per_sqm).toLocaleString('ru')} ₽/м²`,
+                contract.planned_sqm != null && `ковры: ${Number(contract.planned_sqm).toLocaleString('ru')} м²`,
+                contract.planned_dez != null && `ДЭЗ: ${Number(contract.planned_dez).toLocaleString('ru')} ${contract.planned_dez_unit ?? ''}`,
+                contract.planned_wash != null && `стирка: ${Number(contract.planned_wash).toLocaleString('ru')} ${contract.planned_wash_unit ?? ''}`,
+              ].filter(Boolean).join(' · ')}
             </div>
             {contract.comment && <div style={{ marginTop: 6 }}>{contract.comment}</div>}
           </div>
@@ -256,6 +276,8 @@ function ContractCard({ contract, onEdit, onDelete, onChanged }: {
           <Metric label="Остаток, м²" value={pf?.remaining_sqm} />
           {!!pf?.over_sqm && <Metric label="Сверх плана, м²" value={pf.over_sqm} accent="#e67e22" />}
           <Metric label="Цена, ₽/м²" value={contract.price_per_sqm} />
+          {/* ПР-011: общая стоимость или метры × цена. */}
+          <Metric label="Стоимость по плану, ₽" value={pf?.planned_amount} />
           <Metric label="Сдано на сумму, ₽" value={pf?.fact_amount} accent="#27ae60" />
         </div>
         {percent != null && (
@@ -407,48 +429,69 @@ function ContractModal({ value, clients, onChange, onClose, onSave }: {
           </select>
         </label>
 
-        <label>Номер контракта
-          <input value={value.number ?? ''} onChange={e => set({ number: e.target.value })} />
-        </label>
-
-        <label>Вид
-          <select value={value.kind ?? 'COMMERCIAL'} onChange={e => set({ kind: e.target.value as ContractKind })}>
-            {Object.entries(CONTRACT_KIND_LABELS).map(([k, label]) => (
-              <option key={k} value={k}>{label}</option>
-            ))}
-          </select>
-        </label>
+        {/* ПР-011: обязательны только юрлицо и срок действия. Номер и дату
+            заключения часто узнают после подписи заказчика — заполняются позже. */}
+        <div style={{ display: 'flex', gap: 12 }}>
+          <label style={{ flex: 1 }}>Номер контракта
+            <input value={value.number ?? ''} onChange={e => set({ number: e.target.value })} placeholder="можно позже" />
+          </label>
+          <label style={{ flex: 1 }}>Вид
+            <select value={value.kind ?? ''} onChange={e => set({ kind: (e.target.value || null) as ContractKind | null })}>
+              <option value="">— не указан —</option>
+              {Object.entries(CONTRACT_KIND_LABELS).map(([k, label]) => (
+                <option key={k} value={k}>{label}</option>
+              ))}
+            </select>
+          </label>
+        </div>
 
         <div style={{ display: 'flex', gap: 12 }}>
           <label style={{ flex: 1 }}>Заключён
             <input type="date" value={value.signed_on ?? ''} onChange={e => set({ signed_on: e.target.value })} />
           </label>
-          <label style={{ flex: 1 }}>Действует до
+          <label style={{ flex: 1 }}>Действует до *
             <input type="date" value={value.expires_on ?? ''} onChange={e => set({ expires_on: e.target.value })} />
           </label>
         </div>
 
         <div style={{ display: 'flex', gap: 12 }}>
-          <label style={{ flex: 1 }}>Плановый объём, м²
-            <input
-              type="number" min="0" step="0.01"
-              value={value.planned_sqm ?? ''}
-              onChange={e => set({ planned_sqm: e.target.value ? Number(e.target.value) : null })}
-            />
+          <label style={{ flex: 1 }}>Общая стоимость, ₽
+            <input type="number" min="0" step="0.01" value={value.total_amount ?? ''}
+                   onChange={e => set({ total_amount: e.target.value ? Number(e.target.value) : null })} />
           </label>
-          <label style={{ flex: 1 }}>Цена, ₽/м²
-            <input
-              type="number" min="0" step="0.01"
-              value={value.price_per_sqm ?? ''}
-              onChange={e => set({ price_per_sqm: e.target.value ? Number(e.target.value) : undefined })}
-            />
+          <label style={{ flex: 1 }}>Цена за м² (если есть)
+            <input type="number" min="0" step="0.01" value={value.price_per_sqm ?? ''}
+                   onChange={e => set({ price_per_sqm: e.target.value ? Number(e.target.value) : null })} />
           </label>
         </div>
-        {/* Цена одна на весь договор: несколько тарифов внутри контракта ТЗ
-            прямо исключает. Изменение цены не трогает уже учтённые заказы. */}
+
+        <div style={{ fontWeight: 600, margin: '4px 0' }}>Плановые объёмы <span style={{ fontWeight: 400, color: '#7f8c8d' }}>— любой можно не заполнять</span></div>
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <label style={{ flex: '1 1 140px' }}>Ковры, м²
+            <input type="number" min="0" step="0.01" value={value.planned_sqm ?? ''}
+                   onChange={e => set({ planned_sqm: e.target.value ? Number(e.target.value) : null })} />
+          </label>
+          <label style={{ flex: '1 1 140px' }}>ДЭЗ
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input type="number" min="0" step="0.01" value={value.planned_dez ?? ''}
+                     onChange={e => set({ planned_dez: e.target.value ? Number(e.target.value) : null })} />
+              <input style={{ width: 70 }} value={value.planned_dez_unit ?? ''} placeholder="ед."
+                     onChange={e => set({ planned_dez_unit: e.target.value })} />
+            </div>
+          </label>
+          <label style={{ flex: '1 1 140px' }}>Стирка
+            <div style={{ display: 'flex', gap: 4 }}>
+              <input type="number" min="0" step="0.01" value={value.planned_wash ?? ''}
+                     onChange={e => set({ planned_wash: e.target.value ? Number(e.target.value) : null })} />
+              <input style={{ width: 70 }} value={value.planned_wash_unit ?? ''} placeholder="ед."
+                     onChange={e => set({ planned_wash_unit: e.target.value })} />
+            </div>
+          </label>
+        </div>
+        {/* Изменение цены не трогает уже учтённые заказы. */}
         <div style={{ fontSize: 'var(--font-sm)', color: '#7f8c8d', marginBottom: 8 }}>
-          Цена применяется к услугам за м² в заказах контракта. Новая цена действует
-          только для заказов, привязанных после изменения.
+          Цена за м² применяется к услугам за м² в заказах контракта; без неё заказы считаются
+          по прайсу. Новая цена действует для заказов, привязанных после изменения.
         </div>
 
         <label>Комментарий

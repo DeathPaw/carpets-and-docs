@@ -109,13 +109,15 @@ public class ReportController {
             var out = new LinkedHashMap<>(row);
             BigDecimal planned = decimal(row.get("planned_sqm"));
             BigDecimal fact = decimal(row.get("fact_sqm"));
-            BigDecimal price = decimal(row.get("price_per_sqm"));
             out.put("remaining_sqm", planned.subtract(fact).max(BigDecimal.ZERO));
             out.put("over_sqm", fact.subtract(planned).max(BigDecimal.ZERO));
             out.put("completion_percent", planned.signum() == 0 ? null
                     : fact.multiply(BigDecimal.valueOf(100)).divide(planned, 1, RoundingMode.HALF_UP));
-            out.put("planned_amount", planned.multiply(price));
-            out.put("fact_amount", fact.multiply(price));
+            // ПР-011: план — общая стоимость или метры × цена; без цены за м² факт пропорционален.
+            out.putAll(ru.carpet.repository.ContractRepository.amounts(
+                    row.get("planned_sqm") == null ? null : planned, fact,
+                    row.get("price_per_sqm") == null ? null : decimal(row.get("price_per_sqm")),
+                    row.get("total_amount") == null ? null : decimal(row.get("total_amount"))));
             return (Map<String, Object>) out;
         }).toList();
     }

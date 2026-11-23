@@ -7,7 +7,7 @@ import { reportsApi } from '../api/reports'
 import type {
   ContractClientRow, ContractReportRow, ReportFilters, ReportResponse, ReportWorkRow,
 } from '../api/reports'
-import { contractsApi, CONTRACT_KIND_LABELS } from '../api/contracts'
+import { contractsApi, CONTRACT_KIND_LABELS, contractNo } from '../api/contracts'
 import type { Contract } from '../api/contracts'
 import { ONSITE_STATUS_LABELS } from '../api/onsite'
 import { ORDER_STATUS_LABELS, ALL_ORDER_STATUSES } from '../constants/statuses'
@@ -204,12 +204,13 @@ export default function ReportsPage() {
         'План, м²', 'Факт, м²', 'Остаток, м²', 'Сверх плана, м²', 'Выполнение, %',
         'Цена, ₽/м²', 'План, ₽', 'Факт, ₽'],
       ...contractRows.map(c => [
-        c.number, CONTRACT_KIND_LABELS[c.kind], c.client_name, c.client_inn || '',
-        c.signed_on, c.expires_on || 'бессрочно', c.is_active ? 'Действует' : 'В архиве',
+        c.number ?? 'б/н', c.kind ? CONTRACT_KIND_LABELS[c.kind] : '', c.client_name, c.client_inn || '',
+        c.signed_on ?? '', c.expires_on || '', c.is_active ? 'Действует' : 'В архиве',
         c.planned_sqm == null ? '' : Number(c.planned_sqm), Number(c.fact_sqm),
         Number(c.remaining_sqm), Number(c.over_sqm),
         c.completion_percent == null ? '' : Number(c.completion_percent),
-        Number(c.price_per_sqm), Number(c.planned_amount), Number(c.fact_amount),
+        c.price_per_sqm == null ? '' : Number(c.price_per_sqm),
+        c.planned_amount == null ? '' : Number(c.planned_amount), c.fact_amount == null ? '' : Number(c.fact_amount),
       ]),
     ])
     ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 30 }, { wch: 14 }, { wch: 12 }, { wch: 14 },
@@ -296,7 +297,7 @@ export default function ReportsPage() {
               style={{ maxWidth: 220 }}
             >
               <option value="">Все</option>
-              {contracts.map(c => <option key={c.id} value={c.id}>№ {c.number} — {c.client_name}</option>)}
+              {contracts.map(c => <option key={c.id} value={c.id}>{contractNo(c)} — {c.client_name}</option>)}
             </select>
           </label>
           <label>Статус
@@ -486,10 +487,10 @@ export default function ReportsPage() {
           <tbody>
             {contractRows.map(c => (
               <tr key={c.id}>
-                <td><Link to="/contracts">№ {c.number}</Link></td>
-                <td>{CONTRACT_KIND_LABELS[c.kind]}</td>
+                <td><Link to="/contracts">{contractNo(c)}</Link></td>
+                <td>{c.kind ? CONTRACT_KIND_LABELS[c.kind] : '—'}</td>
                 <td>{c.client_name}</td>
-                <td>{c.signed_on} — {c.expires_on || 'бессрочно'}</td>
+                <td>{c.signed_on ?? '…'} — {c.expires_on || 'срок не указан'}</td>
                 <td>{c.planned_sqm == null ? '—' : Number(c.planned_sqm).toLocaleString('ru')}</td>
                 <td>{Number(c.fact_sqm).toLocaleString('ru')}</td>
                 <td>{Number(c.remaining_sqm).toLocaleString('ru')}</td>

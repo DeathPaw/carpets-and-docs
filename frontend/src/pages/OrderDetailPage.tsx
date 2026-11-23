@@ -76,7 +76,7 @@ import { formatOrderNumber, todayIso } from '../utils/format'
 import { useEscapeClose } from '../hooks/useEscapeClose'
 import StyledSelect from '../components/StyledSelect'
 import { useAuth } from '../auth/AuthContext'
-import { contractsApi } from '../api/contracts'
+import { contractsApi, contractNo } from '../api/contracts'
 import type { Contract } from '../api/contracts'
 
 // Проверяет, заполнены ли нужные размеры для данного pricing_type
@@ -3004,7 +3004,7 @@ export default function OrderDetailPage() {
                   <option value="">Без контракта (обычный прайс)</option>
                   {clientContracts.map(c => (
                     <option key={c.id} value={c.id}>
-                      № {c.number} — {Number(c.price_per_sqm).toLocaleString('ru')} ₽/м²
+                      {contractNo(c)} — {c.price_per_sqm != null ? `${Number(c.price_per_sqm).toLocaleString('ru')} ₽/м²` : 'цена по прайсу'}
                     </option>
                   ))}
                   {/* Контракт мог уйти в архив — показываем его, чтобы связь была видна. */}
