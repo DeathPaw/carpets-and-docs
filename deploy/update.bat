@@ -58,6 +58,11 @@ if errorlevel 1 (
     echo Registered CarpetOrdersStart task >> "%LOG%"
 )
 
+REM ─── start.bat и stop.bat вызываем БЕЗ перенаправления в update.log.
+REM Java, запущенная из-под «>> update.log», наследовала открытый дескриптор лога
+REM и держала его, пока работала: все следующие записи в лог падали с «файл занят
+REM другим процессом», а команды с таким перенаправлением cmd вообще не выполнял —
+REM stop.bat не останавливал приложение, и сборка не могла заменить jar.
 set "JAR=%ROOT%\backend\target\carpet-order-management-0.0.1-SNAPSHOT.jar"
 set "LASTGOOD=%ROOT%\deploy\last-good.jar"
 set "BUILT=%ROOT%\deploy\built.hash"
@@ -85,7 +90,7 @@ echo No updates. >> "%LOG%"
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
 if errorlevel 1 (
     echo App is not running, starting... >> "%LOG%"
-    call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+    call "%ROOT%\deploy\start.bat" >nul 2>&1
 )
 goto :finish_ok
 
@@ -126,7 +131,7 @@ REM ─── Стопим Java РАНЬШЕ, до операций с файл�
 REM rmdir/move ругались «занят другим процессом».
 REM Только свой процесс: `taskkill /IM java.exe` клал и «Верфь» на том же сервере.
 echo Stopping Java... >> "%LOG%"
-call "%ROOT%\deploy\stop.bat" >> "%LOG%" 2>&1
+call "%ROOT%\deploy\stop.bat" >nul 2>&1
 timeout /t 3 /nobreak >nul
 
 REM Рабочую сборку сохраняем: если новая не соберётся, start.bat поднимет её.
@@ -158,7 +163,7 @@ if not exist "%JAR%" (
 )
 
 REM Start (остановили выше, перед сборкой)
-call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+call "%ROOT%\deploy\start.bat" >nul 2>&1
 (echo %NEW_HASH%)>"%BUILT%"
 echo Restart complete. >> "%LOG%"
 goto :finish_ok
@@ -168,7 +173,7 @@ REM версию (start.bat возьмёт deploy\last-good.jar). Сборка �
 REM следующем запуске, т.к. built.hash не обновлён.
 :build_failed
 echo Starting previous version from deploy\last-good.jar >> "%LOG%"
-call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+call "%ROOT%\deploy\start.bat" >nul 2>&1
 del /F /Q "%LOCK%" >nul 2>&1
 exit /b 1
 
@@ -180,7 +185,7 @@ REM ─── Обновиться не получилось ещё до ост�
 REM приложение работало.
 :keep_running
 powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
-if errorlevel 1 call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+if errorlevel 1 call "%ROOT%\deploy\start.bat" >nul 2>&1
 del /F /Q "%LOCK%" >nul 2>&1
 exit /b 1
 
