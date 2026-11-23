@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import OrdersReport from '../components/reports/OrdersReport'
 import { Link } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { useToast } from '../components/Toast'
@@ -223,6 +224,8 @@ export default function ReportsPage() {
   return (
     <div>
       <h1>Отчёты</h1>
+      {/* ПР-013: ежедневная выгрузка заказов для анализа рекламы и скидок. */}
+      <OrdersReport />
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>

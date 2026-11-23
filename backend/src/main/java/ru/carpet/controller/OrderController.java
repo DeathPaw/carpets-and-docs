@@ -311,9 +311,23 @@ public class OrderController {
      * V43: флажок подтверждения клиента по дню выезда (правка №1 от 17.09).
      * {@code confirmed=false} — вернуть в «Уточнить».
      */
+    /** ПР-006: зоны доставки забора и отвоза (по координатам адресов). */
+    @GetMapping("/{id}/delivery-zones")
+    public Map<String, Object> deliveryZones(@PathVariable Long id) {
+        return service.deliveryZones(id);
+    }
+
+    /** ПР-010: журнал звонков по заказу. */
+    @GetMapping("/{id}/calls")
+    public List<Map<String, Object>> calls(@PathVariable Long id) {
+        return service.calls(id);
+    }
+
     @PatchMapping("/{id}/client-confirmed")
     public Order setClientConfirmed(@PathVariable Long id, @RequestBody Map<String, Object> body) {
-        return service.setClientConfirmed(id, Boolean.TRUE.equals(body.get("confirmed")));
+        // ПР-010: leg = PICKUP (по умолчанию, как раньше) или DELIVERY.
+        Object leg = body.get("leg");
+        return service.setClientConfirmed(id, leg == null ? "PICKUP" : leg.toString(), Boolean.TRUE.equals(body.get("confirmed")));
     }
 
     /**
@@ -423,6 +437,12 @@ public class OrderController {
     @PostMapping("/{id}/modifiers")
     public Order addModifier(@PathVariable Long id, @RequestBody Map<String, Long> body) {
         return service.addModifier(id, body.get("modifier_id"));
+    }
+
+    /** ПР-018: применить промокод. body: {"code": "LETO25"}. */
+    @PostMapping("/{id}/promo")
+    public Order applyPromo(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        return service.applyPromoCode(id, body.get("code"));
     }
 
     @DeleteMapping("/{id}/modifiers/{modifierId}")

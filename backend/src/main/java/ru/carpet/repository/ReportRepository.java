@@ -203,4 +203,56 @@ public class ReportRepository {
              ORDER BY k.signed_on DESC, k.id DESC
         """, Map.of());
     }
+
+    /**
+     * ПР-013: заказы за период — для ежедневного анализа рекламы и скидок.
+     *
+     * <p>Одна строка — один заказ, поэтому выручка не удваивается, даже если в
+     * заказе несколько скидок: они перечислены в одной ячейке. Источник берётся
+     * из карточки клиента, промокод — из снимка в заказе (остаётся, даже если
+     * скидку потом выключили). Фильтры по скидке, промокоду и источнику
+     * необязательны. Отменённые заказы — только по флажку.
+     */
+    public List<Map<String, Object>> ordersReport(LocalDate from, LocalDate to, Long modifierId, String promoCode,
+                                                  String source, boolean includeCancelled) {
+        var params = new MapSqlParameterSource().addValue("from", from).addValue("to", to.plusDays(1));
+        StringBuilder sql = new StringBuilder("""
+            SELECT o.id, o.created_at, o.client_id, o.client_name, c.source, c.source_note,
+                   o.status, o.base_amount, o.total_amount, o.paid, o.payment_type, o.is_warranty,
+                   (SELECT string_agg(om.modifier_name || ' (' ||
+                           CASE om.kind
+                             WHEN 'FIXED' THEN '−' || trim(to_char(om.amount, 'FM999999990')) || ' ₽'
+                             WHEN 'FREE_DELIVERY' THEN 'бесплатная доставка'
+                             ELSE trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%'
+                           END || ')', ', ' ORDER BY om.id)
+                      FROM order_modifiers om WHERE om.order_id = o.id) AS discounts,
+                   COALESCE((SELECT SUM(COALESCE(om.discount_amount, o.base_amount * om.percent / 100))
+                               FROM order_modifiers om
+                              WHERE om.order_id = o.id AND (om.percent < 0 OR om.kind <> 'PERCENT')), 0) AS discount_sum,
+                   (SELECT string_agg(om.promo_code, ', ') FROM order_modifiers om
+                     WHERE om.order_id = o.id AND om.promo_code IS NOT NULL) AS promo_codes
+              FROM orders o
+              LEFT JOIN clients c ON c.id = o.client_id
+             WHERE o.created_at >= :from AND o.created_at < :to
+            """);
+        if (!includeCancelled) sql.append(" AND o.status <> 'CANCELLED'");
+        if (modifierId != null) {
+            sql.append(" AND EXISTS (SELECT 1 FROM order_modifiers om WHERE om.order_id = o.id AND om.modifier_id = :mod)");
+            params.addValue("mod", modifierId);
+        }
+        if (promoCode != null && !promoCode.isBlank()) {
+            sql.append(" AND EXISTS (SELECT 1 FROM order_modifiers om WHERE om.order_id = o.id AND UPPER(om.promo_code) = UPPER(:promo))");
+            params.addValue("promo", promoCode.trim());
+        }
+        if (source != null && !source.isBlank()) {
+            if ("NONE".equals(source)) {
+                sql.append(" AND c.source IS NULL");
+            } else {
+                sql.append(" AND c.source = :source");
+                params.addValue("source", source);
+            }
+        }
+        sql.append(" ORDER BY o.created_at, o.id");
+        return jdbc.queryForList(sql.toString(), params);
+    }
 }

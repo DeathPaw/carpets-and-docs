@@ -206,8 +206,11 @@ export default function CalculatorPage() {
     [types],
   )
   const activeSkus = useMemo(() => skus.filter(s => s.is_active && !s.is_deleted && !s.is_auto_add), [skus])
-  const surcharges = modifiers.filter(m => Number(m.percent) > 0)
-  const discounts = modifiers.filter(m => Number(m.percent) < 0)
+  // Калькулятор считает процентные скидки; фиксированные и бесплатная доставка
+  // (промокоды, ПР-018) применяются уже в заказе.
+  const percentMods = modifiers.filter(m => (m.kind ?? 'PERCENT') === 'PERCENT' && m.is_active !== false)
+  const surcharges = percentMods.filter(m => Number(m.percent) > 0)
+  const discounts = percentMods.filter(m => Number(m.percent) < 0)
 
   /** Основные услуги для типа — по атрибуту item_type, как «✓ подходит» в карточке заказа. */
   const mainCandidates = (typeId: number | null) => typeId == null

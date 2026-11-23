@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
+import { MODIFIER_KIND_LABELS, type ModifierKind, modifierText, isDiscount } from '../utils/modifiers'
 import {
   getItemTypes, createItemType, updateItemType, deleteItemType,
-  getPriceModifiers, createPriceModifier, updatePriceModifier, deletePriceModifier,
+  getPriceModifiers, createPriceModifier, updatePriceModifier, deletePriceModifier, type PriceModifierInput,
   getCancellationReasons, createCancellationReason, updateCancellationReason, deactivateCancellationReason,
 } from '../api/references'
 import {
@@ -769,31 +770,65 @@ function SkuEditorModal({
 // ============================================================================
 // Модификаторы цены (без изменений, перенесены как есть)
 // ============================================================================
-function PriceModifiersCard({ modifiers, reload, setConfirm, showToast }: CardProps<{ modifiers: PriceModifier[] }>) {
-  const [newName, setNewName] = useState('')
-  const [newPercent, setNewPercent] = useState('')
-  const [editId, setEditId] = useState<number | null>(null)
-  const [editName, setEditName] = useState('')
-  const [editPercent, setEditPercent] = useState('')
-  const [err, setErr] = useState('')
+/**
+ * Конструктор скидок и надбавок (ПР-004, ПР-018).
+ *
+ * У каждой скидки: тип (процент / фиксированная сумма / бесплатная доставка),
+ * необязательный промокод, срок и лимит использований, и настройка
+ * «закреплять за клиентом» — при первом применении к заказу скидка сама
+ * попадает в карточку клиента (пенсионер, многодетные). Разовые скидки и
+ * промокоды эту настройку обычно не включают.
+ */
+type ModForm = {
+  name: string; kind: ModifierKind; percent: string; amount: string; promo_code: string
+  auto_assign_to_client: boolean; valid_from: string; valid_to: string; usage_limit: string; is_active: boolean
+}
+const EMPTY_MOD: ModForm = {
+  name: '', kind: 'PERCENT', percent: '', amount: '', promo_code: '', auto_assign_to_client: false,
+  valid_from: '', valid_to: '', usage_limit: '', is_active: true,
+}
 
-  const create = async () => {
-    if (!newName.trim()) { setErr('Введите название'); return }
-    if (!newPercent) { setErr('Введите процент'); return }
-    try {
-      await createPriceModifier({ name: newName.trim(), percent: Number(newPercent) })
-      setNewName(''); setNewPercent(''); setErr(''); await reload()
-    } catch { setErr('Ошибка создания') }
+function PriceModifiersCard({ modifiers, reload, setConfirm, showToast }: CardProps<{ modifiers: PriceModifier[] }>) {
+  const [form, setForm] = useState<ModForm | null>(null)
+  const [editId, setEditId] = useState<number | null>(null)
+  const [err, setErr] = useState('')
+  const set = (patch: Partial<ModForm>) => setForm(f => f ? { ...f, ...patch } : f)
+
+  const openNew = () => { setEditId(null); setForm({ ...EMPTY_MOD }); setErr('') }
+  const openEdit = (m: PriceModifier) => {
+    setEditId(m.id); setErr('')
+    setForm({
+      name: m.name, kind: (m.kind ?? 'PERCENT') as ModifierKind, percent: String(m.percent ?? ''),
+      amount: m.amount != null ? String(m.amount) : '', promo_code: m.promo_code ?? '',
+      auto_assign_to_client: !!m.auto_assign_to_client, valid_from: m.valid_from ?? '', valid_to: m.valid_to ?? '',
+      usage_limit: m.usage_limit != null ? String(m.usage_limit) : '', is_active: m.is_active !== false,
+    })
   }
-  const save = async (id: number) => {
-    if (!editName.trim()) return
+
+  const save = async () => {
+    if (!form) return
+    if (!form.name.trim()) { setErr('Введите название'); return }
+    if (form.kind === 'PERCENT' && !form.percent) { setErr('Введите процент (минус — скидка, плюс — надбавка)'); return }
+    if (form.kind === 'FIXED' && !form.amount) { setErr('Введите сумму скидки в рублях'); return }
+    const data: PriceModifierInput = {
+      name: form.name.trim(),
+      kind: form.kind,
+      percent: form.kind === 'PERCENT' ? Number(form.percent) : 0,
+      amount: form.kind === 'FIXED' ? Number(form.amount) : null,
+      promo_code: form.promo_code.trim() || null,
+      auto_assign_to_client: form.auto_assign_to_client,
+      valid_from: form.valid_from || null,
+      valid_to: form.valid_to || null,
+      usage_limit: form.usage_limit ? Number(form.usage_limit) : null,
+      is_active: form.is_active,
+    }
     try {
-      await updatePriceModifier(id, { name: editName.trim(), percent: Number(editPercent) })
-      setEditId(null); await reload()
-    } catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка сохранения', 'error') }
+      if (editId) await updatePriceModifier(editId, data); else await createPriceModifier(data)
+      setForm(null); setEditId(null); await reload()
+    } catch (e: unknown) { setErr((e as any)?.response?.data?.message || 'Ошибка сохранения') }
   }
   const remove = (id: number) => setConfirm({
-    title: 'Удалить модификатор цены', message: 'Удалить?', danger: true,
+    title: 'Удалить скидку', message: 'Удалить? Если скидка уже применялась в заказах, её можно только выключить.', danger: true,
     action: async () => {
       try { await deletePriceModifier(id); await reload() }
       catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Ошибка удаления', 'error') }
@@ -802,48 +837,90 @@ function PriceModifiersCard({ modifiers, reload, setConfirm, showToast }: CardPr
 
   return (
     <div className="card">
-      <h2>Модификаторы цены</h2>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-        <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="Название модификатора" style={{ flex: '1 1 200px' }} />
-        <input type="number" step="0.01" value={newPercent} onChange={e => setNewPercent(e.target.value)} placeholder="Процент" style={{ flex: '0 0 120px' }} />
-        <button className="btn-primary" onClick={create} style={{ whiteSpace: 'nowrap' }}>+ Добавить</button>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, flexWrap: 'wrap' }}>
+        <h2 style={{ margin: 0 }}>Скидки, надбавки и промокоды</h2>
+        <button className="btn-primary" onClick={openNew}>+ Добавить</button>
       </div>
-      {err && <div className="error-msg" style={{ marginBottom: 8 }}>{err}</div>}
+      {form && (
+        <div style={{ border: '1px solid #e5e8e8', borderRadius: 6, padding: 12, margin: '12px 0', display: 'grid', gap: 10,
+                      gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))' }}>
+          <div className="form-group" style={{ marginBottom: 0, gridColumn: 'span 2' }}>
+            <label>Название *</label>
+            <input value={form.name} onChange={e => set({ name: e.target.value })} placeholder="Например: Пенсионер, Скидка за отзыв" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Тип</label>
+            <select value={form.kind} onChange={e => set({ kind: e.target.value as ModifierKind })}>
+              {(Object.keys(MODIFIER_KIND_LABELS) as ModifierKind[]).map(k => <option key={k} value={k}>{MODIFIER_KIND_LABELS[k]}</option>)}
+            </select>
+          </div>
+          {form.kind === 'PERCENT' && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Процент (−10 скидка, +25 надбавка) *</label>
+              <input type="number" step="0.01" value={form.percent} onChange={e => set({ percent: e.target.value })} />
+            </div>
+          )}
+          {form.kind === 'FIXED' && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Сумма скидки, ₽ *</label>
+              <input type="number" step="1" min="1" value={form.amount} onChange={e => set({ amount: e.target.value })} />
+            </div>
+          )}
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Промокод</label>
+            <input value={form.promo_code} onChange={e => set({ promo_code: e.target.value.toUpperCase() })} placeholder="необязательно, например LETO" />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Действует с</label>
+            <input type="date" value={form.valid_from} onChange={e => set({ valid_from: e.target.value })} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Действует по</label>
+            <input type="date" value={form.valid_to} onChange={e => set({ valid_to: e.target.value })} />
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Лимит заказов</label>
+            <input type="number" min="1" value={form.usage_limit} onChange={e => set({ usage_limit: e.target.value })} placeholder="без лимита" />
+          </div>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center', gridColumn: 'span 2' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={form.auto_assign_to_client}
+                   onChange={e => set({ auto_assign_to_client: e.target.checked })} />
+            Автоматически закреплять за клиентом при применении
+            <span style={{ color: 'var(--c-text-secondary)', fontSize: 'var(--font-sm)' }}>(постоянные льготы)</span>
+          </label>
+          <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={form.is_active} onChange={e => set({ is_active: e.target.checked })} />
+            Включена
+          </label>
+          {err && <div className="error-msg" style={{ gridColumn: '1 / -1' }}>{err}</div>}
+          <div style={{ gridColumn: '1 / -1', display: 'flex', gap: 8 }}>
+            <button className="btn-success" onClick={() => void save()}>Сохранить</button>
+            <button className="btn-secondary" onClick={() => { setForm(null); setEditId(null) }}>Отмена</button>
+          </div>
+        </div>
+      )}
       <table>
-        <thead><tr><th>#</th><th>Название</th><th>Процент</th><th>Действия</th></tr></thead>
+        <thead><tr><th>Название</th><th>Размер</th><th>Промокод</th><th>Условия</th><th>За клиентом</th><th>Действия</th></tr></thead>
         <tbody>
           {modifiers.length === 0 ? (
-            <tr><td colSpan={4} className="empty">Нет модификаторов</td></tr>
+            <tr><td colSpan={6} className="empty">Нет скидок</td></tr>
           ) : modifiers.map(m => (
-            <tr key={m.id}>
-              <td>{m.id}</td>
-              <td>
-                {editId === m.id
-                  ? <input value={editName} onChange={e => setEditName(e.target.value)} />
-                  : m.name}
+            <tr key={m.id} style={{ opacity: m.is_active === false ? 0.5 : 1 }}>
+              <td>{m.name}{m.is_active === false && <span style={{ color: '#888' }}> (выключена)</span>}</td>
+              <td><span style={{ color: isDiscount(m) ? '#27ae60' : '#e74c3c', fontWeight: 600 }}>{modifierText(m)}</span></td>
+              <td>{m.promo_code ? <code>{m.promo_code}</code> : '—'}</td>
+              <td style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)' }}>
+                {[
+                  m.valid_from && `с ${new Date(m.valid_from).toLocaleDateString('ru')}`,
+                  m.valid_to && `по ${new Date(m.valid_to).toLocaleDateString('ru')}`,
+                  m.usage_limit != null && `лимит ${m.used_count ?? 0}/${m.usage_limit}`,
+                ].filter(Boolean).join(', ') || `применена в ${m.used_count ?? 0} заказах`}
               </td>
-              <td>
-                {editId === m.id
-                  ? <input type="number" step="0.01" value={editPercent} onChange={e => setEditPercent(e.target.value)} style={{ width: 100 }} />
-                  : <span style={{ color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : undefined, fontWeight: 600 }}>
-                      {m.percent > 0 ? '+' : ''}{Number(m.percent).toFixed(2)}%
-                    </span>}
-              </td>
+              <td>{m.auto_assign_to_client ? 'автоматически' : 'вручную'}</td>
               <td>
                 <div className="actions">
-                  {editId === m.id ? (
-                    <>
-                      <button className="btn-success btn-sm" onClick={() => void save(m.id)}>✓</button>
-                      <button className="btn-secondary btn-sm" onClick={() => setEditId(null)}>✕</button>
-                    </>
-                  ) : (
-                    <>
-                      <button className="btn-secondary btn-sm" onClick={() => {
-                        setEditId(m.id); setEditName(m.name); setEditPercent(String(m.percent))
-                      }}>✏️</button>
-                      <button className="btn-danger btn-sm" onClick={() => remove(m.id)}>✕</button>
-                    </>
-                  )}
+                  <button className="btn-secondary btn-sm" onClick={() => openEdit(m)}>✏️</button>
+                  <button className="btn-danger btn-sm" onClick={() => remove(m.id)}>✕</button>
                 </div>
               </td>
             </tr>

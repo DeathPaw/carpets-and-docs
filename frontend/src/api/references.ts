@@ -91,10 +91,24 @@ export const deleteEmployeeRole = (id: number) =>
 export const getPriceModifiers = () =>
   client.get<import('../types').PriceModifier[]>('/api/price-modifiers').then(r => r.data)
 
-export const createPriceModifier = (data: { name: string; percent: number }) =>
+/** V60: поля конструктора скидки. */
+export type PriceModifierInput = {
+  name: string
+  percent: number
+  kind?: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY'
+  amount?: number | null
+  promo_code?: string | null
+  auto_assign_to_client?: boolean
+  valid_from?: string | null
+  valid_to?: string | null
+  usage_limit?: number | null
+  is_active?: boolean
+}
+
+export const createPriceModifier = (data: PriceModifierInput) =>
   client.post<import('../types').PriceModifier>('/api/price-modifiers', data).then(r => r.data)
 
-export const updatePriceModifier = (id: number, data: { name: string; percent: number }) =>
+export const updatePriceModifier = (id: number, data: PriceModifierInput) =>
   client.put<import('../types').PriceModifier>(`/api/price-modifiers/${id}`, data).then(r => r.data)
 
 export const deletePriceModifier = (id: number) =>

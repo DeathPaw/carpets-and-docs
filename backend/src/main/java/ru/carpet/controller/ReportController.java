@@ -85,6 +85,18 @@ public class ReportController {
     }
 
     /** Реестр контрактных юрлиц — отдельная выгрузка по ТЗ. */
+    /** ПР-013: заказы за период с источником клиента, скидками и промокодами. */
+    @GetMapping("/orders")
+    public List<Map<String, Object>> orders(@RequestParam LocalDate from,
+                                            @RequestParam LocalDate to,
+                                            @RequestParam(required = false) Long modifierId,
+                                            @RequestParam(required = false) String promoCode,
+                                            @RequestParam(required = false) String source,
+                                            @RequestParam(defaultValue = "false") boolean includeCancelled) {
+        if (to.isBefore(from)) throw new ru.carpet.exception.BusinessRuleException("Дата «по» раньше даты «с».");
+        return repository.ordersReport(from, to, modifierId, promoCode, source, includeCancelled);
+    }
+
     @GetMapping("/contract-clients")
     public List<Map<String, Object>> contractClients() {
         return repository.contractClients();

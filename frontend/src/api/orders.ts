@@ -138,6 +138,8 @@ export interface OrderExportRow {
   delivery_price: number
   discounts: string | null
   discount_sum: number
+  /** V60 (ПР-018): применённые промокоды. */
+  promo_codes: string | null
   surcharges: string | null
   surcharge_sum: number
 }
@@ -240,9 +242,12 @@ export const deleteOrderRefund = (id: number, refundId: number) =>
 export const getOrderAdjustments = (id: number) =>
   client.get<OrderItemAdjustment[]>(`/api/orders/${id}/adjustments`).then(r => r.data)
 
-/** V43: отметить, что клиент подтвердил день выезда (или вернуть в «Уточнить»). */
-export const setClientConfirmed = (id: number, confirmed: boolean) =>
-  client.patch<Order>(`/api/orders/${id}/client-confirmed`, { confirmed }).then(r => r.data)
+/**
+ * V43/ПР-010: клиент подтвердил день этапа (или вернуть в «Уточнить»).
+ * leg: PICKUP — забор, DELIVERY — отвоз.
+ */
+export const setClientConfirmed = (id: number, confirmed: boolean, leg: 'PICKUP' | 'DELIVERY' = 'PICKUP') =>
+  client.patch<Order>(`/api/orders/${id}/client-confirmed`, { confirmed, leg }).then(r => r.data)
 
 /** V42: перевести заказ на сегодняшний прайс и пересчитать цены услуг. */
 export const repriceOrder = (id: number) =>
@@ -305,6 +310,24 @@ export const getOrderModifiers = (orderId: number) =>
 
 export const addOrderModifier = (orderId: number, modifierId: number) =>
   client.post(`/api/orders/${orderId}/modifiers`, { modifier_id: modifierId }).then(r => r.data)
+
+/** ПР-006: зона доставки этапа — из тарифов сайта «Коврокота». */
+export interface DeliveryZoneInfo {
+  name: string
+  zone: string
+  one_way: number
+  full_cycle: number
+  /** false — цена «от» (дальние зоны), оператору нужно уточнить. */
+  exact_price: boolean
+}
+
+export const getDeliveryZones = (orderId: number) =>
+  client.get<{ applies: boolean; pickup?: DeliveryZoneInfo; delivery?: DeliveryZoneInfo }>(
+    `/api/orders/${orderId}/delivery-zones`).then(r => r.data)
+
+/** ПР-018: применить промокод к заказу. */
+export const applyPromoCode = (orderId: number, code: string) =>
+  client.post<Order>(`/api/orders/${orderId}/promo`, { code }).then(r => r.data)
 
 export const removeOrderModifier = (orderId: number, modifierId: number) =>
   client.delete(`/api/orders/${orderId}/modifiers/${modifierId}`).then(r => r.data)

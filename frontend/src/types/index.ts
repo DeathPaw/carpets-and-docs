@@ -139,6 +139,15 @@ export interface Order {
   /** Оператор, поставивший подтверждение. */
   client_confirmed_by: string | null
   client_confirmed_at: string | null
+  /** V59 (ПР-010): клиент подтвердил день ОТВОЗА (client_confirmed — день забора). */
+  delivery_confirmed?: boolean
+  delivery_confirmed_by?: string | null
+  delivery_confirmed_at?: string | null
+  /** V59: последний звонок по этапу — из журнала звонков. */
+  last_pickup_call_at?: string | null
+  last_pickup_call_by?: string | null
+  last_delivery_call_at?: string | null
+  last_delivery_call_by?: string | null
   /** V46 (правка №3 от 13.09): основной повод обращения по этому заказу. */
   order_reason: OrderReason | null
   /** V46: расшифровка для повода «Другой». */
@@ -559,6 +568,20 @@ export interface PriceModifier {
   name: string
   percent: number
   created_at: string
+  /** V60 (ПР-004/018): PERCENT | FIXED | FREE_DELIVERY. */
+  kind?: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY'
+  /** Сумма скидки в ₽ для FIXED. */
+  amount?: number | null
+  /** Кодовое слово промокода. */
+  promo_code?: string | null
+  /** Закреплять за клиентом при первом применении к заказу. */
+  auto_assign_to_client?: boolean
+  valid_from?: string | null
+  valid_to?: string | null
+  usage_limit?: number | null
+  is_active?: boolean
+  /** В скольких заказах уже применена. */
+  used_count?: number
 }
 
 export interface OrderModifier {
@@ -568,6 +591,12 @@ export interface OrderModifier {
   modifier_name: string
   percent: number
   created_at: string
+  /** V60: снимок типа, суммы и промокода на момент применения. */
+  kind?: 'PERCENT' | 'FIXED' | 'FREE_DELIVERY'
+  amount?: number | null
+  promo_code?: string | null
+  /** Фактический эффект в ₽ (минус — скидка). */
+  discount_amount?: number | null
 }
 
 /**

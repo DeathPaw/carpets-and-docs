@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { modifierText, isDiscount } from '../utils/modifiers'
 import { Link, useNavigate, useSearchParams } from 'react-router-dom'
 import { getClients, createClient, updateClient, getClientOrders, searchClients, getClientModifiers, addClientModifier, removeClientModifier, getClientEvents, addClientEvent } from '../api/clients'
 import { getPriceModifiers } from '../api/references'
@@ -157,7 +158,7 @@ function CreateClientModal({
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {allMods.map(m => {
                 const active = clientMods.includes(m.id)
-                const color = m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888'
+                const color = isDiscount(m) ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888'
                 return (
                   <button
                     key={m.id}
@@ -177,14 +178,14 @@ function CreateClientModal({
                       padding: '4px 10px',
                       borderRadius: 4,
                       border: `2px solid ${active ? color : '#ddd'}`,
-                      background: active ? (m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5') : '#fff',
+                      background: active ? (isDiscount(m) ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5') : '#fff',
                       color: active ? color : '#999',
                       fontWeight: active ? 600 : 400,
                       cursor: editClient ? 'pointer' : 'default',
                       fontSize: 'var(--font-sm)',
                     }}
                   >
-                    {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                    {m.name} ({modifierText(m)})
                   </button>
                 )
               })}
@@ -379,10 +380,10 @@ function ClientCardModal({
               {clientMods.map(m => (
                 <span key={m.id} style={{
                   padding: '3px 8px', borderRadius: 4, fontSize: 'var(--font-sm)', fontWeight: 600,
-                  color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
-                  background: m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
+                  color: isDiscount(m) ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
+                  background: isDiscount(m) ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
                 }}>
-                  {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                  {m.name} ({modifierText(m)})
                 </span>
               ))}
             </div>

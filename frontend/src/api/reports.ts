@@ -135,11 +135,48 @@ export const reportsApi = {
     }).then(r => r.data)
   },
 
+  /** ПР-013: заказы за период с источником клиента, скидками и промокодами. */
+  orders: (p: OrdersReportParams) => {
+    const params: Record<string, unknown> = { from: p.from, to: p.to, includeCancelled: p.includeCancelled }
+    if (p.modifierId) params.modifierId = p.modifierId
+    if (p.promoCode) params.promoCode = p.promoCode
+    if (p.source) params.source = p.source
+    return client.get<OrdersReportRow[]>('/api/reports/orders', { params }).then(r => r.data)
+  },
+
   contractClients: () =>
     client.get<ContractClientRow[]>('/api/reports/contract-clients').then(r => r.data),
 
   contracts: () =>
     client.get<ContractReportRow[]>('/api/reports/contracts').then(r => r.data),
+}
+
+export interface OrdersReportParams {
+  from: string
+  to: string
+  modifierId?: number | null
+  promoCode?: string
+  /** Код источника клиента; NONE — источник не указан. */
+  source?: string
+  includeCancelled: boolean
+}
+
+export interface OrdersReportRow {
+  id: number
+  created_at: string
+  client_id: number | null
+  client_name: string
+  source: string | null
+  source_note: string | null
+  status: string
+  base_amount: number
+  total_amount: number
+  paid: boolean
+  payment_type: string | null
+  is_warranty: boolean
+  discounts: string | null
+  discount_sum: number
+  promo_codes: string | null
 }
 
 export default reportsApi

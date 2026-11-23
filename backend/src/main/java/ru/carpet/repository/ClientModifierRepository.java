@@ -18,7 +18,16 @@ public class ClientModifierRepository {
             rs.getString("name"),
             rs.getBigDecimal("percent"),
             rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
+            rs.getTimestamp("updated_at").toLocalDateTime(),
+            rs.getString("kind"),
+            rs.getBigDecimal("amount"),
+            rs.getString("promo_code"),
+            rs.getBoolean("auto_assign_to_client"),
+            rs.getObject("valid_from", java.time.LocalDate.class),
+            rs.getObject("valid_to", java.time.LocalDate.class),
+            rs.getObject("usage_limit", Integer.class),
+            rs.getBoolean("is_active"),
+            0L
     );
 
     public ClientModifierRepository(NamedParameterJdbcTemplate jdbc) {

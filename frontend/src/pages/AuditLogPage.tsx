@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react'
+import Pagination from '../components/Pagination'
+import { usePersistentState } from '../hooks/usePersistentState'
 import client from '../api/client'
 import StyledSelect from '../components/StyledSelect'
 import type { AuditLogEntry } from '../types'
@@ -89,7 +91,8 @@ export default function AuditLogPage() {
   const [entityIdFilter, setEntityIdFilter] = useState('')
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
-  const PAGE_SIZE = 50
+  // ПР-003: размер страницы выбирает супервизор, выбор запоминается.
+  const [PAGE_SIZE, setPageSize] = usePersistentState('auditLog.pageSize', 50)
 
   const load = async () => {
     setLoading(true)
@@ -110,7 +113,7 @@ export default function AuditLogPage() {
     }
   }
 
-  useEffect(() => { void load() }, [entityTypeFilter, actionFilter, entityIdFilter, page])
+  useEffect(() => { void load() }, [entityTypeFilter, actionFilter, entityIdFilter, page, PAGE_SIZE])
 
   return (
     <div>
@@ -189,13 +192,7 @@ export default function AuditLogPage() {
             </tbody>
           </table>
 
-          {(page > 0 || hasMore) && (
-            <div className="pagination">
-              <button className="btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Назад</button>
-              <span>Стр. {page + 1}</span>
-              <button className="btn-secondary btn-sm" disabled={!hasMore} onClick={() => setPage(p => p + 1)}>Вперёд →</button>
-            </div>
-          )}
+          <Pagination page={page} setPage={setPage} hasMore={hasMore} pageSize={PAGE_SIZE} setPageSize={setPageSize} />
         </>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback, useRef } from 'react'
+import { type CallLeg, legConfirmed, legConfirmedBy, lastCall, formatCall, callFields } from '../utils/callConfirm'
 import { createPortal } from 'react-dom'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { getOrders, updateActualDates, setOrderDriver, setClientConfirmed } from '../api/orders'
@@ -892,24 +893,29 @@ export default function LogisticsPage() {
               </button>
             )}
           </div>
-          {viewer ? (
-            <span style={confirmChipStyle(card.order.client_confirmed)} title={confirmTitle(card.order)}>
-              {card.order.client_confirmed ? '✓' : '☎'}
-            </span>
-          ) : (
-            <button
-              type="button"
-              onClick={e => {
-                e.stopPropagation()
-                void toggleClientConfirmed(card.order.id, !card.order.client_confirmed)
-              }}
-              onMouseDown={e => e.stopPropagation()}
-              style={{ ...confirmChipStyle(card.order.client_confirmed), border: 'none', cursor: 'pointer' }}
-              title={confirmTitle(card.order)}
-            >
-              {card.order.client_confirmed ? '✓' : '☎'}
-            </button>
-          )}
+          {(() => {
+            // ПР-010: у карточки забора — прозвон забора, у карточки отвоза — свой.
+            const leg: CallLeg = isPickup ? 'PICKUP' : 'DELIVERY'
+            const confirmed = legConfirmed(card.order, leg)
+            return viewer ? (
+              <span style={confirmChipStyle(confirmed)} title={confirmTitle(card.order, leg)}>
+                {confirmed ? '✓' : '☎'}
+              </span>
+            ) : (
+              <button
+                type="button"
+                onClick={e => {
+                  e.stopPropagation()
+                  void toggleClientConfirmed(card.order.id, leg, !confirmed)
+                }}
+                onMouseDown={e => e.stopPropagation()}
+                style={{ ...confirmChipStyle(confirmed), border: 'none', cursor: 'pointer' }}
+                title={confirmTitle(card.order, leg)}
+              >
+                {confirmed ? '✓' : '☎'}
+              </button>
+            )
+          })()}
         </div>
       </div>
     )
@@ -935,32 +941,31 @@ export default function LogisticsPage() {
   /**
    * Правка №1 (17.09): обзвон перед выездом.
    *
-   * Оператор отмечает, что клиент подтвердил день — забора или отвоза.
-   * Бэкенд сам сбрасывает отметку при переносе дня и после забора ковров:
-   * дальше клиента обзванивают заново, уже про доставку готовых.
+   * Оператор отмечает, что клиент подтвердил день — забора или отвоза (ПР-010:
+   * у каждого этапа своя отметка). Бэкенд снимает её только при переносе дня
+   * этого этапа.
    */
-  const toggleClientConfirmed = async (orderId: number, confirmed: boolean) => {
+  const toggleClientConfirmed = async (orderId: number, leg: CallLeg, confirmed: boolean) => {
     try {
-      const updated = await setClientConfirmed(orderId, confirmed)
-      setAllOrders(prev => prev.map(o => o.id === orderId
-        ? {
-            ...o,
-            client_confirmed: updated.client_confirmed,
-            client_confirmed_by: updated.client_confirmed_by,
-            client_confirmed_at: updated.client_confirmed_at,
-          }
-        : o
-      ))
+      const updated = await setClientConfirmed(orderId, confirmed, leg)
+      setAllOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...callFields(updated) } : o))
     } catch {
       showToast('Не удалось изменить отметку подтверждения', 'error')
     }
   }
 
   /** Подсказка к флажку обзвона — с именем оператора, который подтвердил. */
-  const confirmTitle = (order: Order): string => order.client_confirmed
-    ? `Клиент подтвердил день${order.client_confirmed_by ? ' — ' + order.client_confirmed_by : ''}.`
-      + ' Клик — вернуть в «Уточнить»'
-    : 'Уточнить: клиент ещё не подтвердил день. Клик — отметить подтверждение'
+  const confirmTitle = (order: Order, leg: CallLeg): string => {
+    const what = leg === 'PICKUP' ? 'забора' : 'отвоза'
+    const by = legConfirmedBy(order, leg)
+    const call = lastCall(order, leg)
+    const callNote = call ? ` Последний звонок: ${formatCall(call)}.` : ''
+    return legConfirmed(order, leg)
+      ? `Клиент подтвердил день ${what}${by ? ' — ' + by : ''}.${callNote} Клик — вернуть в «Уточнить»`
+      : `Уточнить день ${what}: клиент ещё не подтвердил.${callNote} Клик — отметить подтверждение`
+  }
+
+  const legOf = (c: OrderCard): CallLeg => c.type === 'pickup' ? 'PICKUP' : 'DELIVERY'
 
   /** Drop-overlay со слотами — появляется только при перетаскивании над днём. */
   // Drag-over конкретного слота — для hover-тени.
@@ -1823,23 +1828,26 @@ export default function LogisticsPage() {
                             <button
                               type="button"
                               disabled={isReadonly}
-                              onClick={() => void toggleClientConfirmed(c.order.id, !c.order.client_confirmed)}
-                              title={confirmTitle(c.order)}
+                              onClick={() => void toggleClientConfirmed(c.order.id, legOf(c), !legConfirmed(c.order, legOf(c)))}
+                              title={confirmTitle(c.order, legOf(c))}
                               style={{
                                 border: 'none', borderRadius: 3, padding: '2px 8px',
                                 cursor: isReadonly ? 'default' : 'pointer',
                                 fontSize: 'var(--font-sm)', fontWeight: 600, whiteSpace: 'nowrap',
-                                background: c.order.client_confirmed ? '#eafaf1' : '#fdf2e9',
-                                color:      c.order.client_confirmed ? '#196f3d' : '#a04000',
+                                background: legConfirmed(c.order, legOf(c)) ? '#eafaf1' : '#fdf2e9',
+                                color:      legConfirmed(c.order, legOf(c)) ? '#196f3d' : '#a04000',
                               }}
                             >
-                              {c.order.client_confirmed ? '✓ подтверждён' : '☎ уточнить'}
+                              {legConfirmed(c.order, legOf(c)) ? '✓ подтверждён' : '☎ уточнить'}
                             </button>
-                            {c.order.client_confirmed && c.order.client_confirmed_by && (
-                              <div style={{ fontSize: 'var(--font-sm)', color: '#95a5a6', marginTop: 2 }}>
-                                {c.order.client_confirmed_by}
-                              </div>
-                            )}
+                            {(() => {
+                              const call = lastCall(c.order, legOf(c))
+                              return call ? (
+                                <div style={{ fontSize: 'var(--font-sm)', color: '#95a5a6', marginTop: 2 }}>
+                                  звонок {formatCall(call)}
+                                </div>
+                              ) : null
+                            })()}
                           </td>
                           {/* Назначение водителя прямо из списка — основной способ
                               разделить развозку между несколькими водителями. */}

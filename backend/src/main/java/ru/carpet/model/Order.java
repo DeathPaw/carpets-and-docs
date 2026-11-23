@@ -105,5 +105,14 @@ public record Order(
          */
         String clientSource,
         /** ПР-014: расшифровка источника «Другой» (clients.source_note). */
-        String clientSourceNote
+        String clientSourceNote,
+        /** V59 (ПР-010): клиент подтвердил день ОТВОЗА (client_confirmed — день забора). */
+        boolean deliveryConfirmed,
+        String deliveryConfirmedBy,
+        LocalDateTime deliveryConfirmedAt,
+        /** V59: последний звонок по забору/отвозу — из журнала, не пропадает при сбросе отметки. */
+        LocalDateTime lastPickupCallAt,
+        String lastPickupCallBy,
+        LocalDateTime lastDeliveryCallAt,
+        String lastDeliveryCallBy
 ) {}

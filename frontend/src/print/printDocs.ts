@@ -169,12 +169,19 @@ export function buildInvoiceData(
     : null
 
   const base = Number(order.base_amount) || 0
+  // V60: эффект скидки в рублях считает бэк (discount_amount). Бесплатная
+  // доставка уже вычтена из позиций — в накладной показываем её с нулём.
   const mods = modifiers.map(m => {
     const percent = Number(m.percent) || 0
-    return {
-      label: `${m.modifier_name} (${percent > 0 ? '+' : '−'}${fmtNum(Math.abs(percent))}%)`,
-      amount: round2(base * percent / 100),
-    }
+    const kind = m.kind ?? 'PERCENT'
+    const label = kind === 'FIXED'
+      ? `${m.modifier_name}${m.promo_code ? ` (${m.promo_code})` : ''}`
+      : kind === 'FREE_DELIVERY'
+        ? `${m.modifier_name}: бесплатная доставка${m.promo_code ? ` (${m.promo_code})` : ''}`
+        : `${m.modifier_name} (${percent > 0 ? '+' : '−'}${fmtNum(Math.abs(percent))}%)`
+    const amount = kind === 'FREE_DELIVERY' ? 0
+      : m.discount_amount != null ? Number(m.discount_amount) : round2(base * percent / 100)
+    return { label, amount }
   })
   const modifiersSum = mods.reduce((s, m) => s + m.amount, 0)
   const total = Number(order.total_amount) || 0

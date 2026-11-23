@@ -110,6 +110,24 @@ public class OrderRepository {
             Timestamp deliveredTs = rs.getTimestamp("contract_delivered_at");
             contractDeliveredAt = deliveredTs != null ? deliveredTs.toLocalDateTime() : null;
         } catch (Exception ignored) {}
+        // V59: прозвон отвоза и последний звонок по этапам (подзапросы есть не везде).
+        boolean deliveryConfirmed = false;
+        String deliveryConfirmedBy = null, lastPickupCallBy = null, lastDeliveryCallBy = null;
+        java.time.LocalDateTime deliveryConfirmedAt = null, lastPickupCallAt = null, lastDeliveryCallAt = null;
+        try {
+            deliveryConfirmed = rs.getBoolean("delivery_confirmed");
+            deliveryConfirmedBy = rs.getString("delivery_confirmed_by");
+            Timestamp t = rs.getTimestamp("delivery_confirmed_at");
+            deliveryConfirmedAt = t != null ? t.toLocalDateTime() : null;
+        } catch (Exception ignored) {}
+        try {
+            Timestamp t1 = rs.getTimestamp("last_pickup_call_at");
+            lastPickupCallAt = t1 != null ? t1.toLocalDateTime() : null;
+            lastPickupCallBy = rs.getString("last_pickup_call_by");
+            Timestamp t2 = rs.getTimestamp("last_delivery_call_at");
+            lastDeliveryCallAt = t2 != null ? t2.toLocalDateTime() : null;
+            lastDeliveryCallBy = rs.getString("last_delivery_call_by");
+        } catch (Exception ignored) {}
         // ПР-014: источник клиента есть только в выборках с JOIN clients.
         String clientSource = null, clientSourceNote = null;
         try {
@@ -178,9 +196,19 @@ public class OrderRepository {
                 contractPricePerSqm,
                 contractDeliveredAt,
                 clientSource,
-                clientSourceNote
+                clientSourceNote,
+                deliveryConfirmed,
+                deliveryConfirmedBy,
+                deliveryConfirmedAt,
+                lastPickupCallAt,
+                lastPickupCallBy,
+                lastDeliveryCallAt,
+                lastDeliveryCallBy
         );
     };
+
+    /** V59 (ПР-010): последний звонок по каждому этапу — подзапросы к журналу order_calls. */
+    private static final String LAST_CALLS = "(SELECT oc.called_at FROM order_calls oc WHERE oc.order_id = o.id AND oc.leg = 'PICKUP' ORDER BY oc.called_at DESC LIMIT 1) AS last_pickup_call_at, (SELECT oc.called_by FROM order_calls oc WHERE oc.order_id = o.id AND oc.leg = 'PICKUP' ORDER BY oc.called_at DESC LIMIT 1) AS last_pickup_call_by, (SELECT oc.called_at FROM order_calls oc WHERE oc.order_id = o.id AND oc.leg = 'DELIVERY' ORDER BY oc.called_at DESC LIMIT 1) AS last_delivery_call_at, (SELECT oc.called_by FROM order_calls oc WHERE oc.order_id = o.id AND oc.leg = 'DELIVERY' ORDER BY oc.called_at DESC LIMIT 1) AS last_delivery_call_by, ";
 
     public OrderRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;
@@ -196,7 +224,7 @@ public class OrderRepository {
         params.put("offset", (long) page * size);
 
         StringBuilder sql = new StringBuilder(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
 
         appendWhereClause(sql, params, query);
 
@@ -252,10 +280,19 @@ public class OrderRepository {
                                                AND s.is_auto_add = TRUE
                                                AND s.triggers_order_status = 'DELIVERED'
                                                AND ois.status <> 'CANCELLED')), 0) AS delivery_price,
-                   (SELECT string_agg(om.modifier_name || ' (' || trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%)', ', ')
-                      FROM order_modifiers om WHERE om.order_id = o.id AND om.percent < 0) AS discounts,
-                   COALESCE((SELECT SUM(o.base_amount * om.percent / 100)
-                               FROM order_modifiers om WHERE om.order_id = o.id AND om.percent < 0), 0) AS discount_sum,
+                   -- V60: скидки всех типов — процент, фиксированная, бесплатная доставка.
+                   -- Сумма — фактический эффект (discount_amount), для старых записей — по проценту.
+                   (SELECT string_agg(om.modifier_name || ' (' ||
+                           CASE om.kind
+                             WHEN 'FIXED' THEN '−' || trim(to_char(om.amount, 'FM999999990')) || ' ₽'
+                             WHEN 'FREE_DELIVERY' THEN 'бесплатная доставка'
+                             ELSE trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%'
+                           END || COALESCE(', ' || om.promo_code, '') || ')', ', ')
+                      FROM order_modifiers om WHERE om.order_id = o.id AND (om.percent < 0 OR om.kind <> 'PERCENT')) AS discounts,
+                   COALESCE((SELECT SUM(COALESCE(om.discount_amount, o.base_amount * om.percent / 100))
+                               FROM order_modifiers om WHERE om.order_id = o.id AND (om.percent < 0 OR om.kind <> 'PERCENT')), 0) AS discount_sum,
+                   (SELECT string_agg(om.promo_code, ', ') FROM order_modifiers om
+                     WHERE om.order_id = o.id AND om.promo_code IS NOT NULL) AS promo_codes,
                    (SELECT string_agg(om.modifier_name || ' (' || trim(trailing '.' from trim(to_char(om.percent, 'FM990.99'))) || '%)', ', ')
                       FROM order_modifiers om WHERE om.order_id = o.id AND om.percent > 0) AS surcharges,
                    COALESCE((SELECT SUM(o.base_amount * om.percent / 100)
@@ -460,7 +497,7 @@ public class OrderRepository {
 
     public Optional<Order> findById(Long id) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.id = :id",
                 Map.of("id", id),
                 ROW_MAPPER
@@ -470,7 +507,7 @@ public class OrderRepository {
 
     public Optional<Order> findByLegacyId(Long legacyId) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.legacy_id = :legacyId",
                 Map.of("legacyId", legacyId),
                 ROW_MAPPER
@@ -504,17 +541,37 @@ public class OrderRepository {
      * карточке не висело имя от старого подтверждения.
      */
     public void updateClientConfirmed(Long id, boolean confirmed, String by) {
-        jdbc.update("""
-            UPDATE orders
-               SET client_confirmed = :c,
-                   client_confirmed_by = CASE WHEN :c THEN :by ELSE NULL END,
-                   client_confirmed_at = CASE WHEN :c THEN NOW() ELSE NULL END,
-                   updated_at = NOW()
-             WHERE id = :id
-        """, new MapSqlParameterSource()
+        updateLegConfirmed(id, "PICKUP", confirmed, by);
+    }
+
+    /**
+     * V59 (ПР-010): отметка прозвона по этапу. PICKUP — колонки client_confirmed*
+     * (V43), DELIVERY — delivery_confirmed*. Имена колонок — из белого списка.
+     */
+    public void updateLegConfirmed(Long id, String leg, boolean confirmed, String by) {
+        String prefix = "DELIVERY".equals(leg) ? "delivery_confirmed" : "client_confirmed";
+        jdbc.update(
+            "UPDATE orders SET " + prefix + " = :c, " +
+            prefix + "_by = CASE WHEN :c THEN :by ELSE NULL END, " +
+            prefix + "_at = CASE WHEN :c THEN NOW() ELSE NULL END, " +
+            "updated_at = NOW() WHERE id = :id",
+            new MapSqlParameterSource()
                 .addValue("c", confirmed)
                 .addValue("by", by)
                 .addValue("id", id));
+    }
+
+    /** V59: запись в журнал звонков. */
+    public void insertCall(Long orderId, String leg, String by) {
+        jdbc.update("INSERT INTO order_calls (order_id, leg, called_by) VALUES (:o, :leg, :by)",
+                new MapSqlParameterSource().addValue("o", orderId).addValue("leg", leg).addValue("by", by));
+    }
+
+    /** V59: журнал звонков заказа, новые сверху. */
+    public List<Map<String, Object>> calls(Long orderId) {
+        return jdbc.queryForList(
+                "SELECT id, leg, called_at, called_by FROM order_calls WHERE order_id = :o ORDER BY called_at DESC",
+                Map.of("o", orderId));
     }
 
     /**
@@ -722,7 +779,7 @@ public class OrderRepository {
 
     public List<Order> findWarrantyOrders(Long parentOrderId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.parent_order_id = :parentOrderId AND o.is_warranty = true ORDER BY o.id",
                 Map.of("parentOrderId", parentOrderId),
                 ROW_MAPPER
@@ -731,7 +788,7 @@ public class OrderRepository {
 
     public List<Order> findByClientName(String clientName) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_name = :clientName ORDER BY o.id DESC",
                 Map.of("clientName", clientName),
                 ROW_MAPPER
@@ -756,7 +813,7 @@ public class OrderRepository {
 
     public List<Order> findByClientId(Long clientId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, " + LAST_CALLS + "drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_id = :clientId ORDER BY o.id DESC",
                 Map.of("clientId", clientId),
                 ROW_MAPPER

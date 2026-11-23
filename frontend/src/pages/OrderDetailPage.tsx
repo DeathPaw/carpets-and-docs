@@ -1,4 +1,6 @@
 import { useEffect, useState, useRef } from 'react'
+import { modifierText, isDiscount, isApplicableNow } from '../utils/modifiers'
+import { type CallLeg, legConfirmed, legConfirmedBy, lastCall, formatCall } from '../utils/callConfirm'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
@@ -7,7 +9,7 @@ import {
   getOrderRefunds, addOrderRefund, deleteOrderRefund, setOrderReason,
   updateOrderComment,
   updateOrderDetails, updateActualDates,
-  getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem,
+  getOrderModifiers, addOrderModifier, removeOrderModifier, pushModifiersToClient, setOrderProblem, applyPromoCode, getDeliveryZones,
   getItemPhotos, uploadItemPhoto, deleteItemPhoto, getAllOrderPhotos,
   setPreliminaryPayment,
   type ItemPhoto,
@@ -1394,6 +1396,13 @@ export default function OrderDetailPage() {
   // ПР-017: перевод этого заказа в гарантийный и гарантии, созданные по нему.
   const [convertCandidates, setConvertCandidates] = useState<Order[] | null>(null)
   const [warrantyChildren, setWarrantyChildren] = useState<Order[]>([])
+  // ПР-006: зоны доставки по координатам адресов — перечитываем при смене адреса.
+  const [zones, setZones] = useState<Awaited<ReturnType<typeof getDeliveryZones>> | null>(null)
+  const hasOrder = !!order
+  useEffect(() => {
+    if (!hasOrder) return
+    getDeliveryZones(orderId).then(setZones).catch(() => setZones(null))
+  }, [orderId, hasOrder, order?.pickup_lat, order?.pickup_lon, order?.delivery_lat, order?.delivery_lon])
   useEffect(() => {
     getWarrantyOrders(orderId).then(setWarrantyChildren).catch(() => setWarrantyChildren([]))
   }, [orderId])
@@ -1762,14 +1771,14 @@ export default function OrderDetailPage() {
   }
 
   /**
-   * Правка №1 (17.09): отметка обзвона. Флажок операционный — на статус заказа
-   * не влияет и в маршрутный лист не попадает. Бэкенд снимает его сам при
-   * переносе дня выезда и после забора ковров.
+   * Правка №1 (17.09) / ПР-010: отметка обзвона по этапу. Флажок операционный —
+   * на статус заказа не влияет. Бэкенд снимает его сам только при переносе дня
+   * своего этапа; время последнего звонка остаётся в журнале.
    */
-  const handleToggleClientConfirmed = async () => {
+  const handleToggleClientConfirmed = async (leg: CallLeg) => {
     if (!order) return
     try {
-      const updated = await setClientConfirmed(orderId, !order.client_confirmed)
+      const updated = await setClientConfirmed(orderId, !legConfirmed(order, leg), leg)
       setOrder(updated)
     } catch (e: unknown) {
       const msg = (e as { response?: { data?: { message?: string } } })?.response?.data?.message
@@ -1918,10 +1927,29 @@ export default function OrderDetailPage() {
   const handleAddModifier = async (modifierId: number) => {
     try {
       await addOrderModifier(orderId, modifierId)
-      await loadOrder()
-      const mods = await getOrderModifiers(orderId)
-      setOrderModifiers(mods)
+      await afterModifiersChanged()
     } catch (e: unknown) { const msg = (e as any)?.response?.data?.message || 'Ошибка добавления модификатора'; showToast(msg, 'error') }
+  }
+
+  /** После скидки: заказ, его скидки и скидки клиента (автозакрепление, ПР-004). */
+  const afterModifiersChanged = async () => {
+    await loadOrder()
+    setOrderModifiers(await getOrderModifiers(orderId))
+    if (order?.client_id) {
+      getClientModifiers(order.client_id).then(mods => setClientModifierIds(new Set(mods.map(m => m.id)))).catch(() => {})
+    }
+  }
+
+  /** ПР-018: промокод, введённый оператором. */
+  const [promoInput, setPromoInput] = useState('')
+  const handleApplyPromo = async (code: string) => {
+    if (!code.trim()) return
+    try {
+      await applyPromoCode(orderId, code.trim())
+      setPromoInput('')
+      await afterModifiersChanged()
+      showToast(`Промокод ${code.trim().toUpperCase()} применён`, 'success')
+    } catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Не удалось применить промокод', 'error') }
   }
 
   const handleRemoveModifier = async (modifierId: number) => {
@@ -2252,38 +2280,45 @@ export default function OrderDetailPage() {
               />
             </span>
           </div>
-          {/* Правка №1 (17.09): обзвон клиента перед выездом. Показываем, кто
-              именно подтвердил — с клиентами работают несколько операторов.
-              Отметка снимается сама при переносе дня и после забора ковров. */}
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
-            marginBottom: 8, fontSize: 'var(--font-sm)',
-          }}>
-            <span style={{ color: 'var(--c-text-secondary)' }}>Клиент подтвердил день выезда:</span>
-            <button
-              type="button"
-              disabled={!isEditable}
-              onClick={() => void handleToggleClientConfirmed()}
-              title={order.client_confirmed
-                ? 'Клик — вернуть в «Уточнить»'
-                : 'Клик — отметить, что клиент подтвердил день'}
-              style={{
-                border: 'none', borderRadius: 4, padding: '3px 10px',
-                cursor: isEditable ? 'pointer' : 'default', fontWeight: 600,
-                fontSize: 'var(--font-sm)', whiteSpace: 'nowrap',
-                background: order.client_confirmed ? '#eafaf1' : '#fdf2e9',
-                color:      order.client_confirmed ? '#196f3d' : '#a04000',
-              }}
-            >
-              {order.client_confirmed ? '✓ Подтверждён' : '☎ Уточнить'}
-            </button>
-            {order.client_confirmed && order.client_confirmed_by && (
-              <span style={{ color: 'var(--c-text-secondary)' }}>
-                — {order.client_confirmed_by}
-                {order.client_confirmed_at && `, ${new Date(order.client_confirmed_at).toLocaleString('ru')}`}
-              </span>
-            )}
-          </div>
+          {/* Правка №1 (17.09) / ПР-010: обзвон клиента — отдельно про день забора
+              и про день отвоза. Отметка этапа снимается только при переносе его
+              дня; последний звонок виден всегда, чтобы не звонить повторно. */}
+          {(['PICKUP', 'DELIVERY'] as CallLeg[]).map(leg => {
+            const confirmed = legConfirmed(order, leg)
+            const by = legConfirmedBy(order, leg)
+            const call = lastCall(order, leg)
+            return (
+              <div key={leg} style={{
+                display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+                marginBottom: 8, fontSize: 'var(--font-sm)',
+              }}>
+                <span style={{ color: 'var(--c-text-secondary)', minWidth: 210 }}>
+                  {leg === 'PICKUP' ? 'Клиент подтвердил день забора:' : 'Клиент подтвердил день отвоза:'}
+                </span>
+                <button
+                  type="button"
+                  disabled={!isEditable}
+                  onClick={() => void handleToggleClientConfirmed(leg)}
+                  title={confirmed ? 'Клик — вернуть в «Уточнить»' : 'Клик — отметить, что клиент подтвердил день'}
+                  style={{
+                    border: 'none', borderRadius: 4, padding: '3px 10px',
+                    cursor: isEditable ? 'pointer' : 'default', fontWeight: 600,
+                    fontSize: 'var(--font-sm)', whiteSpace: 'nowrap',
+                    background: confirmed ? '#eafaf1' : '#fdf2e9',
+                    color:      confirmed ? '#196f3d' : '#a04000',
+                  }}
+                >
+                  {confirmed ? '✓ Подтверждён' : '☎ Уточнить'}
+                </button>
+                {confirmed && by && <span style={{ color: 'var(--c-text-secondary)' }}>— {by}</span>}
+                {call && (
+                  <span style={{ color: 'var(--c-text-secondary)' }} title="Последний звонок по этому этапу">
+                    последний звонок: {formatCall(call)}
+                  </span>
+                )}
+              </div>
+            )
+          })}
           {/* Правка №3 (13.09): зачем клиент обратился. Поле заказа: сегодня
               залили ковёр, через полгода — плановая чистка. Сохраняем сразу
               по выбору, отдельной кнопки не надо. */}
@@ -2541,6 +2576,19 @@ export default function OrderDetailPage() {
             // Свёрнутая карта — компактная ссылка без своей строки: развёрнутая
             // получает нормальный отступ, свёрнутая не отъедает высоту у позиций.
             <div style={{ marginTop: mapVisible ? 12 : 2 }}>
+              {/* ПР-006: зона доставки по тарифам сайта — цену приёма/доставки
+                  программа считает сама; ручная цена (ПР-012) её перекрывает. */}
+              {zones && (zones.pickup || zones.delivery) && (
+                <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginBottom: 6, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                  {([['Забор', zones.pickup], ['Отвоз', zones.delivery]] as const).map(([label, z]) => z && (
+                    <span key={label}>
+                      {label}: зона {z.zone} · {z.name} · поездка {z.exact_price ? '' : 'от '}{Number(z.one_way).toFixed(0)} ₽
+                      {!z.exact_price && <strong style={{ color: '#d35400' }}> — дальняя зона, цену уточнить</strong>}
+                    </span>
+                  ))}
+                  {!zones.applies && <span>заказ оформлен до перехода на зоны — доставка по прежнему тарифу</span>}
+                </div>
+              )}
               {/* Одна кнопка на одном месте вместо двух в разных углах: «Свернуть»
                   раньше жила над картой справа, и после разворота оператор искал
                   её заново. Карта сворачивается и по Esc. */}
@@ -2958,15 +3006,24 @@ export default function OrderDetailPage() {
             <div>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>Модификаторы:</div>
               {orderModifiers.map(m => {
-                const amount = Number(order.base_amount) * m.percent / 100
-                const isPositive = m.percent > 0
+                // Эффект в рублях считает бэк (discount_amount); для старых записей — по проценту.
+                const amount = m.discount_amount != null
+                  ? Number(m.discount_amount)
+                  : Number(order.base_amount) * m.percent / 100
+                const isPositive = !isDiscount(m)
                 const alreadyOnClient = clientModifierIds.has(m.modifier_id)
                 return (
                   <div key={m.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
-                    <span>{m.modifier_name} ({isPositive ? '+' : ''}{m.percent}%)</span>
+                    <span>
+                      {m.modifier_name} ({modifierText(m)})
+                      {m.promo_code && <code style={{ marginLeft: 6 }}>{m.promo_code}</code>}
+                      {m.kind === 'FREE_DELIVERY' && (
+                        <span style={{ color: 'var(--c-text-secondary)', fontSize: 'var(--font-sm)' }}> — доставка в позициях обнулена</span>
+                      )}
+                    </span>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <span style={{ color: isPositive ? '#e74c3c' : '#27ae60', fontWeight: 600 }}>
-                        {isPositive ? '+' : ''}{amount.toFixed(2)} &#8381;
+                        {amount > 0 ? '+' : ''}{amount.toFixed(2)} &#8381;
                       </span>
                       {/* V19: точечный перенос модификатора на клиента — кнопка прячется,
                           если он уже привязан или у заказа нет клиента. */}
@@ -3001,22 +3058,34 @@ export default function OrderDetailPage() {
           )}
 
           {isEditable && (() => {
+            // ПР-018: в списке только действующие скидки; промокоды подписаны кодом.
             const usedIds = orderModifiers.map(m => m.modifier_id)
-            const available = allModifiers.filter(m => !usedIds.includes(m.id))
-            if (available.length === 0) return null
+            const available = allModifiers.filter(m => !usedIds.includes(m.id) && isApplicableNow(m))
             return (
-              <div style={{ marginTop: 4 }}>
-                <StyledSelect<string>
-                  value=""
-                  width={280}
-                  ariaLabel="Добавить модификатор"
-                  placeholder="+ Добавить модификатор…"
-                  options={available.map(m => ({
-                    value: String(m.id),
-                    label: `${m.name} (${m.percent > 0 ? '+' : ''}${m.percent}%)`,
-                  }))}
-                  onChange={v => { const id = Number(v); if (id) void handleAddModifier(id) }}
+              <div style={{ marginTop: 4, display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+                {available.length > 0 && (
+                  <StyledSelect<string>
+                    value=""
+                    width={300}
+                    ariaLabel="Добавить скидку или надбавку"
+                    placeholder="+ Добавить скидку / надбавку…"
+                    options={available.map(m => ({
+                      value: String(m.id),
+                      label: `${m.name} (${modifierText(m)})${m.promo_code ? ` · ${m.promo_code}` : ''}`,
+                    }))}
+                    onChange={v => { const id = Number(v); if (id) void handleAddModifier(id) }}
+                  />
+                )}
+                <input
+                  value={promoInput}
+                  onChange={e => setPromoInput(e.target.value.toUpperCase())}
+                  onKeyDown={e => { if (e.key === 'Enter') void handleApplyPromo(promoInput) }}
+                  placeholder="Промокод"
+                  style={{ width: 140, height: 'var(--control-h)' }}
                 />
+                <button className="btn-secondary btn-sm" disabled={!promoInput.trim()} onClick={() => void handleApplyPromo(promoInput)}>
+                  Применить
+                </button>
               </div>
             )
           })()}
@@ -3025,8 +3094,13 @@ export default function OrderDetailPage() {
               Показываем строку, иначе оператор не понимает, почему база + модификаторы
               не сходятся с ИТОГО. */}
           {(() => {
+            // Бесплатная доставка уже вычтена из позиций (base_amount), её не считаем второй раз.
             const beforeRounding = Number(order.base_amount)
-              + orderModifiers.reduce((acc, m) => acc + Number(order.base_amount) * m.percent / 100, 0)
+              + orderModifiers
+                .filter(m => m.kind !== 'FREE_DELIVERY')
+                .reduce((acc, m) => acc + (m.discount_amount != null
+                  ? Number(m.discount_amount)
+                  : Number(order.base_amount) * m.percent / 100), 0)
             const diff = beforeRounding - Number(order.total_amount)
             if (diff < 0.005) return null
             return (
@@ -3327,10 +3401,10 @@ export default function OrderDetailPage() {
                   {clientCardMods.map(m => (
                     <span key={m.id} style={{
                       padding: '3px 8px', borderRadius: 4, fontSize: 'var(--font-sm)', fontWeight: 600,
-                      color: m.percent < 0 ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
-                      background: m.percent < 0 ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
+                      color: isDiscount(m) ? '#27ae60' : m.percent > 0 ? '#e74c3c' : '#888',
+                      background: isDiscount(m) ? '#eafaf1' : m.percent > 0 ? '#fdedec' : '#f5f5f5',
                     }}>
-                      {m.name} ({m.percent > 0 ? '+' : ''}{m.percent}%)
+                      {m.name} ({modifierText(m)})
                     </span>
                   ))}
                 </div>

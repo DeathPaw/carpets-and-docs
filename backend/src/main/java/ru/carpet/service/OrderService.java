@@ -40,6 +40,7 @@ public class OrderService {
     private final CancellationReasonRepository cancellationReasonRepository;
     /** ТЗ v2: точки водителя следуют за датами выезда. */
     private final PayrollService payrollService;
+    private final DeliveryZoneService deliveryZoneService;
 
     public OrderService(
             OrderRepository repository,
@@ -59,7 +60,8 @@ public class OrderService {
             PresenceService presenceService,
             OrderRefundRepository refundRepository,
             CancellationReasonRepository cancellationReasonRepository,
-            PayrollService payrollService
+            PayrollService payrollService,
+            DeliveryZoneService deliveryZoneService
     ) {
         this.repository = repository;
         this.itemRepository = itemRepository;
@@ -79,6 +81,7 @@ public class OrderService {
         this.refundRepository = refundRepository;
         this.cancellationReasonRepository = cancellationReasonRepository;
         this.payrollService = payrollService;
+        this.deliveryZoneService = deliveryZoneService;
     }
 
     /**
@@ -347,7 +350,8 @@ public class OrderService {
     public void recalculateDefaultItemPrices(Long orderId) {
         // V42: цена приёма/доставки и порог бесплатной доставки — тоже по прайсу
         // заказа: иначе старый заказ при любом пересчёте получал новую доставку.
-        java.time.LocalDate priceDate = repository.findById(orderId).map(Order::priceDate).orElse(null);
+        Order orderForPrices = repository.findById(orderId).orElse(null);
+        java.time.LocalDate priceDate = orderForPrices == null ? null : orderForPrices.priceDate();
         var autoSkus = skuService.findAutoAdd().stream()
                 .map(s -> skuService.findAsOf(s.id(), priceDate).sku())
                 .toList();
@@ -383,15 +387,38 @@ public class OrderService {
                 .filter(i -> !autoSkuIds.contains(itemToSkuId.get(i.id())))
                 .map(OrderItem::price)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // ПР-018: промокод «бесплатная доставка» обнуляет позиции приёма/доставки
+        // целиком — и автоматические, и с ручной ценой. Сколько это сэкономило
+        // клиенту, пишем в скидку заказа для отчётов.
+        List<OrderModifier> freeDeliveryMods = orderModifierRepository.findByOrderId(orderId).stream()
+                .filter(m -> "FREE_DELIVERY".equals(m.kind())).toList();
+        boolean freeDelivery = !freeDeliveryMods.isEmpty();
+        BigDecimal freed = BigDecimal.ZERO;
         // Пересчёт цены каждой auto-add позиции по free_threshold.
         for (var sku : autoSkus) {
-            if (sku.freeThreshold() == null) continue;
             for (var item : items) {
                 if (!java.util.Objects.equals(itemToSkuId.get(item.id()), sku.id())) continue;
-                if (manualItems.contains(item.id())) continue;
-                BigDecimal newPrice = nonAutoSum.compareTo(sku.freeThreshold()) >= 0
-                        ? BigDecimal.ZERO
-                        : (sku.price() == null ? BigDecimal.ZERO : sku.price());
+                if (item.status() == OrderItemStatus.CANCELLED) continue;
+                BigDecimal price;
+                if (manualItems.contains(item.id())) {
+                    // Ручная цена — это сумма услуг позиции (ПР-012).
+                    price = serviceInstanceRepository.sumPriceByOrderItemId(item.id());
+                } else if (zoneLegPrice(orderForPrices, sku, nonAutoSum) != null) {
+                    // ПР-006: приём и доставка по зоне адреса и сумме стирки.
+                    price = zoneLegPrice(orderForPrices, sku, nonAutoSum);
+                } else if (sku.freeThreshold() == null) {
+                    price = item.price();
+                } else {
+                    price = nonAutoSum.compareTo(sku.freeThreshold()) >= 0
+                            ? BigDecimal.ZERO
+                            : (sku.price() == null ? BigDecimal.ZERO : sku.price());
+                }
+                if (price == null) price = BigDecimal.ZERO;
+                BigDecimal newPrice = price;
+                if (freeDelivery) {
+                    freed = freed.add(price);
+                    newPrice = BigDecimal.ZERO;
+                }
                 if (newPrice.compareTo(item.price()) != 0) {
                     itemRepository.updatePrice(item.id(), newPrice);
                 }
@@ -400,6 +427,46 @@ public class OrderService {
         BigDecimal total = itemRepository.sumPriceByOrderId(orderId);
         repository.updateBaseAmount(orderId, total);
         recalculateTotalWithModifiers(orderId, total);
+        for (OrderModifier m : freeDeliveryMods) {
+            orderModifierRepository.updateDiscountAmount(m.id(), freed.negate());
+        }
+    }
+
+    /**
+     * ПР-006: цена поездки по зоне. Забор — позиция с SKU, который переводит
+     * заказ в IN_PROGRESS (Приём), отвоз — в DELIVERED (Доставка). Координаты
+     * берём своего этапа, иначе второго. null — зоны не действуют для заказа,
+     * адрес без координат или вне зон: тогда цена по SKU и порогу, как раньше.
+     */
+    private BigDecimal zoneLegPrice(Order order, ru.carpet.model.Sku sku, BigDecimal cleaningSum) {
+        if (order == null || !deliveryZoneService.appliesTo(order.priceDate())) return null;
+        boolean pickup = "IN_PROGRESS".equals(sku.triggersOrderStatus());
+        boolean delivery = "DELIVERED".equals(sku.triggersOrderStatus());
+        if (!pickup && !delivery) return null;
+        return legZone(order, pickup)
+                .map(z -> DeliveryZoneService.legPrice(z, cleaningSum))
+                .orElse(null);
+    }
+
+    /** Зона этапа заказа: координаты своего этапа, иначе второго. */
+    public java.util.Optional<DeliveryZoneService.ZoneInfo> legZone(Order order, boolean pickup) {
+        BigDecimal lat = pickup ? order.pickupLat() : order.deliveryLat();
+        BigDecimal lon = pickup ? order.pickupLon() : order.deliveryLon();
+        if (lat == null || lon == null) {
+            lat = pickup ? order.deliveryLat() : order.pickupLat();
+            lon = pickup ? order.deliveryLon() : order.pickupLon();
+        }
+        return deliveryZoneService.find(lat, lon);
+    }
+
+    /** ПР-006: зоны забора и отвоза заказа — для показа в карточке. */
+    public java.util.Map<String, Object> deliveryZones(Long orderId) {
+        Order order = findById(orderId);
+        java.util.Map<String, Object> result = new java.util.LinkedHashMap<>();
+        result.put("applies", deliveryZoneService.appliesTo(order.priceDate()));
+        legZone(order, true).ifPresent(z -> result.put("pickup", z));
+        legZone(order, false).ifPresent(z -> result.put("delivery", z));
+        return result;
     }
 
     /** Ручное изменение статуса заказа (без причины — для не-CANCELLED). */
@@ -700,13 +767,6 @@ public class OrderService {
             if (sku.triggersOrderStatus() == null) return;
             OrderItem item = itemRepository.findById(orderItemId).orElse(null);
             if (item == null) return;
-            // V43: услуги забора (Приём, Самовывоз-привоз, Доставка-забор) ведут
-            // заказ в IN_PROGRESS. Ковры забрали — подтверждение клиента больше
-            // не про этот выезд, впереди звонок про доставку готовых. Снимаем до
-            // проверки статуса ниже: заказ мог уже уехать вперёд, а флажок снять надо.
-            if ("IN_PROGRESS".equals(sku.triggersOrderStatus())) {
-                resetClientConfirmation(item.orderId(), "ковры забраны");
-            }
             OrderStatus targetStatus = OrderStatus.valueOf(sku.triggersOrderStatus());
             Order order = findById(item.orderId());
             // Не понижаем статус (например, не переводим DELIVERED→CREATED)
@@ -966,6 +1026,11 @@ public class OrderService {
                 pickupDistrict, deliveryDistrict,
                 pickupLat, pickupLon, deliveryLat, deliveryLon);
         auditLogService.log("ORDER", orderId, "UPDATE", "Обновлены детали заказа #" + orderId);
+        // ПР-006: адрес сменился — цена доставки по зоне могла измениться.
+        if (!java.util.Objects.equals(order.pickupLat(), pickupLat) || !java.util.Objects.equals(order.pickupLon(), pickupLon)
+                || !java.util.Objects.equals(order.deliveryLat(), deliveryLat) || !java.util.Objects.equals(order.deliveryLon(), deliveryLon)) {
+            recalculateTotalAmount(orderId);
+        }
         return repository.findById(orderId).orElseThrow();
     }
 
@@ -995,9 +1060,16 @@ public class OrderService {
             auditLogService.log("ORDER", orderId, "LOGISTICS", "Логистика, заказ " + orderNo(orderId) + ": " + changes);
             // ТЗ v2: перенос дня двигает и точку водителя, а снятие даты её убирает.
             payrollService.syncOrderPoints(orderId);
-            // V43: день выезда поменялся — старое подтверждение недействительно,
-            // клиента надо обзванивать заново.
-            resetClientConfirmation(orderId, "перенос дня выезда");
+            // ПР-010: день этапа поменялся — подтверждение именно этого этапа
+            // недействительно. Перенос доставки не снимает прозвон забора и наоборот.
+            if (describeLeg("забор", order.actualPickupDate(), order.actualPickupTimeSlot(),
+                    after.actualPickupDate(), after.actualPickupTimeSlot()) != null) {
+                resetClientConfirmation(orderId, "PICKUP", "перенос дня забора");
+            }
+            if (describeLeg("доставка", order.actualDeliveryDate(), order.actualDeliveryTimeSlot(),
+                    after.actualDeliveryDate(), after.actualDeliveryTimeSlot()) != null) {
+                resetClientConfirmation(orderId, "DELIVERY", "перенос дня доставки");
+            }
             after = repository.findById(orderId).orElseThrow();
         }
         return after;
@@ -1010,13 +1082,24 @@ public class OrderService {
      * клиентов накануне и отмечает, кто подтвердил. Подпись оператора храним —
      * с клиентами работают несколько человек, и важно, кто именно звонил.
      */
-    @Transactional
-    public Order setClientConfirmed(Long orderId, boolean confirmed) {
+    /** ПР-010: журнал звонков заказа, новые сверху. */
+    public List<java.util.Map<String, Object>> calls(Long orderId) {
         findById(orderId);
+        return repository.calls(orderId);
+    }
+
+    @Transactional
+    public Order setClientConfirmed(Long orderId, String leg, boolean confirmed) {
+        findById(orderId);
+        String safeLeg = "DELIVERY".equals(leg) ? "DELIVERY" : "PICKUP";
         String actor = ru.carpet.audit.AuditUser.current();
-        repository.updateClientConfirmed(orderId, confirmed, confirmed ? actor : null);
+        repository.updateLegConfirmed(orderId, safeLeg, confirmed, confirmed ? actor : null);
+        // ПР-010: каждое подтверждение — звонок в журнал; время последнего звонка
+        // остаётся видно, даже когда отметку потом снимут из-за переноса.
+        if (confirmed) repository.insertCall(orderId, safeLeg, actor);
+        String what = "DELIVERY".equals(safeLeg) ? "день доставки" : "день забора";
         auditLogService.log("ORDER", orderId, "LOGISTICS", "Заказ " + orderNo(orderId) + ": "
-                + (confirmed ? "клиент подтвердил день выезда" : "подтверждение снято — уточнить"));
+                + (confirmed ? "клиент подтвердил " + what : "подтверждение (" + what + ") снято — уточнить"));
         return repository.findById(orderId).orElseThrow();
     }
 
@@ -1104,21 +1187,17 @@ public class OrderService {
         };
     }
 
-    /** V43: снять подтверждение после забора — вызывается и из кабинета водителя. */
-    @Transactional
-    public void resetClientConfirmationAfterPickup(Long orderId) {
-        resetClientConfirmation(orderId, "ковры забраны");
-    }
-
     /**
-     * V43: снять подтверждение автоматически. Вызывается при переносе дня выезда
-     * и после забора ковров — оба раза с клиентом предстоит говорить заново.
+     * V43/ПР-010: снять подтверждение этапа автоматически — только при переносе
+     * дня этого этапа. После забора отметку больше не снимаем: у отвоза своя.
      * Если подтверждения не было, ничего не пишем: лог не должен шуметь.
      */
-    private void resetClientConfirmation(Long orderId, String reason) {
+    private void resetClientConfirmation(Long orderId, String leg, String reason) {
         Order order = repository.findById(orderId).orElse(null);
-        if (order == null || !order.clientConfirmed()) return;
-        repository.updateClientConfirmed(orderId, false, null);
+        if (order == null) return;
+        boolean confirmed = "DELIVERY".equals(leg) ? order.deliveryConfirmed() : order.clientConfirmed();
+        if (!confirmed) return;
+        repository.updateLegConfirmed(orderId, leg, false, null);
         auditLogService.log("ORDER", orderId, "LOGISTICS",
                 "Заказ " + orderNo(orderId) + ": подтверждение клиента снято (" + reason + ")");
     }
@@ -1140,7 +1219,11 @@ public class OrderService {
     static String orderNo(Long orderId) { return "#" + String.format("%05d", orderId); }
 
     /** «скидка «Пенсионер» −10%» / «надбавка «Срочность» +10%». */
-    private static String modifierLabel(String name, BigDecimal percent) {
+    private static String modifierLabel(String name, String kind, BigDecimal percent, BigDecimal amount) {
+        if ("FIXED".equals(kind)) {
+            return "скидка «" + name + "» −" + (amount == null ? "0" : amount.stripTrailingZeros().toPlainString()) + " ₽";
+        }
+        if ("FREE_DELIVERY".equals(kind)) return "скидка «" + name + "» (бесплатная доставка)";
         String pct = percent.abs().stripTrailingZeros().toPlainString();
         return percent.signum() < 0 ? "скидка «" + name + "» −" + pct + "%" : "надбавка «" + name + "» +" + pct + "%";
     }
@@ -1159,7 +1242,10 @@ public class OrderService {
         // Копируем модификаторы
         List<OrderModifier> mods = orderModifierRepository.findByOrderId(orderId);
         for (OrderModifier m : mods) {
-            orderModifierRepository.add(newOrder.id(), m.modifierId(), m.modifierName(), m.percent());
+            // Промокод разовый — в копию заказа не переносим (ПР-018).
+            if (m.promoCode() != null) continue;
+            orderModifierRepository.add(newOrder.id(), m.modifierId(), m.modifierName(), m.percent(),
+                    m.kind(), m.amount(), null);
         }
         // V10: копируем позиции, кроме тех, что используют auto-add SKU
         // (доставка/приём — они уже автоматически добавились в новый заказ).
@@ -1283,11 +1369,29 @@ public class OrderService {
     @Transactional
     public void recalculateTotalWithModifiers(Long orderId, BigDecimal baseAmount) {
         List<OrderModifier> modifiers = orderModifierRepository.findByOrderId(orderId);
+        // Процентные скидки и надбавки складываются и считаются от базы (как раньше).
         BigDecimal modifierSum = BigDecimal.ZERO;
         for (OrderModifier m : modifiers) {
-            modifierSum = modifierSum.add(baseAmount.multiply(m.percent()).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP));
+            if (!"PERCENT".equals(m.kind())) continue;
+            BigDecimal effect = baseAmount.multiply(m.percent()).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
+            modifierSum = modifierSum.add(effect);
+            if (m.discountAmount() == null || m.discountAmount().compareTo(effect) != 0) {
+                orderModifierRepository.updateDiscountAmount(m.id(), effect);
+            }
         }
-        BigDecimal total = roundDownToHundred(baseAmount.add(modifierSum));
+        // ПР-018: фиксированные скидки вычитаются после процентов и не уводят итог ниже нуля.
+        BigDecimal afterPercent = baseAmount.add(modifierSum);
+        BigDecimal fixedSum = BigDecimal.ZERO;
+        for (OrderModifier m : modifiers) {
+            if (!"FIXED".equals(m.kind()) || m.amount() == null) continue;
+            BigDecimal room = afterPercent.subtract(fixedSum).max(BigDecimal.ZERO);
+            BigDecimal effect = m.amount().min(room);
+            fixedSum = fixedSum.add(effect);
+            if (m.discountAmount() == null || m.discountAmount().compareTo(effect.negate()) != 0) {
+                orderModifierRepository.updateDiscountAmount(m.id(), effect.negate());
+            }
+        }
+        BigDecimal total = roundDownToHundred(afterPercent.subtract(fixedSum));
         repository.updateTotalAmount(orderId, total);
     }
 
@@ -1351,13 +1455,63 @@ public class OrderService {
     /** Добавить модификатор к заказу */
     @Transactional
     public Order addModifier(Long orderId, Long modifierId) {
-        findById(orderId);
         PriceModifier pm = priceModifierRepository.findById(modifierId)
                 .orElseThrow(() -> new EntityNotFoundException("Modifier not found: " + modifierId));
-        orderModifierRepository.add(orderId, modifierId, pm.name(), pm.percent());
+        return applyModifier(orderId, pm);
+    }
+
+    /** ПР-018: применить скидку по промокоду, введённому оператором. */
+    @Transactional
+    public Order applyPromoCode(Long orderId, String code) {
+        if (code == null || code.isBlank()) throw new BusinessRuleException("Введите промокод.");
+        PriceModifier pm = priceModifierRepository.findByPromoCode(code.trim())
+                .orElseThrow(() -> new BusinessRuleException("Промокод «" + code.trim() + "» не найден."));
+        return applyModifier(orderId, pm);
+    }
+
+    /**
+     * Применение скидки к заказу (ПР-004, ПР-018).
+     *
+     * <p>Проверяем условия: скидка включена, срок действия, лимит использований,
+     * не больше одного промокода на заказ. Скидки суммируются. Скидка с
+     * настройкой «закреплять за клиентом» при первом применении сама
+     * добавляется в карточку клиента — в его следующих заказах она будет
+     * подставлена автоматически. Разовые скидки и промокоды без этой настройки
+     * за клиентом не закрепляются.
+     */
+    private Order applyModifier(Long orderId, PriceModifier pm) {
+        Order order = findById(orderId);
+        List<OrderModifier> current = orderModifierRepository.findByOrderId(orderId);
+        if (current.stream().anyMatch(m -> java.util.Objects.equals(m.modifierId(), pm.id()))) {
+            throw new BusinessRuleException("«" + pm.name() + "» уже применена к заказу.");
+        }
+        if (!pm.active()) throw new BusinessRuleException("«" + pm.name() + "» выключена в справочнике.");
+        java.time.LocalDate today = java.time.LocalDate.now();
+        if (pm.validFrom() != null && today.isBefore(pm.validFrom())) {
+            throw new BusinessRuleException("«" + pm.name() + "» действует с " + pm.validFrom().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")) + ".");
+        }
+        if (pm.validTo() != null && today.isAfter(pm.validTo())) {
+            throw new BusinessRuleException("Срок действия «" + pm.name() + "» истёк " + pm.validTo().format(java.time.format.DateTimeFormatter.ofPattern("dd.MM.yyyy")) + ".");
+        }
+        if (pm.usageLimit() != null && pm.usedCount() >= pm.usageLimit()) {
+            throw new BusinessRuleException("Лимит использований «" + pm.name() + "» исчерпан (" + pm.usageLimit() + ").");
+        }
+        if (pm.promoCode() != null) {
+            current.stream().filter(m -> m.promoCode() != null).findFirst().ifPresent(m -> {
+                throw new BusinessRuleException("В заказе уже есть промокод «" + m.promoCode() + "». Один заказ — один промокод.");
+            });
+        }
+        orderModifierRepository.add(orderId, pm);
         recalculateTotalAmount(orderId);
         auditLogService.log("ORDER", orderId, "MODIFIER",
-                "Заказ " + orderNo(orderId) + ": добавлена " + modifierLabel(pm.name(), pm.percent()));
+                "Заказ " + orderNo(orderId) + ": добавлена " + modifierLabel(pm.name(), pm.kind(), pm.percent(), pm.amount())
+                        + (pm.promoCode() != null ? " (промокод " + pm.promoCode() + ")" : ""));
+        if (pm.autoAssignToClient() && order.clientId() != null
+                && clientModifierRepository.findByClientId(order.clientId()).stream().noneMatch(m -> m.id().equals(pm.id()))) {
+            clientModifierRepository.add(order.clientId(), pm.id());
+            auditLogService.log("CLIENT", order.clientId(), "UPDATE",
+                    "Скидка «" + pm.name() + "» закреплена за клиентом автоматически (заказ " + orderNo(orderId) + ")");
+        }
         return findById(orderId);
     }
 
@@ -1371,7 +1525,7 @@ public class OrderService {
         recalculateTotalAmount(orderId);
         if (removed != null) {
             auditLogService.log("ORDER", orderId, "MODIFIER",
-                    "Заказ " + orderNo(orderId) + ": убрана " + modifierLabel(removed.modifierName(), removed.percent()));
+                    "Заказ " + orderNo(orderId) + ": убрана " + modifierLabel(removed.modifierName(), removed.kind(), removed.percent(), removed.amount()));
         }
         return findById(orderId);
     }

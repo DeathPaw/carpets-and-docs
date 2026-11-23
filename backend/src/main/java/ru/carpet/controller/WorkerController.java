@@ -834,14 +834,6 @@ public class WorkerController {
                 Map.of("oid", orderId));
         auditLogService.logAs(workerLabel(employeeId), "ORDER", orderId, "LOGISTICS",
                 "Логистика, заказ " + orderNo(orderId) + ": водитель отметил забор");
-        // V43: ковры забрали — отметка обзвона снимается, впереди звонок про
-        // доставку готовых. Статус услуги тут ставится сырым UPDATE (см. выше),
-        // мимо сервиса, поэтому сбрасываем явно.
-        ru.carpet.audit.AuditUser.as(workerLabel(employeeId), () -> {
-            orderService.resetClientConfirmationAfterPickup(orderId);
-            return null;
-        });
-
         return ResponseEntity.ok(Map.of("ok", true, "message", "Забор зафиксирован"));
     }
 

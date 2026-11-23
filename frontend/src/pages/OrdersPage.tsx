@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import { usePersistentState, readStored, writeStored } from '../hooks/usePersistentState'
+import Pagination from '../components/Pagination'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { getOrdersQuery, exportOrders } from '../api/orders'
@@ -35,6 +37,26 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 
+/** ПР-007: ключ сохранённых фильтров списка заказов в localStorage. */
+const FILTERS_KEY = 'orders.filters.v1'
+/** Параметры URL, которые задают фильтр «по ссылке» — тогда сохранённые не подставляем. */
+const URL_FILTER_KEYS = ['statuses', 'status', 'clientId', 'noCoords', 'overdueActual', 'badAddress',
+  'onlyWarranty', 'adjusted', 'stuck', 'dateFrom', 'dateTo']
+const DEFAULT_SORT: { field: string; dir: 'asc' | 'desc' }[] = [{ field: 'id', dir: 'desc' }]
+
+interface SavedOrderFilters {
+  statusFilters: OrderStatus[]
+  paymentFilters: string[]
+  orderIdSearch: string
+  searchText: string
+  districtFilter: string[]
+  dateField: 'created_at' | 'pickup_date' | 'delivery_date'
+  dateFrom: string
+  dateTo: string
+  sortKeys: { field: string; dir: 'asc' | 'desc' }[]
+  page: number
+}
+
 export default function OrdersPage() {
   const navigate = useNavigate()
   const { showToast } = useToast()
@@ -43,12 +65,18 @@ export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([])
   const [totalElements, setTotalElements] = useState(0)
 
+  // ПР-007: фильтры списка переживают уход на другие страницы и перезагрузку.
+  // Если на страницу пришли по ссылке с фильтром (плитка дашборда, аналитика,
+  // карточка клиента) — она главнее сохранённого.
+  const urlHasFilters = URL_FILTER_KEYS.some(k => searchParams.has(k))
+  const saved = urlHasFilters ? null : readStored<SavedOrderFilters>(FILTERS_KEY)
+
   // Парсим из URL: ?statuses=A,B,C или ?status=A
   const initialStatuses = (() => {
     const multi = searchParams.get('statuses')
     if (multi) return multi.split(',').filter(Boolean) as OrderStatus[]
     const single = searchParams.get('status')
-    return single ? [single as OrderStatus] : []
+    return single ? [single as OrderStatus] : (saved?.statusFilters ?? [])
   })()
   const [statusFilters, setStatusFilters] = useState<OrderStatus[]>(initialStatuses)
 
@@ -89,32 +117,55 @@ export default function OrdersPage() {
   const [stuckFilter, setStuckFilter] = useState<boolean>(
     searchParams.get('stuck') === 'true'
   )
-  const [paymentFilters, setPaymentFilters] = useState<string[]>([])
-  const [orderIdSearch, setOrderIdSearch] = useState('')
+  const [paymentFilters, setPaymentFilters] = useState<string[]>(saved?.paymentFilters ?? [])
+  const [orderIdSearch, setOrderIdSearch] = useState(saved?.orderIdSearch ?? '')
   // Единый поиск по клиенту / телефону / legacy ID — одно поле вместо трёх,
   // частичное совпадение считает бэк (параметр search).
-  const [searchText, setSearchText] = useState('')
+  const [searchText, setSearchText] = useState(saved?.searchText ?? '')
   // Район — из справочника, а не из выборки: список не должен зависеть от того,
   // какие заказы сейчас на странице.
-  const [districtFilter, setDistrictFilter] = useState<string[]>([])
+  const [districtFilter, setDistrictFilter] = useState<string[]>(saved?.districtFilter ?? [])
   const [districtNames, setDistrictNames] = useState<string[]>([])
   useEffect(() => {
     getDistricts(true).then(ds => setDistrictNames(ds.map(d => d.name))).catch(() => setDistrictNames([]))
   }, [])
   // Поле даты для фильтра — операторам часто нужно искать «доставки на этой неделе»,
   // не «созданные на этой неделе». Через select оператор выбирает по какому полю фильтровать.
-  const [dateField, setDateField] = useState<'created_at' | 'pickup_date' | 'delivery_date'>('created_at')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [page, setPage] = useState(0)
+  const [dateField, setDateField] = useState<'created_at' | 'pickup_date' | 'delivery_date'>(saved?.dateField ?? 'created_at')
+  const [dateFrom, setDateFrom] = useState(saved?.dateFrom ?? '')
+  const [dateTo, setDateTo] = useState(saved?.dateTo ?? '')
+  const [page, setPage] = useState(saved?.page ?? 0)
   const [hasMore, setHasMore] = useState(false)
   const [loading, setLoading] = useState(false)
   const [showCreate, setShowCreate] = useState(false)
   // Мульти-сортировка: массив пар (поле, направление). Первый — главный, потом тай-брейкер.
-  const [sortKeys, setSortKeys] = useState<{ field: string; dir: 'asc' | 'desc' }[]>([
-    { field: 'id', dir: 'desc' },
-  ])
-  const PAGE_SIZE = 20
+  const [sortKeys, setSortKeys] = useState<{ field: string; dir: 'asc' | 'desc' }[]>(saved?.sortKeys ?? DEFAULT_SORT)
+  // ПР-003: размер страницы выбирает оператор, выбор запоминается.
+  const [PAGE_SIZE, setPageSize] = usePersistentState('orders.pageSize', 20)
+
+  useEffect(() => {
+    const snapshot: SavedOrderFilters = {
+      statusFilters, paymentFilters, orderIdSearch, searchText, districtFilter,
+      dateField, dateFrom, dateTo, sortKeys, page,
+    }
+    writeStored(FILTERS_KEY, snapshot)
+  }, [statusFilters, paymentFilters, orderIdSearch, searchText, districtFilter, dateField, dateFrom, dateTo, sortKeys, page])
+
+  const hasActiveFilters = statusFilters.length > 0 || paymentFilters.length > 0 || !!orderIdSearch
+    || !!searchText || districtFilter.length > 0 || !!dateFrom || !!dateTo || dateField !== 'created_at'
+    || clientIdFilter != null || noCoordsFilter || overdueActualFilter || badAddressFilter
+    || onlyWarrantyFilter || adjustedFilter || stuckFilter
+
+  /** Осознанный сброс всех фильтров (и сохранённых тоже). Сортировка остаётся. */
+  const resetFilters = () => {
+    setStatusFilters([]); setPaymentFilters([]); setOrderIdSearch(''); setSearchText('')
+    setDistrictFilter([]); setDateField('created_at'); setDateFrom(''); setDateTo('')
+    setClientIdFilter(null); setClientFilterLabel('')
+    setNoCoordsFilter(false); setOverdueActualFilter(false); setBadAddressFilter(false)
+    setOnlyWarrantyFilter(false); setAdjustedFilter(false); setStuckFilter(false)
+    setPage(0)
+    if (searchParams.toString()) navigate('/orders', { replace: true })
+  }
 
   // Синхронизация фильтра статуса/клиента из URL при навигации (открытие страницы из другого места)
   useEffect(() => {
@@ -203,7 +254,7 @@ export default function OrdersPage() {
       'Повод обращения', 'Уточнение повода',
       'Статус', 'Причина отмены', 'Комментарий к отмене',
       'Адрес', 'Район',
-      'Сумма позиций, ₽', 'Вид скидки', 'Сумма скидки, ₽',
+      'Сумма позиций, ₽', 'Вид скидки', 'Сумма скидки, ₽', 'Промокод',
       'Виды надбавок', 'Сумма надбавок, ₽', 'Доставка, ₽', 'ИТОГО, ₽',
       'Оплачен', 'Тип оплаты', 'Гарантийный',
     ]
@@ -227,6 +278,7 @@ export default function OrdersPage() {
       Number(o.base_amount),
       o.discounts ?? '',
       Number(o.discount_sum),
+      o.promo_codes ?? '',
       o.surcharges ?? '',
       Number(o.surcharge_sum),
       Number(o.delivery_price),
@@ -592,6 +644,16 @@ export default function OrdersPage() {
               Сортировка: клик — направление (третий снимает),
               Shift+клик — добавить колонку, Ctrl/Cmd+клик — убрать.
             </div>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                onClick={resetFilters}
+                title="Снять все фильтры списка — они сохраняются между переходами"
+              >
+                Сбросить фильтры
+              </button>
+            )}
             {sortKeys.length > 0 && (
               <button
                 type="button"
@@ -643,13 +705,7 @@ export default function OrdersPage() {
             </tbody>
           </table>
 
-          {(page > 0 || hasMore) && (
-            <div className="pagination">
-              <button className="btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>&#8592; Назад</button>
-              <span>Стр. {page + 1}</span>
-              <button className="btn-secondary btn-sm" disabled={!hasMore} onClick={() => setPage(p => p + 1)}>Вперёд &#8594;</button>
-            </div>
-          )}
+          <Pagination page={page} setPage={setPage} hasMore={hasMore} pageSize={PAGE_SIZE} setPageSize={setPageSize} />
         </>
       )}
 

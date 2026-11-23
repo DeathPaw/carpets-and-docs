@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
+import Pagination from '../components/Pagination'
+import { usePersistentState } from '../hooks/usePersistentState'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import * as XLSX from 'xlsx'
 import { getFilteredItems } from '../api/services'
@@ -33,7 +35,8 @@ export default function ItemsPage() {
   const [districtNames, setDistrictNames] = useState<string[]>([])
   const [page, setPage] = useState(0)
   const [hasMore, setHasMore] = useState(false)
-  const PAGE_SIZE = 20
+  // ПР-003: размер страницы выбирает оператор, выбор запоминается.
+  const [PAGE_SIZE, setPageSize] = usePersistentState('items.pageSize', 20)
 
   const [exporting, setExporting] = useState(false)
 
@@ -164,7 +167,7 @@ export default function ItemsPage() {
   useEffect(() => {
     void load()
   }, [statusFilters, itemTypeFilters, employeeFilters, orderFilter, positionFilter,
-      searchText, districtFilter, page])
+      searchText, districtFilter, page, PAGE_SIZE])
 
   const resetFilters = () => {
     setStatusFilters([])
@@ -353,13 +356,7 @@ export default function ItemsPage() {
             </tbody>
           </table>
 
-          {(page > 0 || hasMore) && (
-            <div className="pagination">
-              <button className="btn-secondary btn-sm" disabled={page === 0} onClick={() => setPage(p => p - 1)}>← Назад</button>
-              <span>Стр. {page + 1}</span>
-              <button className="btn-secondary btn-sm" disabled={!hasMore} onClick={() => setPage(p => p + 1)}>Вперёд →</button>
-            </div>
-          )}
+          <Pagination page={page} setPage={setPage} hasMore={hasMore} pageSize={PAGE_SIZE} setPageSize={setPageSize} />
         </>
       )}
     </div>
