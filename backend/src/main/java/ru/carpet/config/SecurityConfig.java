@@ -55,10 +55,17 @@ public class SecurityConfig {
             // читают все (они нужны в заказах), а меняют только админы.
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/worker/**").permitAll()
+                // ПР-016: отчёты и зарплата — супервизору или по галочкам у пользователя.
+                .requestMatchers("/api/reports/**").hasAnyAuthority("ROLE_SUPERVISOR", "PERM_REPORTS")
+                .requestMatchers(HttpMethod.GET, "/api/payroll/**")
+                    .hasAnyAuthority("ROLE_SUPERVISOR", "PERM_PAYROLL_VIEW", "PERM_PAYROLL_SHIFTS", "PERM_PAYROLL_EDIT")
+                // Правка табеля и пересчёт по нему (пересчёт только применяет правила, ручных сумм не трогает).
+                .requestMatchers("/api/payroll/shifts/**", "/api/payroll/shifts", "/api/payroll/recalculate")
+                    .hasAnyAuthority("ROLE_SUPERVISOR", "PERM_PAYROLL_SHIFTS", "PERM_PAYROLL_EDIT")
+                .requestMatchers("/api/payroll/**").hasAnyAuthority("ROLE_SUPERVISOR", "PERM_PAYROLL_EDIT")
                 // Разделы супервизора — целиком, включая чтение.
                 .requestMatchers("/api/users/**", "/api/audit-log/**", "/api/error-log/**",
-                        "/api/cost-entries/**", "/api/expenses/**", "/api/payroll/**",
-                        "/api/reports/**", "/api/analytics/profit/**")
+                        "/api/cost-entries/**", "/api/expenses/**", "/api/analytics/profit/**")
                     .hasRole("SUPERVISOR")
                 .requestMatchers("/api/import/**").hasAnyRole("SUPERVISOR", "ADMIN")
                 // Служебные запросы, которые шлёт интерфейс у любого пользователя.
@@ -116,11 +123,11 @@ public class SecurityConfig {
         return username -> {
             AppUser appUser = userRepo.findByUsername(username)
                     .orElseThrow(() -> new UsernameNotFoundException("User not found: " + username));
-            return new User(
-                    appUser.username(),
-                    appUser.passwordHash(),
-                    List.of(new SimpleGrantedAuthority("ROLE_" + appUser.role()))
-            );
+            // ПР-016: роль плюс выборочные права (PERM_REPORTS, PERM_PAYROLL_*).
+            List<SimpleGrantedAuthority> authorities = new java.util.ArrayList<>();
+            authorities.add(new SimpleGrantedAuthority("ROLE_" + appUser.role()));
+            for (String p : appUser.permissions()) authorities.add(new SimpleGrantedAuthority("PERM_" + p));
+            return new User(appUser.username(), appUser.passwordHash(), authorities);
         };
     }
 

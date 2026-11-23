@@ -419,6 +419,27 @@ public class OrderController {
     // вручную её не редактируем (иначе путались модель и UX). Ручная цена остаётся
     // только на уровне услуги — /services/{serviceId}/price.
 
+    /** ПР-002: количество штук в позиции. body: {"quantity": 46}. */
+    @PatchMapping("/{orderId}/items/{itemId}/quantity")
+    public OrderItem setItemQuantity(@PathVariable Long orderId, @PathVariable Long itemId,
+                                     @RequestBody Map<String, Object> body) {
+        Object q = body.get("quantity");
+        if (q == null) throw new ru.carpet.exception.BusinessRuleException("Укажите количество.");
+        return service.setItemQuantity(orderId, itemId, Integer.parseInt(q.toString()));
+    }
+
+    /** ПР-002: объединить одинаковые позиции заказа в одну «×N». */
+    @PostMapping("/{orderId}/items/group-identical")
+    public Map<String, Object> groupIdenticalItems(@PathVariable Long orderId) {
+        return Map.of("merged", service.groupIdenticalItems(orderId));
+    }
+
+    /** ПР-002: отделить одну штуку в отдельную позицию. */
+    @PostMapping("/{orderId}/items/{itemId}/split")
+    public OrderItem splitOneItem(@PathVariable Long orderId, @PathVariable Long itemId) {
+        return service.splitOneItem(orderId, itemId);
+    }
+
     @PatchMapping("/{orderId}/items/{itemId}/dimensions")
     public Map<String, Object> updateItemDimensions(@PathVariable Long orderId,
                                           @PathVariable Long itemId,

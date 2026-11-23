@@ -926,6 +926,7 @@ public class OrderService {
                     warranty.id(), item.itemTypeId(), item.description(),
                     item.length(), item.width(), item.weight(), item.area(), item.runningMeters()
             );
+            if (item.quantity() > 1) itemRepository.updateQuantity(newItem.id(), item.quantity());
             List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(item.id());
             List<Long> skuIds = services.stream()
                     .map(OrderItemServiceInstance::skuId)
@@ -1267,6 +1268,107 @@ public class OrderService {
         return repository.findById(newOrder.id()).orElseThrow();
     }
 
+    // ---------------- ПР-002: количество однотипных изделий ----------------
+
+    /**
+     * Сменить количество штук в позиции. Размеры остаются на одну штуку;
+     * цены услуг пересчитываются (ручные цены — не трогаем, как везде).
+     */
+    @Transactional
+    public OrderItem setItemQuantity(Long orderId, Long itemId, int quantity) {
+        Order order = findById(orderId);
+        assertEditable(order);
+        if (quantity < 1 || quantity > 10000) throw new BusinessRuleException("Количество — от 1 до 10 000 штук.");
+        OrderItem item = itemRepository.findById(itemId)
+                .orElseThrow(() -> new EntityNotFoundException("OrderItem not found: " + itemId));
+        if (!item.orderId().equals(orderId)) throw new BusinessRuleException("Позиция не из этого заказа.");
+        if (item.quantity() == quantity) return item;
+        itemRepository.updateQuantity(itemId, quantity);
+        orderItemService.recalculateServicePrices(itemId);
+        orderItemService.recalculateItemPrice(itemId);
+        auditLogService.log("ORDER", orderId, "ITEM", "Заказ " + orderNo(orderId) + ": позиция #" + itemId
+                + " — количество " + item.quantity() + " → " + quantity + " шт.");
+        return itemRepository.findById(itemId).orElseThrow();
+    }
+
+    /**
+     * Объединить одинаковые позиции заказа в одну «×N» (ПР-002) — для заказов,
+     * где однотипные изделия уже заведены по одному.
+     *
+     * <p>Одинаковые — тот же тип, описание и дефекты, размеры одной штуки, тот же
+     * набор услуг без ручных цен, и работа по ним ещё не начата
+     * (статус «Создана»). Остаётся позиция с меньшим номером, фото переносятся
+     * в неё, остальные удаляются. Возвращает, сколько позиций влилось.
+     */
+    @Transactional
+    public int groupIdenticalItems(Long orderId) {
+        Order order = findById(orderId);
+        assertEditable(order);
+        java.util.Set<Long> autoSkuIds = new java.util.HashSet<>();
+        for (var s : skuService.findAutoAdd()) autoSkuIds.add(s.id());
+        java.util.Map<String, List<OrderItem>> groups = new java.util.LinkedHashMap<>();
+        for (OrderItem item : itemRepository.findByOrderId(orderId)) {
+            if (item.status() != OrderItemStatus.CREATED) continue;
+            List<OrderItemServiceInstance> services = serviceInstanceRepository.findByOrderItemId(item.id()).stream()
+                    .filter(s -> s.status() != ServiceStatus.CANCELLED).toList();
+            if (services.isEmpty() || services.stream().anyMatch(s -> autoSkuIds.contains(s.skuId()))) continue;
+            // Ручная цена — сумма за всю позицию; при слиянии её не пересчитать
+            // честно, поэтому такие позиции оператор объединяет сам.
+            if (services.stream().anyMatch(s -> Boolean.TRUE.equals(s.isManualPrice()))) continue;
+            String svcKey = services.stream().map(s -> String.valueOf(s.skuId()))
+                    .sorted().collect(java.util.stream.Collectors.joining(","));
+            String key = String.join("|", String.valueOf(item.itemTypeId()), nz(item.description()), nz(item.defects()),
+                    num(item.length()), num(item.width()), num(item.weight()), num(item.area()), num(item.runningMeters()), svcKey);
+            groups.computeIfAbsent(key, k -> new java.util.ArrayList<>()).add(item);
+        }
+        int merged = 0;
+        for (List<OrderItem> group : groups.values()) {
+            if (group.size() < 2) continue;
+            OrderItem keep = group.get(0);
+            List<Long> others = group.subList(1, group.size()).stream().map(OrderItem::id).toList();
+            int total = group.stream().mapToInt(OrderItem::quantity).sum();
+            itemRepository.movePhotos(others, keep.id());
+            itemRepository.deleteItems(others);
+            itemRepository.updateQuantity(keep.id(), total);
+            orderItemService.recalculateServicePrices(keep.id());
+            orderItemService.recalculateItemPrice(keep.id());
+            merged += others.size();
+            auditLogService.log("ORDER", orderId, "ITEM", "Заказ " + orderNo(orderId) + ": позиции "
+                    + others.stream().map(id -> "#" + id).collect(java.util.stream.Collectors.joining(", "))
+                    + " объединены в #" + keep.id() + " — " + total + " шт.");
+        }
+        if (merged > 0) recalculateTotalAmount(orderId);
+        return merged;
+    }
+
+    /** ПР-002: отделить одну штуку из позиции «×N» в отдельную позицию (когда нужен конкретный экземпляр). */
+    @Transactional
+    public OrderItem splitOneItem(Long orderId, Long itemId) {
+        Order order = findById(orderId);
+        assertEditable(order);
+        OrderItem item = itemRepository.findById(itemId)
+                .orElseThrow(() -> new EntityNotFoundException("OrderItem not found: " + itemId));
+        if (!item.orderId().equals(orderId)) throw new BusinessRuleException("Позиция не из этого заказа.");
+        if (item.quantity() < 2) throw new BusinessRuleException("В позиции одна штука — отделять нечего.");
+        itemRepository.updateQuantity(itemId, item.quantity() - 1);
+        orderItemService.recalculateServicePrices(itemId);
+        orderItemService.recalculateItemPrice(itemId);
+        OrderItem copy = duplicateItemInternal(orderId, itemRepository.findById(itemId).orElseThrow());
+        if (copy.quantity() != 1) {
+            itemRepository.updateQuantity(copy.id(), 1);
+            orderItemService.recalculateServicePrices(copy.id());
+            orderItemService.recalculateItemPrice(copy.id());
+        }
+        recalculateTotalAmount(orderId);
+        auditLogService.log("ORDER", orderId, "ITEM", "Заказ " + orderNo(orderId) + ": из позиции #" + itemId
+                + " отделена 1 шт. → #" + copy.id());
+        return itemRepository.findById(copy.id()).orElseThrow();
+    }
+
+    private static String nz(String s) { return s == null ? "" : s.trim(); }
+
+    private static String num(BigDecimal v) { return v == null ? "" : v.stripTrailingZeros().toPlainString(); }
+
     /** Дублирование позиции внутри заказа — копирует услуги с ценами из прайс-листа */
     public OrderItem duplicateItem(Long orderId, Long itemId) {
         findById(orderId);
@@ -1284,6 +1386,11 @@ public class OrderService {
                 orderId, original.itemTypeId(), original.description(),
                 original.length(), original.width(), original.weight(), original.area(), original.runningMeters()
         );
+        // ПР-002: копия позиции — с тем же количеством штук.
+        if (original.quantity() > 1) {
+            itemRepository.updateQuantity(newItem.id(), original.quantity());
+            newItem = itemRepository.findById(newItem.id()).orElseThrow();
+        }
         if (original.defects() != null) {
             itemRepository.updateDescription(newItem.id(), original.description(), original.defects());
         }

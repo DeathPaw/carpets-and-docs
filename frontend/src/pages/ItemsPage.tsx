@@ -334,7 +334,10 @@ export default function ItemsPage() {
                     <span style={{ color: '#7f8c8d' }}>#{item.position_in_order}</span>
                   </td>
                   <td><ItemThumb orderId={item.order_id} itemId={item.id} size={36} /></td>
-                  <td>{item.item_type_name ?? `Тип #${item.item_type_id}`}</td>
+                  <td>
+                    {item.item_type_name ?? `Тип #${item.item_type_id}`}
+                    {(item.quantity ?? 1) > 1 && <strong> × {item.quantity} шт.</strong>}
+                  </td>
                   <td>{item.description || '—'}</td>
                   <td>
                     <span className={`badge badge-${item.status.toLowerCase()}`}>

@@ -17,5 +17,11 @@ public record AppUser(
         Long employeeId,    // nullable — привязка к employees для авто-назначения
         boolean isActive,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
-) {}
+        LocalDateTime updatedAt,
+        /** V62 (ПР-016): выборочные права поверх роли — см. {@link #ALL_PERMISSIONS}. */
+        java.util.List<String> permissions
+) {
+    /** Допустимые права. Супервизору доступно всё без них. */
+    public static final java.util.List<String> ALL_PERMISSIONS =
+            java.util.List.of("REPORTS", "PAYROLL_VIEW", "PAYROLL_SHIFTS", "PAYROLL_EDIT");
+}

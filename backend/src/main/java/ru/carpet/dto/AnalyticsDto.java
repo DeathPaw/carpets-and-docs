@@ -54,7 +54,9 @@ public final class AnalyticsDto {
                                       BigDecimal length, BigDecimal width, BigDecimal weight, BigDecimal area,
                                       String itemTypeName, String clientName, LocalDateTime orderCreatedAt,
                                       String pickupDistrict, long servicesCount, long servicesDone,
-                                      String clientPhone, Long legacyId, long photosCount) {}
+                                      String clientPhone, Long legacyId, long photosCount,
+                                      /** V63 (ПР-002): штук в позиции. */
+                                      int quantity) {}
 
     public record ProductionQueueService(long serviceId, String status, BigDecimal price,
                                          String serviceName, String pricingType,

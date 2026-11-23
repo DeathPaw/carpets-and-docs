@@ -131,7 +131,7 @@ public class OrderQuoteService {
             area = in.length().multiply(in.width()).setScale(2, RoundingMode.HALF_UP);
         }
         OrderItem probe = new OrderItem(null, null, in.itemTypeId(), typeName, null, null, null,
-                BigDecimal.ZERO, in.length(), in.width(), in.weight(), area, null, null, null, null, null, null);
+                BigDecimal.ZERO, in.length(), in.width(), in.weight(), area, null, null, null, null, null, null, 1);
 
         LinkedHashSet<Long> skuIds = new LinkedHashSet<>();
         if (in.mainSkuId() != null) {

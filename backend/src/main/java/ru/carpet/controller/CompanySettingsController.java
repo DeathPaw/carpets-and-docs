@@ -27,7 +27,12 @@ import java.util.Map;
 public class CompanySettingsController {
 
     private static final String COLS =
-        "brand_name, tagline, subtitle, header_address, executor, legal_address, phones, logo_data";
+        "brand_name, tagline, subtitle, header_address, executor, legal_address, phones, logo_data, invoice_blocks";
+
+    /** ПР-005: блоки накладной с картинками — до ~4 МБ JSON целиком. */
+    private static final int MAX_BLOCKS_LENGTH = 5_600_000;
+    private static final java.util.Set<String> BLOCK_TYPES = java.util.Set.of("TEXT", "IMAGE", "QR");
+    private static final java.util.Set<String> BLOCK_POSITIONS = java.util.Set.of("AFTER_HEADER", "AFTER_TABLE", "FOOTER");
 
     /** Логотип лежит data-URL'ом прямо в строке: 1,4 млн символов base64 ≈ 1 МБ файла. */
     private static final int MAX_LOGO_LENGTH = 1_400_000;
@@ -93,6 +98,46 @@ public class CompanySettingsController {
                 updated_at     = NOW()
             """, p);
         auditLogService.log("SETTINGS", 1L, "UPDATE", "Изменены реквизиты печатных форм");
+        return get();
+    }
+
+    /**
+     * ПР-005: блоки накладной. body — массив блоков:
+     * {type: TEXT|IMAGE|QR, position: AFTER_HEADER|AFTER_TABLE|FOOTER,
+     *  docs: [acceptance, issue], copies: BOTH|CLIENT|ORGANIZATION,
+     *  text?, image_data?, url?, caption?}. Порядок в массиве — порядок печати.
+     */
+    @PutMapping("/api/company-settings/invoice-blocks")
+    public Map<String, Object> updateInvoiceBlocks(@RequestBody List<Map<String, Object>> blocks) {
+        for (Map<String, Object> b : blocks) {
+            String type = String.valueOf(b.get("type"));
+            if (!BLOCK_TYPES.contains(type)) throw new BusinessRuleException("Неизвестный тип блока: " + type);
+            if (!BLOCK_POSITIONS.contains(String.valueOf(b.get("position")))) {
+                throw new BusinessRuleException("Укажите, где печатать блок");
+            }
+            if ("IMAGE".equals(type)) {
+                Object img = b.get("image_data");
+                if (img == null || !img.toString().startsWith("data:image/")) {
+                    throw new BusinessRuleException("Блок-картинка: загрузите PNG, JPG или SVG");
+                }
+            }
+            if ("QR".equals(type)) {
+                Object url = b.get("url");
+                if (url == null || url.toString().isBlank()) throw new BusinessRuleException("Блок QR: укажите ссылку");
+            }
+        }
+        String json;
+        try {
+            json = new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(blocks);
+        } catch (Exception e) {
+            throw new BusinessRuleException("Не удалось сохранить блоки накладной");
+        }
+        if (json.length() > MAX_BLOCKS_LENGTH) {
+            throw new BusinessRuleException("Слишком большие картинки в блоках — уменьшите их (всего до 4 МБ)");
+        }
+        jdbc.update("UPDATE company_settings SET invoice_blocks = :b, updated_at = NOW() WHERE id = 1",
+                new MapSqlParameterSource().addValue("b", blocks.isEmpty() ? null : json));
+        auditLogService.log("SETTINGS", 1L, "UPDATE", "Изменены блоки накладной: " + blocks.size() + " шт.");
         return get();
     }
 

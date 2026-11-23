@@ -188,6 +188,8 @@ export interface OrderItem {
   created_at: string
   /** V58 (ПР-017): цена позиции до обнуления в гарантийном заказе. */
   warranty_original_price?: number | null
+  /** V63 (ПР-002): штук в позиции; размеры — на одну штуку. */
+  quantity?: number
   updated_at: string
 }
 

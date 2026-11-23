@@ -222,7 +222,7 @@ public class CostEntryRepository {
      */
     public Map<String, BigDecimal> metersByMonth() {
         var rows = jdbc.queryForList("""
-            SELECT to_char(completed_at, 'YYYY-MM') AS ym, SUM(area) AS total
+            SELECT to_char(completed_at, 'YYYY-MM') AS ym, SUM(area * quantity) AS total
               FROM order_items
              WHERE status = 'DONE' AND completed_at IS NOT NULL AND area IS NOT NULL
              GROUP BY 1
@@ -233,7 +233,7 @@ public class CostEntryRepository {
     /** Метры заказа по месяцам завершения — чтобы разнести удельный расход. */
     public Map<String, BigDecimal> orderMetersByMonth(Long orderId) {
         var rows = jdbc.queryForList("""
-            SELECT to_char(completed_at, 'YYYY-MM') AS ym, SUM(area) AS total
+            SELECT to_char(completed_at, 'YYYY-MM') AS ym, SUM(area * quantity) AS total
               FROM order_items
              WHERE order_id = :id AND status = 'DONE'
                AND completed_at IS NOT NULL AND area IS NOT NULL

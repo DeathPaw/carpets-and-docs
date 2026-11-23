@@ -28,7 +28,7 @@ final class AnalyticsHelpers {
             "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
             "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
             "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
-            "  ELSE 1 END), 0)";
+            "  ELSE 1 END * COALESCE(oi.quantity, 1)), 0)";
 
     /**
      * Коэффициент «цена услуги → фактическая выручка».

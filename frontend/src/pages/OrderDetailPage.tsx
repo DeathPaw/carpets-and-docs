@@ -5,6 +5,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
   updateOrderStatus, rollbackOrderStatus, payOrder, createWarrantyOrder, convertToWarranty, getWarrantyOrders,
+  setItemQuantity, groupIdenticalItems, splitOneItem,
   updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem, repriceOrder, setClientConfirmed, getOrderAdjustments,
   getOrderRefunds, addOrderRefund, deleteOrderRefund, setOrderReason,
   updateOrderComment,
@@ -988,6 +989,38 @@ function ItemRow({
               {item.running_meters ? ` ${item.running_meters}п.м.` : ''}
             </span>
           )}
+          {/* ПР-002: однотипные изделия одной позицией — размеры на штуку, цена за все. */}
+          {(item.quantity ?? 1) > 1 && (
+            <div style={{ fontWeight: 600 }}>
+              × {item.quantity} шт.
+              {item.area ? <span style={{ fontWeight: 400, color: 'var(--c-text-secondary)' }}> · всего {(Number(item.area) * (item.quantity ?? 1)).toFixed(2)} м²</span> : null}
+            </div>
+          )}
+          {isEditable && !isDefaultType && item.status !== 'CANCELLED' && (
+            <div style={{ display: 'flex', gap: 6, fontSize: 'var(--font-sm)' }}>
+              <span
+                className="inline-edit"
+                title="Сколько одинаковых изделий в позиции"
+                onClick={async () => {
+                  const raw = prompt('Количество одинаковых изделий в позиции, шт.:', String(item.quantity ?? 1))
+                  const q = raw == null ? NaN : parseInt(raw, 10)
+                  if (!q || q < 1 || q === (item.quantity ?? 1)) return
+                  try { await setItemQuantity(orderId, item.id, q); onRefresh() }
+                  catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Не удалось изменить количество', 'error') }
+                }}
+              >кол-во</span>
+              {(item.quantity ?? 1) > 1 && (
+                <span
+                  className="inline-edit"
+                  title="Вынести одну штуку отдельной позицией — если с конкретным изделием надо работать отдельно"
+                  onClick={async () => {
+                    try { await splitOneItem(orderId, item.id); onRefresh() }
+                    catch (e: unknown) { showToast((e as any)?.response?.data?.message || 'Не удалось отделить', 'error') }
+                  }}
+                >отделить 1 шт.</span>
+              )}
+            </div>
+          )}
         </td>
         <td><Badge status={item.status} labels={ITEM_STATUS_LABELS} /></td>
         {/* Цена позиции — только чтение. Сумма цен услуг этой позиции. Если оператору
@@ -1360,6 +1393,9 @@ function QuickItemActionsModal({
 }
 
 // ---- Main Page ----
+/** Типы служебных позиций, которые заказ добавляет сам (auto-add SKU). */
+const SERVICE_ITEM_TYPE_NAMES = new Set(['Приём', 'Доставка', 'Оформление'])
+
 export default function OrderDetailPage() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -2846,6 +2882,22 @@ export default function OrderDetailPage() {
                 Показать отменённые
               </label>
             )}
+            {/* ПР-002: однотипные изделия, заведённые по одному, — в одну позицию «×N». */}
+            {isEditable && items.filter(i => i.status === 'CREATED').length > 1 && (
+              <button
+                className="btn-secondary"
+                title="Объединить одинаковые позиции (тот же тип, размеры, описание и услуги, работа не начата) в одну с количеством"
+                onClick={async () => {
+                  try {
+                    const res = await groupIdenticalItems(orderId)
+                    await loadOrder()
+                    showToast(res.merged > 0 ? `Объединено позиций: ${res.merged}` : 'Одинаковых позиций не нашлось', res.merged > 0 ? 'success' : 'warning')
+                  } catch (e: unknown) {
+                    showToast((e as any)?.response?.data?.message || 'Не удалось объединить', 'error')
+                  }
+                }}
+              >Объединить одинаковые</button>
+            )}
             {isEditable && (
               <button className="btn-primary" style={sectionActionBtn} onClick={() => setShowAddItem(true)}>+ Добавить позицию</button>
             )}
@@ -2885,7 +2937,9 @@ export default function OrderDetailPage() {
                     onRefresh={loadOrder}
                     isEditable={isEditable}
                     initialPhotos={photosByItemId.get(item.id) || []}
-                    isDefaultType={false}
+                    // Служебные позиции (приём, доставка, оформление): цену показываем
+                    // итоговую (после порога/зоны/промокода), количество не меняется.
+                    isDefaultType={SERVICE_ITEM_TYPE_NAMES.has(item.item_type_name ?? '')}
                     freshlyAdded={freshlyAddedIds.has(item.id)}
                     onCancelItem={(it) => setCancelItem(it)}
                     services={servicesByItem.get(item.id) || []}

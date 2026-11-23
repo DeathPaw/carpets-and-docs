@@ -78,7 +78,7 @@ public class ReportRepository {
                         WHERE i.order_id = o.id AND s.status <> 'CANCELLED'
                           AND v.name ILIKE 'Самовывоз%'
                    ) THEN 'SELF_PICKUP' ELSE 'DELIVERY' END AS handover,
-                   COALESCE((SELECT SUM(i.area) FROM order_items i
+                   COALESCE((SELECT SUM(i.area * i.quantity) FROM order_items i
                               WHERE i.order_id = o.id AND i.status <> 'CANCELLED'), 0) AS area,
                    COALESCE(o.total_amount, 0) AS amount,
                    o.contract_id,
@@ -192,7 +192,7 @@ public class ReportRepository {
             SELECT k.id, k.number, k.kind, cl.name AS client_name, cl.inn AS client_inn,
                    k.signed_on::text AS signed_on, k.expires_on::text AS expires_on,
                    k.planned_sqm, k.price_per_sqm, k.is_active,
-                   COALESCE((SELECT SUM(i.area) FROM orders o
+                   COALESCE((SELECT SUM(i.area * i.quantity) FROM orders o
                                JOIN order_items i ON i.order_id = o.id
                               WHERE o.contract_id = k.id AND o.contract_delivered_at IS NOT NULL
                                 AND i.status <> 'CANCELLED'), 0)

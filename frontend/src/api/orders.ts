@@ -182,6 +182,18 @@ export const payOrder = (id: number, data: PayOrderRequest) =>
 export const createWarrantyOrder = (id: number, data: { item_ids: number[]; warranty_comment: string }) =>
   client.post<Order>(`/api/orders/${id}/warranty`, data).then(r => r.data)
 
+/** ПР-002: количество штук в позиции. */
+export const setItemQuantity = (orderId: number, itemId: number, quantity: number) =>
+  client.patch<OrderItem>(`/api/orders/${orderId}/items/${itemId}/quantity`, { quantity }).then(r => r.data)
+
+/** ПР-002: объединить одинаковые позиции заказа в одну «×N». */
+export const groupIdenticalItems = (orderId: number) =>
+  client.post<{ merged: number }>(`/api/orders/${orderId}/items/group-identical`).then(r => r.data)
+
+/** ПР-002: отделить одну штуку в отдельную позицию. */
+export const splitOneItem = (orderId: number, itemId: number) =>
+  client.post<OrderItem>(`/api/orders/${orderId}/items/${itemId}/split`).then(r => r.data)
+
 /** ПР-017: перевести существующий заказ в гарантийный по исходному. */
 export const convertToWarranty = (id: number, parentOrderId: number, warrantyComment: string) =>
   client.post<Order>(`/api/orders/${id}/warranty/convert`, {

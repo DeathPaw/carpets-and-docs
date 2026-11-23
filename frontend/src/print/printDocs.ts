@@ -1,5 +1,6 @@
 import type { Order, OrderItem, OrderItemService, OrderModifier } from '../types'
-import type { CompanySettings } from '../api/companySettings'
+import qrcode from 'qrcode-generator'
+import { parseInvoiceBlocks, type CompanySettings, type InvoiceBlock } from '../api/companySettings'
 import { PAYMENT_LABELS } from '../constants/statuses'
 import { formatOrderNumber } from '../utils/format'
 import { formatPhone } from '../components/PhoneInput'
@@ -113,6 +114,9 @@ function sizeText(it: OrderItem): string {
   else if (width) parts.push(`ширина ${fmtNum(width)} м`)
   if (weight) parts.push(`${fmtNum(weight)} кг`)
   if (running) parts.push(`${fmtNum(running)} п. м`)
+  // ПР-002: однотипные изделия одной позицией — размеры на штуку.
+  const qty = it.quantity ?? 1
+  if (qty > 1) return `${qty} шт.${parts.length ? ' по ' + parts.join(', ') : ''}`
   return parts.join(', ')
 }
 
@@ -445,6 +449,46 @@ function cashBlock(): string {
   </div>`
 }
 
+// ───────────── ПР-005: настраиваемые блоки ─────────────
+
+type CopyKind = 'CLIENT' | 'ORGANIZATION'
+
+/** QR-код ссылки SVG-разметкой — печатается чётко при любом масштабе. */
+export function qrSvg(url: string, cellSize = 3): string {
+  const qr = qrcode(0, 'M')
+  qr.addData(url)
+  qr.make()
+  return qr.createSvgTag({ cellSize, margin: 0, scalable: true })
+}
+
+/**
+ * Блоки из Справочников для места position в документе doc и экземпляре copy.
+ * Соседние блоки одного места выстраиваются в ряд (QR и картинки — рядом с
+ * подписью), длинный текст переносится.
+ */
+function blocksHtml(c: CompanySettings, doc: 'acceptance' | 'issue', copy: CopyKind,
+                    position: InvoiceBlock['position']): string {
+  const blocks = parseInvoiceBlocks(c).filter(b => b.position === position
+    && (b.docs?.length ? b.docs.includes(doc) : true)
+    && (b.copies === 'BOTH' || !b.copies || b.copies === copy))
+  if (blocks.length === 0) return ''
+  const html = blocks.map(b => {
+    const caption = b.text ? `<div class="ib-caption">${esc(b.text).replace(/\n/g, '<br>')}</div>` : ''
+    if (b.type === 'IMAGE' && b.image_data) {
+      return `<div class="ib ib-media"><img src="${esc(b.image_data)}" alt="">${caption}</div>`
+    }
+    if (b.type === 'QR' && b.url) {
+      try {
+        return `<div class="ib ib-media"><div class="ib-qr">${qrSvg(b.url)}</div>${caption}</div>`
+      } catch {
+        return ''
+      }
+    }
+    return b.text ? `<div class="ib ib-text">${esc(b.text).replace(/\n/g, '<br>')}</div>` : ''
+  }).join('')
+  return `<div class="ib-row">${html}</div>`
+}
+
 const generatedAt = () => `<div class="footer">Сформировано ${esc(new Date().toLocaleString('ru-RU'))}</div>`
 
 const sheet = (parts: string[]) => `<section class="sheet">${parts.join('')}</section>`
@@ -475,21 +519,24 @@ export function acceptanceHtml(c: CompanySettings, d: InvoiceData | null): strin
     • Размеры предварительные и уточняются на производстве после приёмки.<br>
     • Стоимость предварительная: окончательная сумма — после уточнения размеров и обработки.
   </div>`
-  const copy = (label: string) => sheet([
+  const copy = (label: string, kind: CopyKind) => sheet([
     companyHeader(c),
+    blocksHtml(c, 'acceptance', kind, 'AFTER_HEADER'),
     docHead('acceptance', d?.orderNo ?? null, label),
     orderMeta(d, 'pickup'),
     acceptanceTable(d?.items ?? [], d ? 3 : 6),
     extraServicesBlock(),
+    blocksHtml(c, 'acceptance', kind, 'AFTER_TABLE'),
     // Условия приёмки — слева от итогов, а не под ними: так экземпляр помещается на один лист.
     `<div class="totals-row">${notice}${totals}</div>`,
     `<div class="consent">С оценкой дефектов, степенью загрязнения и износа изделия согласен.</div>`,
     signatures('Ковры сдал (клиент)', 'Ковры принял (представитель)'),
+    blocksHtml(c, 'acceptance', kind, 'FOOTER'),
     d ? generatedAt() : '',
   ])
   return documentHtml(
     d ? `Накладная на приём ${d.orderNo}` : 'Бланк накладной на приём ковров',
-    [copy('Экземпляр клиента'), copy('Экземпляр организации')],
+    [copy('Экземпляр клиента', 'CLIENT'), copy('Экземпляр организации', 'ORGANIZATION')],
   )
 }
 
@@ -515,12 +562,15 @@ export function issueHtml(c: CompanySettings, d: InvoiceData | null): string {
     : `<div class="payment">Оплата:${BOX}наличные${BOX}безналичный перевод на карту</div>`
   const copy = (label: string, forOrganization: boolean) => sheet([
     companyHeader(c),
+    blocksHtml(c, 'issue', forOrganization ? 'ORGANIZATION' : 'CLIENT', 'AFTER_HEADER'),
     docHead('issue', d?.orderNo ?? null, label),
     orderMeta(d, 'delivery'),
     issueTable(d?.items ?? [], d ? 0 : 8),
+    blocksHtml(c, 'issue', forOrganization ? 'ORGANIZATION' : 'CLIENT', 'AFTER_TABLE'),
     `<div class="totals-row">${payment}${totals}</div>`,
     signatures('Ковры выдал (представитель)', 'Ковры получил (клиент)'),
     forOrganization ? cashBlock() : '',
+    blocksHtml(c, 'issue', forOrganization ? 'ORGANIZATION' : 'CLIENT', 'FOOTER'),
     d ? generatedAt() : '',
   ])
   return documentHtml(
@@ -566,6 +616,12 @@ export const printIssue = (c: CompanySettings, d: InvoiceData | null) => openPri
 
 const DOC_CSS = `
 @page { size: A4 portrait; margin: 8mm 10mm; }
+.ib-row { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; margin: 4px 0; }
+.ib-text { flex: 1 1 100%; font-size: 12px; }
+.ib-media { display: flex; align-items: center; gap: 6px; }
+.ib-media img { max-height: 22mm; max-width: 60mm; object-fit: contain; }
+.ib-qr svg { width: 20mm; height: 20mm; display: block; }
+.ib-caption { font-size: 11px; max-width: 45mm; }
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body { font-family: Arial, 'Helvetica Neue', Helvetica, sans-serif; font-size: 13px; line-height: 1.35; color: #111;

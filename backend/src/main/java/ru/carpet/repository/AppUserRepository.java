@@ -25,8 +25,22 @@ public class AppUserRepository {
             rs.getObject("employee_id", Long.class),
             rs.getBoolean("is_active"),
             rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
+            rs.getTimestamp("updated_at").toLocalDateTime(),
+            parsePermissions(rs.getString("permissions"))
     );
+
+    private static List<String> parsePermissions(String raw) {
+        if (raw == null || raw.isBlank()) return List.of();
+        return java.util.Arrays.stream(raw.split(",")).map(String::trim).filter(s -> !s.isEmpty()).toList();
+    }
+
+    /** V62 (ПР-016): сохранить выборочные права пользователя. */
+    public void updatePermissions(Long id, List<String> permissions) {
+        jdbc.update("UPDATE users SET permissions = :p, updated_at = NOW() WHERE id = :id",
+                new org.springframework.jdbc.core.namedparam.MapSqlParameterSource()
+                        .addValue("p", permissions.isEmpty() ? null : String.join(",", permissions))
+                        .addValue("id", id));
+    }
 
     public AppUserRepository(NamedParameterJdbcTemplate jdbc) {
         this.jdbc = jdbc;

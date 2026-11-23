@@ -7,6 +7,8 @@ export interface AppUserPublic {
   role: string
   employee_id: number
   is_active: boolean
+  /** V62 (ПР-016): выборочные права. */
+  permissions?: string[]
 }
 
 export const getUsers = () =>
@@ -18,6 +20,7 @@ export const createUser = (data: {
   display_name: string
   role: string
   employee_id?: number | null
+  permissions?: string[]
 }) => client.post<AppUserPublic>('/api/users', data).then(r => r.data)
 
 export const updateUser = (id: number, data: {
@@ -25,6 +28,7 @@ export const updateUser = (id: number, data: {
   role: string
   employee_id?: number | null
   is_active?: boolean
+  permissions?: string[]
 }) => client.put<AppUserPublic>(`/api/users/${id}`, data).then(r => r.data)
 
 export const changeUserPassword = (id: number, password: string) =>

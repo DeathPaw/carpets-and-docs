@@ -23,7 +23,7 @@ export default function Layout() {
   const navigate = useNavigate()
   const location = useLocation()
   const trainingMode = isTrainingMode()
-  const { user, isSupervisor, isAdmin, isReadonly } = useAuth()
+  const { user, isSupervisor, isAdmin, isReadonly, canReports, canPayroll } = useAuth()
 
   const logout = () => {
     sessionStorage.removeItem('auth')
@@ -81,13 +81,25 @@ export default function Layout() {
               <NavLink to="/employees"     className={navClass('supervisor-link')}>Сотрудники</NavLink>
               <NavLink to="/feedback"      className={navClass('supervisor-link')}>Обращения</NavLink>
               {isSupervisor && <NavLink to="/expenses" className={navClass('supervisor-link')}>Расходы</NavLink>}
-              {isSupervisor && <NavLink to="/payroll" className={navClass('supervisor-link')}>Зарплата</NavLink>}
+              {canPayroll && <NavLink to="/payroll" className={navClass('supervisor-link')}>Зарплата</NavLink>}
               <NavLink to="/contracts"     className={navClass('supervisor-link')}>Контракты</NavLink>
-              {isSupervisor && <NavLink to="/reports" className={navClass('supervisor-link')}>Отчёты</NavLink>}
+              {canReports && <NavLink to="/reports" className={navClass('supervisor-link')}>Отчёты</NavLink>}
               <NavLink to="/import"        className={navClass('supervisor-link')}>Импорт Excel</NavLink>
               {isSupervisor && <NavLink to="/users" className={navClass('supervisor-link')}>Пользователи</NavLink>}
               {isSupervisor && <NavLink to="/error-log"  className={navClass('supervisor-link')}>Лог ошибок</NavLink>}
               {isSupervisor && <NavLink to="/audit-log"  className={navClass('supervisor-link')}>Лог действий</NavLink>}
+            </nav>
+          </>
+        )}
+
+        {/* ПР-016: отчёты и зарплата по выданным правам — для тех, у кого нет
+            админского блока меню (например, оператор с доступом к табелю). */}
+        {!isAdmin && (canReports || canPayroll) && (
+          <>
+            <div className="sidebar-section-label" style={{ color: '#e67e22' }}>Доступ по правам</div>
+            <nav className="sidebar-nav">
+              {canPayroll && <NavLink to="/payroll" className={navClass('supervisor-link')}>Зарплата</NavLink>}
+              {canReports && <NavLink to="/reports" className={navClass('supervisor-link')}>Отчёты</NavLink>}
             </nav>
           </>
         )}

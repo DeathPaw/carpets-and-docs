@@ -41,7 +41,8 @@ public class OrderItemRepository {
             rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
             rs.getTimestamp("updated_at").toLocalDateTime(),
-            rs.getBigDecimal("warranty_original_price")
+            rs.getBigDecimal("warranty_original_price"),
+            rs.getInt("quantity")
     );
 
     public OrderItemRepository(NamedParameterJdbcTemplate jdbc) {
@@ -54,7 +55,7 @@ public class OrderItemRepository {
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, oi.quantity, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
@@ -144,6 +145,24 @@ public class OrderItemRepository {
         );
     }
 
+    /** V63 (ПР-002): количество одинаковых изделий в позиции. */
+    public void updateQuantity(Long id, int quantity) {
+        jdbc.update("UPDATE order_items SET quantity = :q, version = version + 1, updated_at = NOW() WHERE id = :id",
+                new MapSqlParameterSource().addValue("q", quantity).addValue("id", id));
+    }
+
+    /** ПР-002: перенести фото объединяемых позиций в оставшуюся. */
+    public void movePhotos(List<Long> fromIds, Long toId) {
+        if (fromIds.isEmpty()) return;
+        jdbc.update("UPDATE order_item_photos SET order_item_id = :to WHERE order_item_id IN (:from)",
+                new MapSqlParameterSource().addValue("to", toId).addValue("from", fromIds));
+    }
+
+    public void deleteItems(List<Long> ids) {
+        if (ids.isEmpty()) return;
+        jdbc.update("DELETE FROM order_items WHERE id IN (:ids)", new MapSqlParameterSource().addValue("ids", ids));
+    }
+
     public void updatePrice(Long id, BigDecimal price) {
         jdbc.update(
                 "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() WHERE id = :id",
@@ -216,7 +235,7 @@ public class OrderItemRepository {
     public Optional<OrderItem> findById(Long id) {
         List<OrderItem> result = jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, oi.quantity, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +

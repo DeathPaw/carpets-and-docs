@@ -24,5 +24,15 @@ public record OrderItem(
         LocalDateTime createdAt,
         LocalDateTime updatedAt,
         /** V58 (ПР-017): цена позиции до обнуления в гарантийном заказе. */
-        BigDecimal warrantyOriginalPrice
-) {}
+        BigDecimal warrantyOriginalPrice,
+        /**
+         * V63 (ПР-002): сколько одинаковых изделий в позиции. Размеры — на одну
+         * штуку; цена и метры умножаются на quantity.
+         */
+        int quantity
+) {
+    /** Площадь всех штук позиции (для метров, себестоимости, контрактов). */
+    public BigDecimal totalArea() {
+        return area == null ? null : area.multiply(BigDecimal.valueOf(quantity));
+    }
+}

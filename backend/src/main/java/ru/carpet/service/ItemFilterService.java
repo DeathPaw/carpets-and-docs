@@ -35,7 +35,8 @@ public class ItemFilterService {
             rs.getString("cancellation_reason"),
             rs.getInt("position_in_order"),
             rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
+            rs.getTimestamp("updated_at").toLocalDateTime(),
+            rs.getInt("quantity")
     );
 
     public ItemFilterService(NamedParameterJdbcTemplate jdbc) {
@@ -81,7 +82,7 @@ public class ItemFilterService {
                 "SELECT * FROM (" +
                 "  SELECT DISTINCT oi.id, oi.order_id, oi.item_type_id, it.name as item_type_name, " +
                 "  oi.description, oi.defects, oi.status, oi.price, oi.length, oi.width, oi.weight, " +
-                "  oi.area, oi.running_meters, oi.cancellation_reason, oi.created_at, oi.updated_at, " +
+                "  oi.area, oi.running_meters, oi.cancellation_reason, oi.created_at, oi.updated_at, oi.quantity, " +
                 "  ROW_NUMBER() OVER (PARTITION BY oi.order_id ORDER BY oi.id) AS position_in_order " +
                 "  FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id "
         );

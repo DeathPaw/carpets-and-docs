@@ -187,7 +187,7 @@ public class PayrollRepository {
     /** Завершённые ковры месяца: площадь, дата и участники (исполнители услуг). */
     public List<Map<String, Object>> completedItems(String yearMonth) {
         return jdbc.queryForList("""
-            SELECT oi.id, oi.order_id, oi.area, oi.completed_at::date AS completed_on,
+            SELECT oi.id, oi.order_id, oi.area * oi.quantity AS area, oi.completed_at::date AS completed_on,
                    COALESCE(NULLIF(oi.description, ''), it.name) AS item_name,
                    ARRAY(
                        SELECT DISTINCT sa.employee_id

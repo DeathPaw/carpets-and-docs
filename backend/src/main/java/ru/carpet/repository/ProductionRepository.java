@@ -59,7 +59,7 @@ public class ProductionRepository {
     public List<AnalyticsDto.ProductionQueueItem> productionQueueItems() {
         return jdbc.query(
             "SELECT oi.id as item_id, oi.order_id, oi.status, oi.description, " +
-            "oi.length, oi.width, oi.weight, oi.area, " +
+            "oi.length, oi.width, oi.weight, oi.area, oi.quantity, " +
             "it.name as item_type_name, " +
             "o.client_name, o.created_at as order_created_at, " +
             "o.pickup_district, o.legacy_id, c.phone as client_phone, " +
@@ -73,7 +73,7 @@ public class ProductionRepository {
             "LEFT JOIN order_item_services ois ON ois.order_item_id = oi.id " +
             "WHERE oi.status IN ('CREATED','IN_PROGRESS','PARTIALLY_DONE') " +
             "AND o.status NOT IN ('CANCELLED','DELIVERED') " +
-            "GROUP BY oi.id, oi.order_id, oi.status, oi.description, oi.length, oi.width, oi.weight, oi.area, " +
+            "GROUP BY oi.id, oi.order_id, oi.status, oi.description, oi.length, oi.width, oi.weight, oi.area, oi.quantity, " +
             "it.name, o.client_name, o.created_at, o.pickup_district, o.legacy_id, c.phone " +
             "ORDER BY o.created_at ASC, oi.id ASC",
             (RowMapper<AnalyticsDto.ProductionQueueItem>) (rs, n) -> new AnalyticsDto.ProductionQueueItem(
@@ -86,7 +86,8 @@ public class ProductionRepository {
                 rs.getString("pickup_district"),
                 longOrZero(rs, "services_count"), longOrZero(rs, "services_done"),
                 rs.getString("client_phone"), rs.getObject("legacy_id", Long.class),
-                longOrZero(rs, "photos_count")
+                longOrZero(rs, "photos_count"),
+                rs.getInt("quantity")
             )
         );
     }

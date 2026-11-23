@@ -29,8 +29,11 @@ function serverMessage(e: unknown): string | null {
 function dimsLabel(d: {
   item_length?: number | null; item_width?: number | null
   item_area?: number | null; item_weight?: number | null
+  item_quantity?: number | null
 }): string | null {
   const parts: string[] = []
+  // ПР-002: позиция «×N» — размеры на одну штуку, сразу видно, сколько их.
+  if (d.item_quantity && d.item_quantity > 1) parts.push(`${d.item_quantity} шт.`)
   if (d.item_length) parts.push(`${d.item_length}×${d.item_width || '?'} м`)
   if (d.item_area) parts.push(`${d.item_area} м²`)
   if (d.item_weight) parts.push(`${d.item_weight} кг`)

@@ -89,6 +89,8 @@ export interface ProductionQueueItem {
   legacy_id?: number | null
   /** Правка №8: сколько фото у позиции — превью на доске производства. */
   photos_count?: number
+  /** V63 (ПР-002): штук в позиции. */
+  quantity?: number
 }
 
 export const getProductionQueueItems = () =>

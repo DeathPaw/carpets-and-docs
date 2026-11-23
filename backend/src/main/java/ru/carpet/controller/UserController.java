@@ -45,6 +45,10 @@ public class UserController {
 
         AppUser user = repo.create(username, encoder.encode(password), displayName, role, employeeId);
         repo.syncEmployeeRoleFromUserRole(employeeId, role);
+        if (body.get("permissions") != null) {
+            repo.updatePermissions(user.id(), permissions(body.get("permissions")));
+            user = repo.findById(user.id()).orElseThrow();
+        }
         audit.log("USER", user.id(), "CREATE", "Создан пользователь " + username + " [" + role + "]");
         return toPublic(user);
     }
@@ -59,7 +63,14 @@ public class UserController {
 
         AppUser user = repo.update(id, displayName, role, employeeId, isActive);
         repo.syncEmployeeRoleFromUserRole(employeeId, role);
-        audit.log("USER", user.id(), "UPDATE", "Обновлён пользователь " + user.username() + " [" + role + "]");
+        String permsNote = "";
+        if (body.get("permissions") != null) {
+            List<String> perms = permissions(body.get("permissions"));
+            repo.updatePermissions(id, perms);
+            user = repo.findById(id).orElseThrow();
+            permsNote = ", права: " + (perms.isEmpty() ? "нет" : String.join(", ", perms));
+        }
+        audit.log("USER", user.id(), "UPDATE", "Обновлён пользователь " + user.username() + " [" + role + "]" + permsNote);
         return toPublic(user);
     }
 
@@ -71,6 +82,14 @@ public class UserController {
         return Map.of("ok", true);
     }
 
+    /** ПР-016: только известные права, без дублей, в каноническом порядке. */
+    private static List<String> permissions(Object raw) {
+        if (!(raw instanceof List<?> list)) return List.of();
+        java.util.Set<String> given = new java.util.HashSet<>();
+        for (Object o : list) if (o != null) given.add(o.toString());
+        return AppUser.ALL_PERMISSIONS.stream().filter(given::contains).toList();
+    }
+
     /** Не отдаём password_hash наружу. */
     private Map<String, Object> toPublic(AppUser u) {
         return Map.of(
@@ -79,7 +98,8 @@ public class UserController {
                 "display_name", u.displayName(),
                 "role", u.role(),
                 "employee_id", u.employeeId() != null ? u.employeeId() : 0,
-                "is_active", u.isActive()
+                "is_active", u.isActive(),
+                "permissions", u.permissions()
         );
     }
 }

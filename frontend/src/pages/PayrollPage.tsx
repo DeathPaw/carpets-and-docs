@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useAuth } from '../auth/AuthContext'
 import {
   getPayrollSheet, getPayrollEntries, recalculatePayroll, setPayrollMonth,
   closePayrollMonth, openPayrollMonth, getPaySchemes, createPayScheme, deletePayScheme,
@@ -30,6 +31,9 @@ const currentMonth = () => new Date().toLocaleDateString('sv-SE').slice(0, 7)
 
 export default function PayrollPage() {
   const { showToast } = useToast()
+  // ПР-016: раздел открыт по правам — просмотр, правка табеля, начисление.
+  // Сервер проверяет то же самое; здесь лишь гасим недоступные действия.
+  const { canPayrollEdit, canPayrollShifts } = useAuth()
   const [tab, setTab] = useState<Tab>('SHEET')
   const [yearMonth, setYearMonth] = useState(currentMonth())
   const [sheet, setSheet] = useState<PayrollSheet | null>(null)
@@ -70,6 +74,7 @@ export default function PayrollPage() {
         <div className="form-group" style={{ marginBottom: 0, width: 160 }}>
           <label>Норма рабочих дней</label>
           <input
+            disabled={!canPayrollEdit}
             type="number" min="1" max="31"
             value={sheet?.norm_days ?? ''}
             onChange={async e => {
@@ -83,15 +88,16 @@ export default function PayrollPage() {
             placeholder="20"
           />
         </div>
-        <button className="btn-primary" onClick={recalc} disabled={sheet?.closed}>Пересчитать</button>
+        <button className="btn-primary" onClick={recalc} disabled={sheet?.closed || !canPayrollShifts}>Пересчитать</button>
         {sheet?.closed ? (
-          <button className="btn-secondary" onClick={async () => { await openPayrollMonth(yearMonth); await loadSheet() }}>
+          <button className="btn-secondary" disabled={!canPayrollEdit} onClick={async () => { await openPayrollMonth(yearMonth); await loadSheet() }}>
             Открыть месяц
           </button>
         ) : (
           <button
             className="btn-secondary"
             title="После закрытия автоматика месяц не трогает"
+            disabled={!canPayrollEdit}
             onClick={async () => { await closePayrollMonth(yearMonth); await loadSheet() }}
           >Закрыть месяц</button>
         )}
@@ -117,12 +123,15 @@ export default function PayrollPage() {
         ))}
       </div>
 
-      {tab === 'SHEET' && (
-        <SheetTab sheet={sheet} loading={loading} yearMonth={yearMonth} onChanged={loadSheet} employees={employees} />
-      )}
-      {tab === 'ENTRIES' && <EntriesTab yearMonth={yearMonth} onChanged={loadSheet} />}
-      {tab === 'SCHEMES' && <SchemesTab employees={employees} />}
-      {tab === 'SHIFTS' && <ShiftsTab yearMonth={yearMonth} employees={employees} sheet={sheet} onChanged={loadSheet} />}
+      {/* Без права на начисление вкладки открыты только на просмотр. */}
+      <fieldset disabled={!canPayrollEdit} style={{ border: 0, padding: 0, margin: 0, minWidth: 0 }}>
+        {tab === 'SHEET' && (
+          <SheetTab sheet={sheet} loading={loading} yearMonth={yearMonth} onChanged={loadSheet} employees={employees} />
+        )}
+        {tab === 'ENTRIES' && <EntriesTab yearMonth={yearMonth} onChanged={loadSheet} />}
+        {tab === 'SCHEMES' && <SchemesTab employees={employees} />}
+      </fieldset>
+      {tab === 'SHIFTS' && <ShiftsTab yearMonth={yearMonth} employees={employees} sheet={sheet} onChanged={loadSheet} readOnly={!canPayrollShifts} />}
       {tab === 'POINTS' && <PointsTab yearMonth={yearMonth} />}
       {tab === 'STATEMENT' && <StatementTab employees={employees} yearMonth={yearMonth} />}
     </div>
@@ -561,11 +570,12 @@ function schemeParams(s: PayScheme): string {
  * будние дни до сегодняшнего подсвечены: это кандидаты на пропущенную смену.
  * После правки ведомость пересчитывается сама (если месяц не закрыт).
  */
-function ShiftsTab({ yearMonth, employees, sheet, onChanged }: {
+function ShiftsTab({ yearMonth, employees, sheet, onChanged, readOnly }: {
   yearMonth: string
   employees: Employee[]
   sheet: PayrollSheet | null
   onChanged: () => void
+  readOnly: boolean
 }) {
   const { showToast } = useToast()
   const [shifts, setShifts] = useState<WorkShift[]>([])
@@ -598,7 +608,7 @@ function ShiftsTab({ yearMonth, employees, sheet, onChanged }: {
     })
 
   const toggle = async (emp: Employee, iso: string) => {
-    if (busy) return
+    if (busy || readOnly) return
     const existing = byKey.get(`${emp.id}_${iso}`)
     const dateRu = new Date(iso).toLocaleDateString('ru')
     try {
@@ -643,7 +653,7 @@ function ShiftsTab({ yearMonth, employees, sheet, onChanged }: {
         <span><span style={legendBox('#d6eaf8')}>●</span> смена автоматически</span>
         <span><span style={legendBox('#d5f5e3')}>✓</span> смена вручную</span>
         <span><span style={legendBox('#fdecea')}>&nbsp;</span> будний день без смены (оклад / смены)</span>
-        <span>Клик по клетке — поставить или убрать смену.</span>
+        <span>{readOnly ? 'Только просмотр.' : 'Клик по клетке — поставить или убрать смену.'}</span>
       </div>
       <div style={{ overflowX: 'auto' }}>
         <table style={{ borderCollapse: 'collapse', fontSize: 'var(--font-sm)' }}>

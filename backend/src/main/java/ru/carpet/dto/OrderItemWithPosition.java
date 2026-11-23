@@ -26,5 +26,7 @@ public record OrderItemWithPosition(
         String cancellationReason,
         int positionInOrder,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        /** V63 (ПР-002): штук в позиции. */
+        int quantity
 ) {}

@@ -149,7 +149,7 @@ public class AnalyticsRepository {
             "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
             "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
             "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
-            "  ELSE 1 END), 0) as cost " +
+            "  ELSE 1 END * COALESCE(oi.quantity, 1)), 0) as cost " +
             "FROM order_item_services ois " +
             "JOIN skus s          ON s.id = ois.sku_id " +
             "JOIN order_items oi  ON oi.id = ois.order_item_id " +

@@ -23,6 +23,12 @@ public final class PricingHelper {
      * возвращаем basePrice без множителя (фронт покажет «не заполнены размеры»).
      */
     public static BigDecimal calculate(BigDecimal basePrice, String pricingType, OrderItem item) {
+        // V63 (ПР-002): размеры позиции — на одну штуку, цена — за все.
+        BigDecimal qty = BigDecimal.valueOf(Math.max(1, item.quantity()));
+        return calculateOne(basePrice, pricingType, item).multiply(qty);
+    }
+
+    private static BigDecimal calculateOne(BigDecimal basePrice, String pricingType, OrderItem item) {
         if (basePrice == null) return BigDecimal.ZERO;
         if (pricingType == null) return basePrice;
         return switch (pricingType) {

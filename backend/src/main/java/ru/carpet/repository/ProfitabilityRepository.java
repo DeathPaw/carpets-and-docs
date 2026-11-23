@@ -114,7 +114,7 @@ public class ProfitabilityRepository {
             "  WHEN s.pricing_type = 'BY_LENGTH'         THEN COALESCE(oi.length, 0) " +
             "  WHEN s.pricing_type = 'BY_WIDTH'          THEN COALESCE(oi.width, 0) " +
             "  WHEN s.pricing_type = 'BY_RUNNING_METERS' THEN COALESCE(oi.running_meters, 0) " +
-            "  ELSE 1 END) / NULLIF(assigned_count.cnt, 0)), 0) AS cost " +
+            "  ELSE 1 END * COALESCE(oi.quantity, 1)) / NULLIF(assigned_count.cnt, 0)), 0) AS cost " +
             "FROM employees e " +
             "JOIN service_assignees sa ON sa.employee_id = e.id " +
             "JOIN order_item_services ois ON ois.id = sa.order_item_service_id AND ois.status = 'DONE' " +

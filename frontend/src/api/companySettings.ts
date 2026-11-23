@@ -25,6 +25,44 @@ export interface CompanySettings {
   phones: string | null
   /** Логотип data-URL'ом. null — шапка без логотипа. */
   logo_data: string | null
+  /** V64 (ПР-005): блоки накладной JSON-строкой — см. {@link parseInvoiceBlocks}. */
+  invoice_blocks?: string | null
+}
+
+/**
+ * ПР-005: блок печатной накладной. Порядок в списке — порядок печати внутри
+ * своего места в документе.
+ */
+export interface InvoiceBlock {
+  type: 'TEXT' | 'IMAGE' | 'QR'
+  /** Где печатать: после шапки, после таблицы ковров, внизу документа. */
+  position: 'AFTER_HEADER' | 'AFTER_TABLE' | 'FOOTER'
+  /** В каких накладных: приём (acceptance), выдача (issue). */
+  docs: ('acceptance' | 'issue')[]
+  /** В каких экземплярах: оба, только клиента, только организации. */
+  copies: 'BOTH' | 'CLIENT' | 'ORGANIZATION'
+  /** TEXT — текст (переносы строк сохраняются); подпись под картинкой и QR. */
+  text?: string
+  /** IMAGE — data-URL картинки. */
+  image_data?: string
+  /** QR — ссылка, которую кодирует QR. */
+  url?: string
+}
+
+export function parseInvoiceBlocks(c: CompanySettings | null | undefined): InvoiceBlock[] {
+  if (!c?.invoice_blocks) return []
+  try {
+    const parsed = JSON.parse(c.invoice_blocks)
+    return Array.isArray(parsed) ? parsed as InvoiceBlock[] : []
+  } catch {
+    return []
+  }
+}
+
+export async function saveInvoiceBlocks(blocks: InvoiceBlock[]): Promise<CompanySettings> {
+  const saved = await client.put<CompanySettings>('/api/company-settings/invoice-blocks', blocks).then(r => r.data)
+  cached = Promise.resolve(saved)
+  return saved
 }
 
 let cached: Promise<CompanySettings> | null = null

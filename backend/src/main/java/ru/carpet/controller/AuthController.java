@@ -31,7 +31,8 @@ public class AuthController {
                 "username", user.username(),
                 "display_name", user.displayName(),
                 "role", user.role(),
-                "employee_id", user.employeeId() != null ? user.employeeId() : 0
+                "employee_id", user.employeeId() != null ? user.employeeId() : 0,
+                "permissions", user.permissions()
         );
     }
 }

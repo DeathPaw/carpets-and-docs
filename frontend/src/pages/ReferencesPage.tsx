@@ -22,8 +22,8 @@ import {
 import { invalidateDistrictCache } from '../components/DistrictSelect'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
-import { getCompanySettings, updateCompanySettings, type CompanySettings } from '../api/companySettings'
-import { printAcceptance } from '../print/printDocs'
+import { getCompanySettings, updateCompanySettings, saveInvoiceBlocks, parseInvoiceBlocks, type CompanySettings, type InvoiceBlock } from '../api/companySettings'
+import { printAcceptance, printIssue } from '../print/printDocs'
 import type {
   ItemType, PriceModifier, District,
   Sku, SkuGroup, AttributeDefinition, SkuPricingType, CancellationReason,
@@ -111,6 +111,7 @@ export default function ReferencesPage() {
       <DistrictsCard districts={districts} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <CancellationReasonsCard reasons={cancelReasons} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
       <CompanySettingsCard showToast={showToast} />
+      <InvoiceBlocksCard showToast={showToast} />
       <UpdateBannersCard banners={banners} reload={load} setConfirm={setConfirmAction} showToast={showToast} />
 
       {confirmAction && (
@@ -1624,6 +1625,162 @@ function CompanySettingsCard({ showToast }: {
           onClick={() => printAcceptance(form, null)}
           title="Пустая накладная на приём с реквизитами из формы — проверить шапку до сохранения"
         >🖨 Пробная печать</button>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * ПР-005: конструктор блоков накладной. Текст, картинка (логотип, фото,
+ * графика) или QR-код по ссылке (сайт, отзывы в Яндекс Картах, чаевые).
+ * Для блока выбирается место в документе, накладные и экземпляры, порядок —
+ * стрелками. Применяется ко всем новым накладным без изменения кода.
+ */
+const BLOCK_POSITION_LABELS: Record<InvoiceBlock['position'], string> = {
+  AFTER_HEADER: 'после шапки',
+  AFTER_TABLE: 'после таблицы ковров',
+  FOOTER: 'внизу документа',
+}
+const BLOCK_TYPE_LABELS: Record<InvoiceBlock['type'], string> = { TEXT: 'Текст', IMAGE: 'Картинка', QR: 'QR-код' }
+
+function InvoiceBlocksCard({ showToast }: {
+  showToast: (msg: string, kind?: 'success' | 'error' | 'warning') => void
+}) {
+  const [settings, setSettings] = useState<CompanySettings | null>(null)
+  const [blocks, setBlocks] = useState<InvoiceBlock[]>([])
+  const [savedJson, setSavedJson] = useState('[]')
+  const [saving, setSaving] = useState(false)
+  const [err, setErr] = useState('')
+
+  useEffect(() => {
+    getCompanySettings({ fresh: true }).then(c => {
+      setSettings(c)
+      const b = parseInvoiceBlocks(c)
+      setBlocks(b); setSavedJson(JSON.stringify(b))
+    }).catch(() => setErr('Не удалось загрузить блоки'))
+  }, [])
+
+  const update = (i: number, patch: Partial<InvoiceBlock>) =>
+    setBlocks(list => list.map((b, j) => j === i ? { ...b, ...patch } : b))
+  const move = (i: number, dir: -1 | 1) => setBlocks(list => {
+    const j = i + dir
+    if (j < 0 || j >= list.length) return list
+    const next = [...list]; [next[i], next[j]] = [next[j], next[i]]; return next
+  })
+  const add = (type: InvoiceBlock['type']) => setBlocks(list => [...list, {
+    type, position: type === 'TEXT' ? 'AFTER_TABLE' : 'FOOTER', docs: ['acceptance', 'issue'], copies: 'CLIENT',
+    text: type === 'QR' ? 'Оставьте отзыв о нашей работе' : '',
+  }])
+  const pickImage = (i: number, file: File | undefined) => {
+    if (!file) return
+    if (!file.type.startsWith('image/')) { setErr('Нужна картинка: PNG, JPG или SVG'); return }
+    if (file.size > 1024 * 1024) { setErr('Картинка больше 1 МБ — уменьшите её'); return }
+    const reader = new FileReader()
+    reader.onload = () => { setErr(''); update(i, { image_data: String(reader.result) }) }
+    reader.readAsDataURL(file)
+  }
+
+  const save = async () => {
+    setSaving(true); setErr('')
+    try {
+      const c = await saveInvoiceBlocks(blocks)
+      setSettings(c)
+      const b = parseInvoiceBlocks(c)
+      setBlocks(b); setSavedJson(JSON.stringify(b))
+      showToast('Блоки накладной сохранены — уже во всех новых накладных')
+    } catch (e: unknown) {
+      setErr((e as any)?.response?.data?.message || 'Не удалось сохранить')
+    } finally { setSaving(false) }
+  }
+
+  /** Пробная печать пустых бланков с блоками из формы — до сохранения. */
+  const preview = (doc: 'acceptance' | 'issue') => {
+    if (!settings) return
+    const draft = { ...settings, invoice_blocks: JSON.stringify(blocks) }
+    if (doc === 'acceptance') printAcceptance(draft, null); else printIssue(draft, null)
+  }
+
+  const dirty = JSON.stringify(blocks) !== savedJson
+
+  return (
+    <div className="card" style={{ marginBottom: 16 }}>
+      <h2 style={{ marginTop: 0 }}>Блоки накладной</h2>
+      <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)', marginBottom: 12 }}>
+        Свои тексты, картинки и QR-коды в накладных на приём и выдачу: условия обслуживания,
+        реклама, ссылка на сайт, отзывы в Яндекс Картах, страница чаевых. Следите, чтобы
+        экземпляр помещался на лист — проверяйте пробной печатью.
+      </div>
+      {blocks.length === 0 && <div className="empty">Блоков нет — накладные печатаются как раньше.</div>}
+      {blocks.map((b, i) => (
+        <div key={i} style={{ border: '1px solid #e5e8e8', borderRadius: 6, padding: 10, marginBottom: 8,
+                              display: 'grid', gap: 8, gridTemplateColumns: 'repeat(auto-fill, minmax(190px, 1fr))' }}>
+          <div style={{ gridColumn: '1 / -1', display: 'flex', alignItems: 'center', gap: 8 }}>
+            <strong>{i + 1}. {BLOCK_TYPE_LABELS[b.type]}</strong>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+              <button className="btn-secondary btn-sm" disabled={i === 0} onClick={() => move(i, -1)} title="Выше">↑</button>
+              <button className="btn-secondary btn-sm" disabled={i === blocks.length - 1} onClick={() => move(i, 1)} title="Ниже">↓</button>
+              <button className="btn-danger btn-sm" onClick={() => setBlocks(list => list.filter((_, j) => j !== i))} title="Удалить">✕</button>
+            </span>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Где печатать</label>
+            <select value={b.position} onChange={e => update(i, { position: e.target.value as InvoiceBlock['position'] })}>
+              {(Object.keys(BLOCK_POSITION_LABELS) as InvoiceBlock['position'][]).map(p => <option key={p} value={p}>{BLOCK_POSITION_LABELS[p]}</option>)}
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Экземпляры</label>
+            <select value={b.copies} onChange={e => update(i, { copies: e.target.value as InvoiceBlock['copies'] })}>
+              <option value="CLIENT">только клиента</option>
+              <option value="BOTH">оба</option>
+              <option value="ORGANIZATION">только организации</option>
+            </select>
+          </div>
+          <div className="form-group" style={{ marginBottom: 0 }}>
+            <label>Накладные</label>
+            <div style={{ display: 'flex', gap: 12, minHeight: 'var(--control-h)', alignItems: 'center' }}>
+              {(['acceptance', 'issue'] as const).map(d => (
+                <label key={d} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 0 }}>
+                  <input type="checkbox" style={{ width: 'auto' }} checked={b.docs.includes(d)}
+                         onChange={e => update(i, { docs: e.target.checked ? [...b.docs, d] : b.docs.filter(x => x !== d) })} />
+                  {d === 'acceptance' ? 'приём' : 'выдача'}
+                </label>
+              ))}
+            </div>
+          </div>
+          {b.type === 'QR' && (
+            <div className="form-group" style={{ marginBottom: 0, gridColumn: 'span 2' }}>
+              <label>Ссылка для QR-кода *</label>
+              <input value={b.url ?? ''} onChange={e => update(i, { url: e.target.value })} placeholder="https://yandex.ru/maps/org/..." />
+            </div>
+          )}
+          {b.type === 'IMAGE' && (
+            <div className="form-group" style={{ marginBottom: 0 }}>
+              <label>Картинка *</label>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {b.image_data && <img src={b.image_data} alt="" style={{ height: 'var(--control-h)', maxWidth: 120, objectFit: 'contain' }} />}
+                <label className="btn-secondary btn-control-h" style={{ cursor: 'pointer', display: 'inline-flex', alignItems: 'center', marginBottom: 0 }}>
+                  {b.image_data ? 'Заменить' : 'Загрузить'}
+                  <input type="file" accept="image/png,image/jpeg,image/svg+xml" hidden
+                         onChange={e => { pickImage(i, e.target.files?.[0]); e.target.value = '' }} />
+                </label>
+              </div>
+            </div>
+          )}
+          <div className="form-group" style={{ marginBottom: 0, gridColumn: '1 / -1' }}>
+            <label>{b.type === 'TEXT' ? 'Текст *' : 'Подпись (необязательно)'}</label>
+            <textarea rows={b.type === 'TEXT' ? 3 : 1} value={b.text ?? ''} onChange={e => update(i, { text: e.target.value })} />
+          </div>
+        </div>
+      ))}
+      {err && <div className="error-msg">{err}</div>}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+        <button className="btn-secondary" onClick={() => add('TEXT')}>+ Текст</button>
+        <button className="btn-secondary" onClick={() => add('IMAGE')}>+ Картинка</button>
+        <button className="btn-secondary" onClick={() => add('QR')}>+ QR-код</button>
+        <button className="btn-primary" disabled={!dirty || saving} onClick={() => void save()}>{saving ? 'Сохранение…' : 'Сохранить'}</button>
+        <button className="btn-secondary" disabled={!settings} onClick={() => preview('acceptance')}>🖨 Пробная: приём</button>
+        <button className="btn-secondary" disabled={!settings} onClick={() => preview('issue')}>🖨 Пробная: выдача</button>
       </div>
     </div>
   )

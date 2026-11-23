@@ -63,6 +63,15 @@ function RequireSupervisor({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/** ПР-016: доступ по выборочному праву (отчёты, зарплата) — супервизору всегда. */
+function RequireAccess({ allow, children }: { allow: (a: ReturnType<typeof useAuth>) => boolean; children: React.ReactNode }) {
+  const auth = useAuth()
+  if (auth.loading) return <div className="loading">Загрузка...</div>
+  if (!auth.user) return <Navigate to="/login" replace />
+  if (!allow(auth)) return <Navigate to="/dashboard" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <ErrorBoundary>
@@ -99,11 +108,11 @@ export default function App() {
               <Route path="users"      element={<RequireSupervisor><UsersPage /></RequireSupervisor>} />
               <Route path="expenses"   element={<RequireSupervisor><ExpensesPage /></RequireSupervisor>} />
               {/* ТЗ v2: ведомость и схемы оплаты — данные по деньгам сотрудников. */}
-              <Route path="payroll"    element={<RequireSupervisor><PayrollPage /></RequireSupervisor>} />
+              <Route path="payroll"    element={<RequireAccess allow={a => a.canPayroll}><PayrollPage /></RequireAccess>} />
               {/* ТЗ v2, блок 6: договоры юрлиц ведут админы — это условия и деньги. */}
               <Route path="contracts"  element={<RequireAdmin><ContractsPage /></RequireAdmin>} />
               {/* ТЗ v2, блок 7: отчёты с деньгами — только супервайзеру. */}
-              <Route path="reports"    element={<RequireSupervisor><ReportsPage /></RequireSupervisor>} />
+              <Route path="reports"    element={<RequireAccess allow={a => a.canReports}><ReportsPage /></RequireAccess>} />
               {/* ТЗ v2, блок 8: загрузка пакетов меняет данные массово — только админам. */}
               <Route path="import"     element={<RequireAdmin><ImportPage /></RequireAdmin>} />
               {/* Все операторы и выше */}

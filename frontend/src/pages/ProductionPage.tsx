@@ -561,7 +561,11 @@ export default function ProductionPage() {
                             <strong style={{ fontSize: 14 }}>Поз. #{it.item_id}</strong>
                             <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>заказ #{String(it.order_id).padStart(5, '0')}</span>
                           </div>
-                          <div style={{ fontSize: 'var(--font-sm)', marginBottom: 2 }}>{it.item_type_name || `Тип`}</div>
+                          <div style={{ fontSize: 'var(--font-sm)', marginBottom: 2 }}>
+                            {it.item_type_name || `Тип`}
+                            {/* ПР-002: однотипные изделия одной карточкой. */}
+                            {(it.quantity ?? 1) > 1 && <strong> × {it.quantity} шт.</strong>}
+                          </div>
                           {it.description && (
                             <div style={{ fontSize: 'var(--font-sm)', color: '#666', marginBottom: 4 }}>{it.description}</div>
                           )}

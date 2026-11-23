@@ -159,7 +159,7 @@ public class ContractRepository {
     /** Метры заказа — сумма площадей его непогашенных позиций. */
     public BigDecimal orderSqm(Long orderId) {
         BigDecimal v = jdbc.queryForObject("""
-            SELECT COALESCE(SUM(area), 0) FROM order_items
+            SELECT COALESCE(SUM(area * quantity), 0) FROM order_items
              WHERE order_id = :id AND status <> 'CANCELLED' AND area IS NOT NULL
         """, Map.of("id", orderId), BigDecimal.class);
         return v == null ? BigDecimal.ZERO : v;
@@ -174,7 +174,7 @@ public class ContractRepository {
             SELECT
                 c.planned_sqm,
                 c.price_per_sqm,
-                COALESCE((SELECT SUM(oi.area) FROM orders o
+                COALESCE((SELECT SUM(oi.area * oi.quantity) FROM orders o
                             JOIN order_items oi ON oi.order_id = o.id
                            WHERE o.contract_id = c.id AND o.contract_delivered_at IS NOT NULL
                              AND oi.status <> 'CANCELLED' AND oi.area IS NOT NULL), 0) AS orders_sqm,
@@ -189,7 +189,7 @@ public class ContractRepository {
         return jdbc.queryForList("""
             SELECT 'ORDER' AS kind, o.id, o.client_name, o.created_at::date::text AS work_date,
                    o.contract_delivered_at IS NOT NULL AS counted,
-                   COALESCE((SELECT SUM(oi.area) FROM order_items oi
+                   COALESCE((SELECT SUM(oi.area * oi.quantity) FROM order_items oi
                               WHERE oi.order_id = o.id AND oi.status <> 'CANCELLED' AND oi.area IS NOT NULL), 0) AS sqm
               FROM orders o WHERE o.contract_id = :id
              UNION ALL
