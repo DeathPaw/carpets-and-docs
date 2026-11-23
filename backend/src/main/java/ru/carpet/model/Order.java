@@ -97,5 +97,13 @@ public record Order(
          */
         java.math.BigDecimal contractPricePerSqm,
         /** V54: отметка сдачи заказчику — до неё метры в факт контракта не идут. */
-        LocalDateTime contractDeliveredAt
+        LocalDateTime contractDeliveredAt,
+        /**
+         * ПР-014: источник привлечения клиента (clients.source) — только для показа
+         * в заказе. Хранится у клиента, в заказ не копируется: правка в одном
+         * месте видна во всех его заказах.
+         */
+        String clientSource,
+        /** ПР-014: расшифровка источника «Другой» (clients.source_note). */
+        String clientSourceNote
 ) {}

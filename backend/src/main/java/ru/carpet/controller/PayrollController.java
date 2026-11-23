@@ -176,6 +176,14 @@ public class PayrollController {
         return service.sheet(yearMonth);
     }
 
+    /** ПР-019: расчётная ведомость сотрудника за период (from/to — даты включительно). */
+    @GetMapping("/statement")
+    public Map<String, Object> statement(@RequestParam Long employeeId,
+                                         @RequestParam LocalDate from,
+                                         @RequestParam LocalDate to) {
+        return service.statement(employeeId, from, to);
+    }
+
     @GetMapping("/entries")
     public List<Map<String, Object>> entries(@RequestParam String yearMonth,
                                              @RequestParam(required = false) Long employeeId) {

@@ -389,6 +389,87 @@ public class PayrollService {
         return result;
     }
 
+    /**
+     * ПР-019: расчётная ведомость одного сотрудника за произвольный период.
+     *
+     * <p>Собирается из тех же данных, что и общая ведомость: начисления, смены,
+     * точки и схемы оплаты. Округление до 100 ₽ в системе действует на месячный
+     * итог, поэтому период режется по месяцам: у каждого месяца своя сумма до
+     * округления, разница и сумма к выплате. Для целого месяца цифры совпадают с
+     * общей ведомостью.
+     */
+    public Map<String, Object> statement(Long employeeId, LocalDate from, LocalDate to) {
+        if (from == null || to == null || to.isBefore(from)) {
+            throw new ru.carpet.exception.BusinessRuleException("Неверный период ведомости.");
+        }
+        if (java.time.temporal.ChronoUnit.MONTHS.between(YearMonth.from(from), YearMonth.from(to)) > 24) {
+            throw new ru.carpet.exception.BusinessRuleException("Период ведомости — не больше двух лет.");
+        }
+        List<Map<String, Object>> entries = new ArrayList<>();
+        List<Map<String, Object>> shifts = new ArrayList<>();
+        List<Map<String, Object>> points = new ArrayList<>();
+        List<Map<String, Object>> months = new ArrayList<>();
+        BigDecimal totalBefore = ZERO, totalRounded = ZERO;
+
+        for (YearMonth ym = YearMonth.from(from); !ym.isAfter(YearMonth.from(to)); ym = ym.plusMonths(1)) {
+            String key = ym.toString();
+            BigDecimal monthTotal = ZERO;
+            for (var e : repository.entries(key, employeeId)) {
+                if (!inPeriod(e.get("entry_date"), from, to)) continue;
+                entries.add(e);
+                monthTotal = monthTotal.add(new BigDecimal(String.valueOf(e.get("amount"))));
+            }
+            for (var sh : repository.shifts(key, employeeId)) {
+                if (inPeriod(sh.get("shift_date"), from, to)) shifts.add(sh);
+            }
+            for (var pt : repository.driverPoints(key, employeeId)) {
+                if (inPeriod(pt.get("point_date"), from, to)) points.add(pt);
+            }
+            BigDecimal rounded = roundToHundred(monthTotal);
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("year_month", key);
+            // Месяц попал в период не целиком — округление считается от его части.
+            m.put("partial", from.isAfter(ym.atDay(1)) || to.isBefore(ym.atEndOfMonth()));
+            m.put("total", monthTotal);
+            m.put("rounded", rounded);
+            m.put("rounding_diff", rounded.subtract(monthTotal));
+            months.add(m);
+            totalBefore = totalBefore.add(monthTotal);
+            totalRounded = totalRounded.add(rounded);
+        }
+
+        // Итоги по видам начислений: сдельно, оклад, смены, точки, ручные.
+        Map<String, BigDecimal> byKind = new LinkedHashMap<>();
+        for (var e : entries) {
+            byKind.merge(String.valueOf(e.get("kind")), new BigDecimal(String.valueOf(e.get("amount"))), BigDecimal::add);
+        }
+        List<PayScheme> schemes = repository.schemes(employeeId).stream()
+                .filter(sc -> !sc.validFrom().isAfter(to) && (sc.validTo() == null || !sc.validTo().isBefore(from)))
+                .toList();
+
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("employee_id", employeeId);
+        result.put("from", from.toString());
+        result.put("to", to.toString());
+        result.put("schemes", schemes);
+        result.put("shifts", shifts);
+        result.put("points", points);
+        result.put("entries", entries);
+        result.put("by_kind", byKind);
+        result.put("meters", metersOf(entries));
+        result.put("months", months);
+        result.put("total_before_rounding", totalBefore);
+        result.put("rounding_diff", totalRounded.subtract(totalBefore));
+        result.put("total_payout", totalRounded);
+        return result;
+    }
+
+    private static boolean inPeriod(Object date, LocalDate from, LocalDate to) {
+        if (date == null) return false;
+        LocalDate d = LocalDate.parse(String.valueOf(date).substring(0, 10));
+        return !d.isBefore(from) && !d.isAfter(to);
+    }
+
     /** Метры сотрудника за месяц — из деталей сдельных строк ведомости. */
     private BigDecimal metersOf(List<Map<String, Object>> entries) {
         BigDecimal meters = ZERO;

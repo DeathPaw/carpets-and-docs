@@ -98,6 +98,42 @@ export const getClientOrders = (id: number) =>
 export const searchClients = (q: string) =>
   apiClient.get<Client[]>(`/api/clients/search`, { params: { q } }).then(r => r.data)
 
+/**
+ * Полный запрос на обновление из текущей карточки клиента. PUT /api/clients/{id}
+ * перезаписывает ВСЕ поля, поэтому быстрые действия (переименовать, пометить
+ * проблемным) должны отправлять карточку целиком — раньше они теряли источник,
+ * пол, возраст и статус перезапуска, и сервер их обнулял.
+ */
+export const clientToRequest = (c: Client): CreateClientRequest => ({
+  client_type: c.client_type,
+  name: c.name,
+  first_name: c.first_name ?? undefined,
+  last_name: c.last_name ?? undefined,
+  phone: c.phone ?? '',
+  extra_phone: c.extra_phone ?? undefined,
+  address: c.address ?? undefined,
+  apartment: c.apartment ?? undefined,
+  district: c.district ?? undefined,
+  inn: c.inn ?? undefined,
+  contact_person: c.contact_person ?? undefined,
+  contact_person_phone: c.contact_person_phone ?? undefined,
+  comment: c.comment ?? undefined,
+  is_pensioner: c.is_pensioner,
+  is_problem: c.is_problem,
+  is_regular: c.is_regular,
+  lat: c.lat,
+  lon: c.lon,
+  restart_status: c.restart_status,
+  source: c.source,
+  source_note: c.source_note,
+  gender: c.gender,
+  age: c.age,
+})
+
+/** ПР-001: сменить только источник привлечения клиента (из карточки заказа). */
+export const updateClientSource = (id: number, source: string | null, sourceNote: string | null) =>
+  apiClient.patch<Client>(`/api/clients/${id}/source`, { source, source_note: sourceNote }).then(r => r.data)
+
 export const getClientModifiers = (id: number) =>
   apiClient.get<import('../types').PriceModifier[]>(`/api/clients/${id}/modifiers`).then(r => r.data)
 

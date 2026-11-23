@@ -116,6 +116,27 @@ public class ClientController {
         return clientRepository.findById(client.id()).orElse(client);
     }
 
+    /**
+     * ПР-001: смена источника привлечения прямо из заказа. Отдельный запрос, а не
+     * PUT всей карточки: заказу незачем знать остальные поля клиента, а PUT их
+     * перезаписывает. body: {"source": "YANDEX_DIRECT", "source_note": "..."}.
+     */
+    @PatchMapping("/{id}/source")
+    public Client updateSource(@PathVariable Long id, @RequestBody Map<String, String> body) {
+        Client before = clientRepository.findById(id)
+                .orElseThrow(() -> new EntityNotFoundException("Client not found: " + id));
+        String source = body.get("source");
+        if (source != null && source.isBlank()) source = null;
+        String note = body.get("source_note");
+        if ("OTHER".equals(source) && (note == null || note.isBlank())) {
+            throw new ru.carpet.exception.BusinessRuleException("Для «Другого источника» укажите, какого именно.");
+        }
+        clientRepository.updateSource(id, source, note == null ? null : note.trim());
+        auditLogService.log("CLIENT", id, "UPDATE", "Источник клиента «" + before.name() + "»: "
+                + (before.source() == null ? "—" : before.source()) + " → " + (source == null ? "—" : source));
+        return clientRepository.findById(id).orElseThrow();
+    }
+
     @PutMapping("/{id}")
     public Client update(@PathVariable Long id, @Valid @RequestBody CreateClientRequest req) {
         Client before = clientRepository.findById(id)

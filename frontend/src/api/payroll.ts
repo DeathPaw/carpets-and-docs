@@ -134,6 +134,26 @@ export const addShift = (employeeId: number, shiftDate: string, reason: string) 
 export const deleteShift = (id: number) =>
   client.delete(`/api/payroll/shifts/${id}`).then(r => r.data)
 
+/** ПР-019: расчётная ведомость сотрудника за период. */
+export interface PayrollStatement {
+  employee_id: number
+  from: string
+  to: string
+  schemes: PayScheme[]
+  shifts: WorkShift[]
+  points: DriverPoint[]
+  entries: PayrollEntry[]
+  by_kind: Record<string, number>
+  meters: number
+  months: { year_month: string; partial: boolean; total: number; rounded: number; rounding_diff: number }[]
+  total_before_rounding: number
+  rounding_diff: number
+  total_payout: number
+}
+
+export const getPayrollStatement = (employeeId: number, from: string, to: string) =>
+  client.get<PayrollStatement>('/api/payroll/statement', { params: { employeeId, from, to } }).then(r => r.data)
+
 export const getDriverPoints = (yearMonth: string) =>
   client.get<DriverPoint[]>('/api/payroll/points', { params: { yearMonth } }).then(r => r.data)
 

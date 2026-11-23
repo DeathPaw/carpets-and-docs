@@ -1,4 +1,5 @@
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
+import BuildStamp from './BuildStamp'
 import FeedbackButton from './FeedbackButton'
 import SuggesterButton from './SuggesterButton'
 import UpdatesButton from './UpdatesButton'
@@ -38,6 +39,7 @@ export default function Layout() {
 
   return (
     <div className={`app${isSupervisor ? ' supervisor-frame' : ''}`}>
+      <BuildStamp />
       <aside className="app-sidebar">
         <div className="sidebar-brand">
           Учёт заказов

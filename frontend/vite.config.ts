@@ -1,5 +1,16 @@
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
+import { execSync } from 'node:child_process'
+
+/**
+ * Метка сборки: время и коммит. Показывается сбоку экрана (BuildStamp), чтобы
+ * после автообновления на сервере было сразу видно, что новая сборка встала.
+ */
+function buildStamp(): string {
+  let commit = ''
+  try { commit = execSync('git rev-parse --short HEAD', { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() } catch { /* нет git */ }
+  return JSON.stringify({ time: new Date().toISOString(), commit })
+}
 
 /**
  * Конфиг dev-сервера. Поддерживает два режима:
@@ -17,6 +28,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    define: { __BUILD_STAMP__: JSON.stringify(buildStamp()) },
     server: {
       port: isTraining ? 3001 : 3000,
       host: true,

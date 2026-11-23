@@ -2,7 +2,7 @@ import { useEffect, useState, useRef } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
   getOrder, getOrderItems, getOrderHistory,
-  updateOrderStatus, rollbackOrderStatus, payOrder, createWarrantyOrder,
+  updateOrderStatus, rollbackOrderStatus, payOrder, createWarrantyOrder, convertToWarranty, getWarrantyOrders,
   updateOrderItemDescription, updateOrderItemDimensions, updateOrderItemStatus, duplicateOrder, duplicateItem, repriceOrder, setClientConfirmed, getOrderAdjustments,
   getOrderRefunds, addOrderRefund, deleteOrderRefund, setOrderReason,
   updateOrderComment,
@@ -14,7 +14,7 @@ import {
 } from '../api/orders'
 import { getItemServices, getAllOrderServices, updateServiceStatus, updateServicePrice, assignServiceEmployees, addServiceToItem } from '../api/services'
 import { getItemTypes, getEmployees, getPriceModifiers, getEmployeeRoles } from '../api/references'
-import { getClient, getClientModifiers, getClientEvents, addClientEvent, addClientModifier } from '../api/clients'
+import { getClient, getClientModifiers, getClientEvents, addClientEvent, addClientModifier, updateClientSource, getClientOrders } from '../api/clients'
 import { useToast } from '../components/Toast'
 import ConfirmModal from '../components/ConfirmModal'
 import CancelReasonModal from '../components/CancelReasonModal'
@@ -23,7 +23,7 @@ import DistrictSelect from '../components/DistrictSelect'
 import AddressInput from '../components/AddressInput'
 import TimeSlotSelect from '../components/TimeSlotSelect'
 import MapMarkers, { type MapPoint } from '../components/MapMarkers'
-import { WarrantyModal, AddItemModal, PayModal, DeliverAndPayModal, RefundModal } from '../components/orders/order-detail-modals'
+import { WarrantyModal, ConvertToWarrantyModal, AddItemModal, PayModal, DeliverAndPayModal, RefundModal } from '../components/orders/order-detail-modals'
 import SkuPicker from '../components/SkuPicker'
 import { getCompanySettings } from '../api/companySettings'
 import { buildInvoiceData, printAcceptance, printIssue } from '../print/printDocs'
@@ -44,6 +44,7 @@ import {
   PRELIMINARY_PAYMENT_LABELS,
   REFUND_KIND_LABELS,
   ORDER_REASON_LABELS,
+  CLIENT_SOURCE_LABELS,
   ALL_PRELIMINARY_PAYMENTS,
 } from '../constants/statuses'
 
@@ -366,10 +367,10 @@ function ServicesPanel({
                 а причина отмены переехала под название услуги. */}
             <tr>
               <th>Услуга</th>
-              {/* «Стоимость» — только для НЕ дефолтных типов. У доставки/оформления
-                  стоимость задаётся самой позицией (default_price). Шире обычного:
+              {/* «Стоимость» — у всех позиций, включая приём/доставку (ПР-012: цену
+                  доставки оператор задаёт вручную, в т.ч. 0 ₽). Шире обычного:
                   внутри бывает «(ручная) А» и разбивка формулы. */}
-              {!isDefaultType && <th style={{ width: 170, textAlign: 'right' }}>Стоимость</th>}
+              <th style={{ width: 170, textAlign: 'right' }}>Стоимость</th>
               <th style={{ width: 150, textAlign: 'center' }}>Исполнители</th>
               <th style={{ width: 160, textAlign: 'right' }}>Статус</th>
             </tr>
@@ -446,9 +447,6 @@ function ServicesPanel({
                       >↔ {isSelfPickup ? 'Платная' : 'Самовывоз'}</button>
                     )}
                   </td>
-                  {/* Колонка «Стоимость» — только для НЕ дефолтных. Для дефолтов <td> вообще
-                      не выводим, чтобы не плодить пустые ячейки. */}
-                  {!isDefaultType && (
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {isEditable && editingPrice === s.id ? (
                       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
@@ -466,7 +464,11 @@ function ServicesPanel({
                         <span style={{ fontSize: 'var(--font-sm)', color: '#888' }}>пусто = авто-расчёт</span>
                       </div>
                     ) : (() => {
-                      const breakdown = formatPriceBreakdown(s, item)
+                      // У приёма/доставки без ручной цены итог задаёт порог бесплатности
+                      // на уровне позиции (цена услуги остаётся ценой SKU) — показываем
+                      // то, что реально попадёт в заказ.
+                      const shownPrice = isDefaultType && !s.is_manual_price ? item.price : s.price
+                      const breakdown = isDefaultType ? null : formatPriceBreakdown(s, item)
                       return (
                         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                           <span
@@ -474,7 +476,7 @@ function ServicesPanel({
                             title={isEditable ? 'Нажмите, чтобы задать цену вручную' : undefined}
                             onClick={() => isEditable && openPriceEdit(s.id)}
                           >
-                            {Number(s.price).toFixed(2)} &#8381;
+                            {Number(shownPrice).toFixed(2)} &#8381;
                           </span>
                           {/* (ручная) + кнопка «А» — отдельной строкой ниже, чтобы не вылезали
                               в соседнюю колонку «Статус» (была проблема наложения текста). */}
@@ -498,7 +500,6 @@ function ServicesPanel({
                       )
                     })()}
                   </td>
-                  )}
                   <td style={{ textAlign: 'center' }}>
                     {/* Кнопка ровно та же, что в строке позиции: тот же класс,
                         та же ширина и тот же оранжевый контур, когда исполнителя
@@ -991,6 +992,12 @@ function ItemRow({
             нужно подкрутить — пусть правит цену конкретной услуги (там есть ✏️ и «А»). */}
         <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
           {Number(item.price).toFixed(2)} &#8381;
+          {/* ПР-017: в гарантийном заказе — сколько позиция стоила изначально. */}
+          {item.warranty_original_price != null && Number(item.warranty_original_price) > 0 && (
+            <div style={{ fontSize: 'var(--font-sm)', color: 'var(--c-text-secondary)' }}>
+              было {Number(item.warranty_original_price).toFixed(0)} ₽
+            </div>
+          )}
         </td>
         {isEditable && (
           <td style={{ textAlign: 'right' }}>
@@ -1384,6 +1391,12 @@ export default function OrderDetailPage() {
   const [showPay, setShowPay] = useState(false)
   const [showDeliverAndPay, setShowDeliverAndPay] = useState(false)
   const [showWarranty, setShowWarranty] = useState(false)
+  // ПР-017: перевод этого заказа в гарантийный и гарантии, созданные по нему.
+  const [convertCandidates, setConvertCandidates] = useState<Order[] | null>(null)
+  const [warrantyChildren, setWarrantyChildren] = useState<Order[]>([])
+  useEffect(() => {
+    getWarrantyOrders(orderId).then(setWarrantyChildren).catch(() => setWarrantyChildren([]))
+  }, [orderId])
   const [error, setError] = useState('')
   const [orderModifiers, setOrderModifiers] = useState<OrderModifier[]>([])
   const [allModifiers, setAllModifiers] = useState<PriceModifier[]>([])
@@ -1795,6 +1808,28 @@ export default function OrderDetailPage() {
     }
   }
 
+  const openConvertWarranty = async () => {
+    if (!order?.client_id) { setConvertCandidates([]); return }
+    try {
+      const all = await getClientOrders(order.client_id)
+      setConvertCandidates(all
+        .filter(o => o.id !== orderId && o.status !== 'CANCELLED' && !o.is_warranty)
+        .sort((a, b) => b.id - a.id))
+    } catch { setConvertCandidates([]) }
+  }
+
+  const handleConvertWarranty = async (parentOrderId: number, comment: string) => {
+    try {
+      const updated = await convertToWarranty(orderId, parentOrderId, comment)
+      setOrder(updated)
+      setConvertCandidates(null)
+      await loadOrder()
+      showToast(`Заказ переведён в гарантийный по заказу ${String(parentOrderId).padStart(5, '0')}`, 'success')
+    } catch (e: unknown) {
+      showToast((e as any)?.response?.data?.message || 'Не удалось перевести заказ в гарантийный', 'error')
+    }
+  }
+
   const handleWarranty = async (itemIds: number[], warrantyComment: string) => {
     try {
       const warranty = await createWarrantyOrder(orderId, { item_ids: itemIds, warranty_comment: warrantyComment })
@@ -2001,7 +2036,7 @@ export default function OrderDetailPage() {
               </button>
               {/* V19: быстрое переименование клиента прямо из заказа. Меняет имя у самого
                   клиента (и у всех его заказов — это уже бэк делает в ClientController.update). */}
-              {isEditable && order.client_id && (
+              {!isReadonly && order.client_id && (
                 <button
                   className="btn-secondary"
                   title="Переименовать клиента (обновится во всех его заказах)"
@@ -2015,26 +2050,13 @@ export default function OrderDetailPage() {
                       const parts = newName.split(/\s+/)
                       const newLastName = isIndividual && parts.length >= 2 ? parts[0] : (c.last_name ?? undefined)
                       const newFirstName = isIndividual && parts.length >= 2 ? parts.slice(1).join(' ') : (c.first_name ?? undefined)
-                      await (await import('../api/clients')).updateClient(c.id, {
-                        client_type: c.client_type,
+                      const { updateClient, clientToRequest } = await import('../api/clients')
+                      await updateClient(c.id, {
+                        ...clientToRequest(c),
                         name: newName,
                         first_name: newFirstName ?? undefined,
                         last_name: newLastName ?? undefined,
-                        phone: c.phone ?? '',
-                        extra_phone: c.extra_phone ?? undefined,
-                        address: c.address ?? undefined,
-                        apartment: c.apartment ?? undefined,
-                        district: c.district ?? undefined,
-                        inn: c.inn ?? undefined,
-                        contact_person: c.contact_person ?? undefined,
-                        contact_person_phone: c.contact_person_phone ?? undefined,
-                        comment: c.comment ?? undefined,
-                        is_pensioner: c.is_pensioner,
-                        is_problem: c.is_problem,
-                        is_regular: c.is_regular,
-                        lat: c.lat,
-                        lon: c.lon,
-                      } as any)
+                      })
                       await loadOrder()
                       showToast('Имя клиента обновлено во всех его заказах', 'success')
                     } catch (e: unknown) {
@@ -2043,7 +2065,7 @@ export default function OrderDetailPage() {
                   }}
                 >✎</button>
               )}
-              {isEditable && order.client_id && (
+              {!isReadonly && order.client_id && (
                 <button
                   className="btn-secondary"
                   title="Пометить клиента как проблемного / снять метку"
@@ -2055,26 +2077,8 @@ export default function OrderDetailPage() {
                         ? `Пометить «${c.name}» как проблемного клиента? Все операторы будут видеть красный алерт при выборе клиента.`
                         : `Снять с «${c.name}» метку проблемного клиента?`
                       if (!window.confirm(msg)) return
-                      await (await import('../api/clients')).updateClient(c.id, {
-                        client_type: c.client_type,
-                        name: c.name,
-                        first_name: c.first_name ?? undefined,
-                        last_name: c.last_name ?? undefined,
-                        phone: c.phone ?? '',
-                        extra_phone: c.extra_phone ?? undefined,
-                        address: c.address ?? undefined,
-                        apartment: c.apartment ?? undefined,
-                        district: c.district ?? undefined,
-                        inn: c.inn ?? undefined,
-                        contact_person: c.contact_person ?? undefined,
-                        contact_person_phone: c.contact_person_phone ?? undefined,
-                        comment: c.comment ?? undefined,
-                        is_pensioner: c.is_pensioner,
-                        is_problem: nextProblem,
-                        is_regular: c.is_regular,
-                        lat: c.lat,
-                        lon: c.lon,
-                      } as any)
+                      const { updateClient, clientToRequest } = await import('../api/clients')
+                      await updateClient(c.id, { ...clientToRequest(c), is_problem: nextProblem })
                       await loadOrder()
                       showToast(nextProblem ? 'Клиент помечен проблемным' : 'Метка снята', 'success')
                     } catch (e: unknown) {
@@ -2111,6 +2115,26 @@ export default function OrderDetailPage() {
                   Родительский {String(order.parent_order_id).padStart(5, '0')}
                 </button>
               )}
+              {/* ПР-017: сколько эти ковры стоили бы в обычном заказе. */}
+              {(() => {
+                const original = items.reduce((sum, i) => sum + Number(i.warranty_original_price ?? 0), 0)
+                return original > 0 ? (
+                  <span style={{ color: 'var(--c-text-secondary)', fontSize: 'var(--font-sm)' }}>
+                    первоначальная стоимость {original.toFixed(0)} ₽
+                  </span>
+                ) : null
+              })()}
+            </span>
+          )}
+          {/* ПР-017: в исходном заказе — ссылки на гарантии, оформленные по нему. */}
+          {warrantyChildren.length > 0 && (
+            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+              <strong>Гарантии:</strong>
+              {warrantyChildren.map(w => (
+                <button key={w.id} className="btn-secondary btn-sm" onClick={() => navigate(`/orders/${w.id}`)}>
+                  {String(w.id).padStart(5, '0')}
+                </button>
+              ))}
             </span>
           )}
           {/* Деньги — отдельной группой у правого края: слева «кто и в каком
@@ -2304,6 +2328,44 @@ export default function OrderDetailPage() {
               />
             )}
           </div>
+          {/* ПР-001/014: источник привлечения клиента прямо в заказе. Хранится у
+              клиента (меняется во всех его заказах), поэтому правится и в
+              завершённом заказе — это не изменение самого заказа. */}
+          {order.client_id && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap',
+              marginBottom: 8, fontSize: 'var(--font-sm)',
+            }}>
+              <span style={{ color: 'var(--c-text-secondary)' }}>Источник клиента:</span>
+              <select
+                value={order.client_source ?? ''}
+                disabled={isReadonly}
+                style={{ height: 'var(--control-h)', maxWidth: 260 }}
+                onChange={async e => {
+                  const value = e.target.value || null
+                  let note: string | null = null
+                  if (value === 'OTHER') {
+                    note = prompt('Какой именно источник?', order.client_source_note ?? '')?.trim() || null
+                    if (!note) return
+                  }
+                  try {
+                    await updateClientSource(order.client_id!, value, note)
+                    await loadOrder()
+                  } catch (err: unknown) {
+                    showToast((err as any)?.response?.data?.message || 'Не удалось сохранить источник', 'error')
+                  }
+                }}
+              >
+                <option value="">— не указан —</option>
+                {Object.entries(CLIENT_SOURCE_LABELS).map(([code, label]) => (
+                  <option key={code} value={code}>{label}</option>
+                ))}
+              </select>
+              {order.client_source === 'OTHER' && order.client_source_note && (
+                <span style={{ color: 'var(--c-text-secondary)' }}>{order.client_source_note}</span>
+              )}
+            </div>
+          )}
           {/* Подсветка: для перевода в DELIVERED обязательна фактическая дата доставки.
               Если её ещё нет — даём подсказку с понятным следующим шагом. */}
           {order.status === 'DONE' && !order.actual_delivery_date && (
@@ -2580,8 +2642,16 @@ export default function OrderDetailPage() {
               Принять оплату
             </button>
           )}
-          {!isReadonly && (order.status === 'DELIVERED' || order.status === 'COMPLETED') && (
+          {!isReadonly && (order.status === 'DELIVERED' || order.status === 'COMPLETED' || order.status === 'PARTIALLY_DELIVERED') && (
             <button className="btn-warning" onClick={() => setShowWarranty(true)}>Гарантийный возврат</button>
+          )}
+          {/* ПР-017: перестирку, заведённую обычным заказом, переводим в гарантию
+              на любом этапе — без удаления и пересоздания. */}
+          {!isReadonly && !order.is_warranty && order.status !== 'CANCELLED' && (
+            <button className="btn-secondary" onClick={() => void openConvertWarranty()}
+                    title="Это перестирка по прошлому заказу: обнулить стоимость и привязать к исходному заказу">
+              Сделать гарантийным
+            </button>
           )}
           {/* Документы для печати — своя группа. */}
           <span className="actions-divider" />
@@ -3175,6 +3245,15 @@ export default function OrderDetailPage() {
           }}
         />
       )}
+      {convertCandidates && (
+        <ConvertToWarrantyModal
+          orderId={orderId}
+          candidates={convertCandidates}
+          paid={order.paid}
+          onClose={() => setConvertCandidates(null)}
+          onConfirm={handleConvertWarranty}
+        />
+      )}
       {showWarranty && (
         <WarrantyModal
           items={items}
@@ -3202,8 +3281,9 @@ export default function OrderDetailPage() {
                   {showClientCard.client_type === 'LEGAL_ENTITY' ? 'Юридическое лицо' : 'Физическое лицо'} &middot; #{showClientCard.id}
                 </div>
               </div>
-              {/* V19 (#8): кнопка «Редактировать» — открывает страницу клиентов с предзаполненным формом редактирования. */}
-              {isEditable && (
+              {/* V19 (#8): кнопка «Редактировать» — открывает страницу клиентов с предзаполненным формом редактирования.
+                  ПР-008: доступна и у завершённого заказа — правится карточка клиента, а не заказ. */}
+              {!isReadonly && (
                 <button
                   className="btn-secondary btn-sm"
                   onClick={() => {

@@ -222,7 +222,12 @@ public class OrderItemServiceInstanceService {
         java.math.BigDecimal autoPrice = (instance.skuUnitPrice() != null && orderItem != null)
                 ? PricingHelper.calculate(instance.skuUnitPrice(), instance.pricingType(), orderItem)
                 : null;
-        boolean matchesAuto = autoPrice != null && autoPrice.compareTo(price) == 0;
+        // ПР-012: у приёма/доставки (auto-add SKU) итоговую цену определяет ещё и порог
+        // бесплатности, поэтому «совпало с ценой SKU» не значит «ничего не менял»:
+        // 300 ₽ при сработавшем пороге — осознанная ручная цена. Для них всегда manual.
+        boolean autoAddSku = instance.skuId() != null
+                && skuService.findAutoAdd().stream().anyMatch(s -> s.id().equals(instance.skuId()));
+        boolean matchesAuto = !autoAddSku && autoPrice != null && autoPrice.compareTo(price) == 0;
         if (matchesAuto && Boolean.FALSE.equals(instance.isManualPrice())) {
             // Ничего не меняется — цена уже совпадает, флаг и так FALSE. Молча выходим.
             return instance;

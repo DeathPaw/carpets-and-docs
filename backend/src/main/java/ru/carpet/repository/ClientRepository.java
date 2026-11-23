@@ -162,6 +162,20 @@ public class ClientRepository {
                 .addValue("id", id));
     }
 
+    /** ПР-001: только источник привлечения, остальные поля клиента не трогаем. */
+    public void updateSource(Long id, String source, String sourceNote) {
+        jdbc.update("""
+            UPDATE clients
+               SET source      = :source,
+                   source_note = CASE WHEN :source = 'OTHER' THEN :note ELSE NULL END,
+                   updated_at  = NOW()
+             WHERE id = :id
+        """, new MapSqlParameterSource()
+                .addValue("source", source)
+                .addValue("note", sourceNote)
+                .addValue("id", id));
+    }
+
     public List<Client> search(String query) {
         String likeQuery = "%" + query.toLowerCase() + "%";
         return jdbc.query(

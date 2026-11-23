@@ -414,7 +414,12 @@ export default function LogisticsPage() {
     const showPickup = typeFilters.length === 0 || typeFilters.includes('pickup')
     const showDelivery = typeFilters.length === 0 || typeFilters.includes('delivery')
     allOrders.forEach(o => {
-      if (pickupStatuses.has(o.status) || ((o.actual_pickup_date || o.pickup_date) && !deliveryStatuses.has(o.status))) {
+      // ПР-009: забор, который уже состоялся (заказ ушёл дальше «К забору»),
+      // остаётся на дне фактического забора как архив — независимо от того, в
+      // каком статусе заказ сейчас. Раньше после перехода к отвозу карточка
+      // забора пропадала, и в архиве прошедших дней оставались одни доставки.
+      const pickupDone = !pickupStatuses.has(o.status)
+      if (pickupStatuses.has(o.status) || (pickupDone && o.actual_pickup_date)) {
         if (showPickup) {
           cards.push({
             order: o,
@@ -425,6 +430,7 @@ export default function LogisticsPage() {
             address: o.pickup_address || o.client_address,
             lat: o.pickup_lat != null ? Number(o.pickup_lat) : null,
             lon: o.pickup_lon != null ? Number(o.pickup_lon) : null,
+            archived: pickupDone,
           })
         }
       }
@@ -769,7 +775,7 @@ export default function LogisticsPage() {
         onDragStart={() => !viewer && !archived && handleDragStart(card.order.id, card.type)}
         onDragEnd={() => setDragData(null)}
         onClick={() => navigate(`/orders/${card.order.id}`)}
-        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.district || 'без района'} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}${archived ? ' · развозка выполнена' : ''}`}
+        title={`${isPickup ? 'Забор' : 'Доставка'} · ${formatOrderNumber(card.order.id, card.order.created_at)} · ${card.district || 'без района'} · ${card.order.client_name}${card.address ? ' · ' + card.address : ''}${archived ? (isPickup ? ' · забор выполнен' : ' · развозка выполнена') : ''}`}
         style={{
           padding: '6px 8px',
           marginBottom: 4,
@@ -798,7 +804,7 @@ export default function LogisticsPage() {
           display: 'flex', alignItems: 'baseline', gap: 6,
           whiteSpace: 'nowrap', overflow: 'hidden',
         }}>
-          {archived && <span title="Развозка выполнена">✓</span>}
+          {archived && <span title={isPickup ? 'Забор выполнен' : 'Развозка выполнена'}>✓</span>}
           <strong style={{ color: '#2c3e50', flexShrink: 0 }}>
             {formatOrderNumber(card.order.id, card.order.created_at)}
           </strong>

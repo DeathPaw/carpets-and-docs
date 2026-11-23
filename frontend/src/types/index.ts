@@ -151,6 +151,9 @@ export interface Order {
   contract_price_per_sqm: number | null
   /** V54: отметка сдачи заказчику — до неё метры в факт контракта не идут. */
   contract_delivered_at: string | null
+  /** ПР-014: источник привлечения клиента (из карточки клиента, только чтение в заказе). */
+  client_source?: ClientSource | null
+  client_source_note?: string | null
   /** V18: номер квартиры (отдельно от address). */
   pickup_apartment: string | null
   delivery_apartment: string | null
@@ -174,6 +177,8 @@ export interface OrderItem {
   running_meters: number | null
   cancellation_reason: string | null
   created_at: string
+  /** V58 (ПР-017): цена позиции до обнуления в гарантийном заказе. */
+  warranty_original_price?: number | null
   updated_at: string
 }
 

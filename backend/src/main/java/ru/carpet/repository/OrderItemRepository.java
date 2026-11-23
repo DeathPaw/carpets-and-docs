@@ -40,7 +40,8 @@ public class OrderItemRepository {
             rs.getBigDecimal("perimeter"),
             rs.getString("cancellation_reason"),
             rs.getTimestamp("created_at").toLocalDateTime(),
-            rs.getTimestamp("updated_at").toLocalDateTime()
+            rs.getTimestamp("updated_at").toLocalDateTime(),
+            rs.getBigDecimal("warranty_original_price")
     );
 
     public OrderItemRepository(NamedParameterJdbcTemplate jdbc) {
@@ -53,7 +54,7 @@ public class OrderItemRepository {
     public List<OrderItem> findByOrderId(Long orderId) {
         return jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +
@@ -131,6 +132,18 @@ public class OrderItemRepository {
      * больше не меняет (V14: убрали is_manual_price на order_items, ручное
      * редактирование переехало на уровень услуги).
      */
+    /**
+     * ПР-017: обнулить позицию гарантийного заказа, запомнив исходную цену
+     * (только первый раз — повторное обнуление не затирает её нулём).
+     */
+    public void zeroForWarranty(Long id, BigDecimal originalPrice) {
+        jdbc.update(
+                "UPDATE order_items SET warranty_original_price = COALESCE(warranty_original_price, :orig), " +
+                "price = 0, version = version + 1, updated_at = NOW() WHERE id = :id",
+                new MapSqlParameterSource().addValue("orig", originalPrice).addValue("id", id)
+        );
+    }
+
     public void updatePrice(Long id, BigDecimal price) {
         jdbc.update(
                 "UPDATE order_items SET price = :price, version = version + 1, updated_at = NOW() WHERE id = :id",
@@ -203,7 +216,7 @@ public class OrderItemRepository {
     public Optional<OrderItem> findById(Long id) {
         List<OrderItem> result = jdbc.query(
                 "SELECT oi.id, oi.order_id, oi.item_type_id, oi.description, oi.defects, oi.status, oi.price, " +
-                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, " +
+                "oi.length, oi.width, oi.weight, oi.area, oi.running_meters, oi.perimeter, oi.cancellation_reason, oi.warranty_original_price, " +
                 "oi.created_at, oi.updated_at, " +
                 "it.name as item_type_name " +
                 "FROM order_items oi JOIN item_types it ON it.id = oi.item_type_id " +

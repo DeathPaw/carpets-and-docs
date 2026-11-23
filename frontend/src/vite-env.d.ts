@@ -7,3 +7,5 @@ interface ImportMetaEnv {
 interface ImportMeta {
   readonly env: ImportMetaEnv
 }
+/** Метка сборки из vite.config.ts: JSON {time, commit}. В dev-стенде без define её нет. */
+declare const __BUILD_STAMP__: string | undefined

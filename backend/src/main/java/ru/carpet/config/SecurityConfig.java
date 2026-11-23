@@ -3,6 +3,7 @@ package ru.carpet.config;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -48,9 +49,34 @@ public class SecurityConfig {
             .cors(cors -> cors.configurationSource(corsSource()))
             .csrf(csrf -> csrf.disable())
             .sessionManagement(sm -> sm.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+            // Роли проверяем на сервере, а не только скрытием пунктов меню: раньше
+            // любой вошедший мог дёрнуть API зарплат или пользователей напрямую.
+            // Правила повторяют RequireSupervisor/RequireAdmin из App.tsx; справочники
+            // читают все (они нужны в заказах), а меняют только админы.
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/worker/**").permitAll()
-                .requestMatchers("/api/**").authenticated()
+                // Разделы супервизора — целиком, включая чтение.
+                .requestMatchers("/api/users/**", "/api/audit-log/**", "/api/error-log/**",
+                        "/api/cost-entries/**", "/api/expenses/**", "/api/payroll/**",
+                        "/api/reports/**", "/api/analytics/profit/**")
+                    .hasRole("SUPERVISOR")
+                .requestMatchers("/api/import/**").hasAnyRole("SUPERVISOR", "ADMIN")
+                // Служебные запросы, которые шлёт интерфейс у любого пользователя.
+                .requestMatchers("/api/presence/**", "/api/notifications/**").authenticated()
+                .requestMatchers(HttpMethod.POST, "/api/feedback").authenticated()
+                // Привязка заказа к контракту и сдача — работа оператора в карточке заказа.
+                .requestMatchers("/api/contracts/orders/**", "/api/contracts/*/orders/**")
+                    .hasAnyRole("SUPERVISOR", "ADMIN", "OPERATOR")
+                // Справочники и админ-разделы: менять могут только админы.
+                .requestMatchers(HttpMethod.GET, "/api/**").authenticated()
+                .requestMatchers("/api/attribute-definitions/**", "/api/cancellation-reasons/**",
+                        "/api/districts/**", "/api/employees/**", "/api/employee-roles/**",
+                        "/api/item-types/**", "/api/price-modifiers/**", "/api/skus/**",
+                        "/api/sku-groups/**", "/api/update-banners/**", "/api/company-settings/**",
+                        "/api/contracts/**", "/api/feedback/**")
+                    .hasAnyRole("SUPERVISOR", "ADMIN")
+                // Остальные изменения — всем, кроме роли «только просмотр».
+                .requestMatchers("/api/**").hasAnyRole("SUPERVISOR", "ADMIN", "OPERATOR")
                 .anyRequest().permitAll()
             )
             .httpBasic(basic -> basic

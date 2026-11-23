@@ -343,6 +343,18 @@ public class OrderController {
         return service.createWarranty(id, request.itemIds(), request.warrantyComment());
     }
 
+    /**
+     * ПР-017: перевести этот заказ в гарантийный по исходному.
+     * body: {"parent_order_id": 456, "warranty_comment": "..."}.
+     */
+    @PostMapping("/{id}/warranty/convert")
+    public Order convertToWarranty(@PathVariable Long id, @RequestBody Map<String, Object> body) {
+        Object parent = body.get("parent_order_id");
+        Long parentId = parent == null ? null : Long.valueOf(parent.toString());
+        Object comment = body.get("warranty_comment");
+        return service.convertToWarranty(id, parentId, comment == null ? null : comment.toString());
+    }
+
     @GetMapping("/{id}/warranty")
     public List<Order> getWarrantyOrders(@PathVariable Long id) {
         return service.findWarrantyOrders(id);

@@ -620,11 +620,13 @@ export default function OrdersPage() {
                 </th>
                 <th>Оплачен</th>
                 <th>Гарантийный</th>
+                {/* ПР-014: источник клиента — чтобы за день сразу видеть, откуда пришли заказы. */}
+                <th>Источник</th>
               </tr>
             </thead>
             <tbody>
               {orders.length === 0 ? (
-                <tr><td colSpan={6} className="empty">Заказы не найдены</td></tr>
+                <tr><td colSpan={7} className="empty">Заказы не найдены</td></tr>
               ) : orders.map(o => (
                 <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/orders/${o.id}`)}>
                   <td>{formatOrderNumber(o.id, o.created_at)}{o.legacy_id ? ` (${o.legacy_id})` : ''}</td>
@@ -633,6 +635,9 @@ export default function OrdersPage() {
                   <td>{Number(o.total_amount).toFixed(2)} &#8381;</td>
                   <td>{o.paid ? ((o.payment_type ? PAYMENT_LABELS[o.payment_type] : '') ?? 'Да') : '—'}</td>
                   <td>{o.is_warranty ? 'Да' : '—'}</td>
+                  <td>{o.client_source
+                    ? (o.client_source === 'OTHER' && o.client_source_note ? o.client_source_note : CLIENT_SOURCE_LABELS[o.client_source])
+                    : '—'}</td>
                 </tr>
               ))}
             </tbody>

@@ -180,6 +180,16 @@ export const payOrder = (id: number, data: PayOrderRequest) =>
 export const createWarrantyOrder = (id: number, data: { item_ids: number[]; warranty_comment: string }) =>
   client.post<Order>(`/api/orders/${id}/warranty`, data).then(r => r.data)
 
+/** ПР-017: перевести существующий заказ в гарантийный по исходному. */
+export const convertToWarranty = (id: number, parentOrderId: number, warrantyComment: string) =>
+  client.post<Order>(`/api/orders/${id}/warranty/convert`, {
+    parent_order_id: parentOrderId, warranty_comment: warrantyComment,
+  }).then(r => r.data)
+
+/** Гарантийные заказы, созданные по этому заказу. */
+export const getWarrantyOrders = (id: number) =>
+  client.get<Order[]>(`/api/orders/${id}/warranty`).then(r => r.data)
+
 export const getOrderHistory = (id: number) =>
   client.get<OrderStatusHistory[]>(`/api/orders/${id}/history`).then(r => r.data)
 

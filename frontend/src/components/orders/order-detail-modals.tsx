@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { addOrderItem } from '../../api/orders'
-import type { OrderItem, ItemType, PaymentType, RefundKind } from '../../types'
+import type { Order, OrderItem, ItemType, PaymentType, RefundKind } from '../../types'
 import Tiles, { hashColor } from '../Tiles'
 import TimeSlotSelect from '../TimeSlotSelect'
 import { useEscapeClose } from '../../hooks/useEscapeClose'
@@ -78,6 +78,79 @@ export function WarrantyModal({
         <div className="modal-actions">
           <button className="btn-secondary" onClick={onClose}>Отмена</button>
           <button className="btn-warning" onClick={submit}>Создать гарантийный заказ</button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ---- ПР-017: перевод существующего заказа в гарантийный ----
+
+/**
+ * Выбор исходного заказа, по которому возникла гарантия. Предлагаем другие
+ * заказы того же клиента (не отменённые и не гарантийные) — номер можно и
+ * ввести руками, если исходный заказ, например, ещё в старой базе.
+ */
+export function ConvertToWarrantyModal({
+  orderId, candidates, paid, onClose, onConfirm,
+}: {
+  orderId: number
+  candidates: Order[]
+  paid: boolean
+  onClose: () => void
+  onConfirm: (parentOrderId: number, comment: string) => void
+}) {
+  const [parentId, setParentId] = useState<string>(candidates[0] ? String(candidates[0].id) : '')
+  const [comment, setComment] = useState('')
+  const [error, setError] = useState('')
+  useEscapeClose(true, onClose)
+
+  const submit = () => {
+    const id = Number(parentId.replace(/\D/g, ''))
+    if (!id) { setError('Укажите исходный заказ'); return }
+    if (id === orderId) { setError('Исходный заказ не может совпадать с этим'); return }
+    if (!comment.trim()) { setError('Укажите причину гарантии'); return }
+    onConfirm(id, comment.trim())
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={e => e.stopPropagation()}>
+        <h2>Сделать заказ гарантийным</h2>
+        <p style={{ color: '#666', marginBottom: 12 }}>
+          Стоимость всех услуг и позиций станет 0 ₽, итог к оплате — 0 ₽.
+          Первоначальные цены сохранятся для аналитики.
+          {paid && ' Заказ оплачен — сначала оформите возврат денег через «Возврат».'}
+        </p>
+        <div className="form-group">
+          <label>Исходный заказ *</label>
+          {candidates.length > 0 && (
+            <select value={candidates.some(c => String(c.id) === parentId) ? parentId : ''}
+                    onChange={e => setParentId(e.target.value)}>
+              <option value="">— ввести номер вручную —</option>
+              {candidates.map(c => (
+                <option key={c.id} value={c.id}>
+                  {String(c.id).padStart(5, '0')} от {new Date(c.created_at).toLocaleDateString('ru')} · {Number(c.total_amount).toFixed(0)} ₽
+                </option>
+              ))}
+            </select>
+          )}
+          <input
+            style={{ marginTop: 6 }}
+            value={parentId}
+            onChange={e => setParentId(e.target.value)}
+            placeholder="Номер заказа, например 00456"
+          />
+        </div>
+        <div className="form-group">
+          <label>Причина гарантии *</label>
+          <textarea rows={3} value={comment} onChange={e => setComment(e.target.value)}
+                    placeholder="Например: повторная стирка — остались пятна" />
+        </div>
+        {error && <div className="error-msg">{error}</div>}
+        <div className="modal-actions">
+          <button className="btn-secondary" onClick={onClose}>Отмена</button>
+          <button className="btn-warning" onClick={submit}>Сделать гарантийным</button>
         </div>
       </div>
     </div>

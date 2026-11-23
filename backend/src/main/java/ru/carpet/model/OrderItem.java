@@ -22,5 +22,7 @@ public record OrderItem(
         BigDecimal perimeter,
         String cancellationReason,
         LocalDateTime createdAt,
-        LocalDateTime updatedAt
+        LocalDateTime updatedAt,
+        /** V58 (ПР-017): цена позиции до обнуления в гарантийном заказе. */
+        BigDecimal warrantyOriginalPrice
 ) {}

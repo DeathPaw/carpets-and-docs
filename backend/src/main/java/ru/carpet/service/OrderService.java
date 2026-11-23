@@ -369,9 +369,13 @@ public class OrderService {
         // Без фильтра по статусу putIfAbsent цеплял первую CANCELLED Доставку и
         // ошибочно считал позицию auto-add, перезатирая её цену через free_threshold.
         java.util.Map<Long, Long> itemToSkuId = new java.util.HashMap<>();
+        // ПР-012: позиции, где оператор задал цену приёма/доставки вручную (в т.ч. 0 ₽).
+        // Их цену порог бесплатности не трогает — она равна сумме услуг, как у любой позиции.
+        java.util.Set<Long> manualItems = new java.util.HashSet<>();
         for (var svc : allServices) {
             if (svc.status() == ServiceStatus.CANCELLED) continue;
             itemToSkuId.putIfAbsent(svc.orderItemId(), svc.skuId());
+            if (Boolean.TRUE.equals(svc.isManualPrice())) manualItems.add(svc.orderItemId());
         }
         // Сумма не-auto-add позиций (без отменённых) — база для проверки free_threshold.
         BigDecimal nonAutoSum = items.stream()
@@ -384,6 +388,7 @@ public class OrderService {
             if (sku.freeThreshold() == null) continue;
             for (var item : items) {
                 if (!java.util.Objects.equals(itemToSkuId.get(item.id()), sku.id())) continue;
+                if (manualItems.contains(item.id())) continue;
                 BigDecimal newPrice = nonAutoSum.compareTo(sku.freeThreshold()) >= 0
                         ? BigDecimal.ZERO
                         : (sku.price() == null ? BigDecimal.ZERO : sku.price());
@@ -764,12 +769,87 @@ public class OrderService {
         return repository.findById(orderId).orElseThrow();
     }
 
+    /**
+     * ПР-017: перевести уже созданный заказ в гарантийный и привязать к исходному.
+     *
+     * <p>Операторы заводили перестирку обычным заказом, потому что гарантию можно
+     * было создать только из доставленного заказа. Теперь любой заказ (кроме
+     * отменённого) можно пометить гарантийным, не пересоздавая его: услуги и
+     * позиции обнуляются, исходные цены сохраняются в warranty_original_price.
+     *
+     * <p>Оплаченный заказ сначала требует возврата денег через «Возвраты» —
+     * иначе обнуление суммы разошлось бы с уже принятой оплатой.
+     */
+    @Transactional
+    public Order convertToWarranty(Long orderId, Long parentOrderId, String comment) {
+        Order order = findById(orderId);
+        if (order.status() == OrderStatus.CANCELLED) {
+            throw new BusinessRuleException("Отменённый заказ нельзя сделать гарантийным.");
+        }
+        if (parentOrderId == null || parentOrderId.equals(orderId)) {
+            throw new BusinessRuleException("Укажите исходный заказ, по которому возникла гарантия.");
+        }
+        Order parent = repository.findById(parentOrderId)
+                .orElseThrow(() -> new BusinessRuleException("Исходный заказ " + orderNo(parentOrderId) + " не найден."));
+        if (parent.parentOrderId() != null && parent.parentOrderId().equals(orderId)) {
+            throw new BusinessRuleException("Заказ " + orderNo(parentOrderId) + " сам является гарантией по этому заказу.");
+        }
+        if (!java.util.Objects.equals(parent.clientId(), order.clientId())) {
+            throw new BusinessRuleException("Исходный заказ " + orderNo(parentOrderId) + " оформлен на другого клиента.");
+        }
+        if (order.paid()) {
+            BigDecimal refunded = refundRepository.findByOrderId(orderId).stream()
+                    .filter(r -> "FULL_REFUND".equals(r.kind()) || "PARTIAL_REFUND".equals(r.kind()))
+                    .map(ru.carpet.model.OrderRefund::amount)
+                    .reduce(BigDecimal.ZERO, BigDecimal::add);
+            if (refunded.compareTo(order.totalAmount()) < 0) {
+                throw new BusinessRuleException("Заказ оплачен (" + order.totalAmount().toPlainString()
+                        + " ₽). Сначала оформите возврат денег клиенту через «Возврат», затем переведите заказ в гарантийный.");
+            }
+        }
+        BigDecimal amountBefore = order.totalAmount();
+        repository.markWarranty(orderId, parentOrderId);
+        String note = comment == null ? "" : comment.trim();
+        if (!note.isEmpty()) {
+            String prev = order.comment() == null || order.comment().isBlank() ? "" : order.comment() + "\n";
+            repository.updateComment(orderId, prev + "Гарантия по заказу " + orderNo(parentOrderId) + ": " + note);
+        }
+        recalculateTotalAmount(orderId);
+        auditLogService.log("ORDER", orderId, "UPDATE", "Заказ " + orderNo(orderId) + " переведён в гарантийный по заказу "
+                + orderNo(parentOrderId) + " (сумма " + amountBefore.toPlainString() + " ₽ → 0)"
+                + (note.isEmpty() ? "" : "; причина: " + note));
+        if (order.clientId() != null) {
+            clientEventRepository.save(order.clientId(), "WARRANTY",
+                    "Заказ " + orderNo(orderId) + " — гарантия по заказу " + orderNo(parentOrderId));
+        }
+        return repository.findById(orderId).orElseThrow();
+    }
+
+    /** ПР-017: обнулить услуги и позиции гарантийного заказа, сохранив исходные цены позиций. */
+    private void zeroWarrantyItems(Long orderId) {
+        for (OrderItem item : itemRepository.findByOrderId(orderId)) {
+            if (item.status() == OrderItemStatus.CANCELLED) continue;
+            boolean changed = false;
+            for (var svc : serviceInstanceRepository.findByOrderItemId(item.id())) {
+                if (svc.price() != null && svc.price().signum() != 0) {
+                    serviceInstanceRepository.updatePrice(svc.id(), BigDecimal.ZERO);
+                    changed = true;
+                }
+            }
+            if (changed || (item.price() != null && item.price().signum() != 0)) {
+                BigDecimal original = item.price() != null && item.price().signum() != 0 ? item.price() : null;
+                itemRepository.zeroForWarranty(item.id(), original);
+            }
+        }
+    }
+
     /** Гарантийный возврат — только из DELIVERED или COMPLETED, с выбором позиций */
     @Transactional
     public Order createWarranty(Long orderId, List<Long> itemIds, String warrantyComment) {
         Order original = findById(orderId);
-        if (original.status() != OrderStatus.DELIVERED && original.status() != OrderStatus.COMPLETED) {
-            throw new BusinessRuleException("Гарантийный возврат возможен только для заказов в статусе ДОСТАВЛЕН или ЗАВЕРШЁН");
+        if (original.status() != OrderStatus.DELIVERED && original.status() != OrderStatus.COMPLETED
+                && original.status() != OrderStatus.PARTIALLY_DELIVERED) {
+            throw new BusinessRuleException("Гарантийный возврат возможен только для заказов в статусе ДОСТАВЛЕН, ЧАСТИЧНО ДОСТАВЛЕН или ЗАВЕРШЁН");
         }
 
         // Создаём гарантийный заказ с total_amount = 0
@@ -797,7 +877,8 @@ public class OrderService {
             for (var svc : serviceInstanceRepository.findByOrderItemId(newItem.id())) {
                 serviceInstanceRepository.updatePrice(svc.id(), java.math.BigDecimal.ZERO);
             }
-            itemRepository.updatePrice(newItem.id(), java.math.BigDecimal.ZERO);
+            // ПР-017: первоначальная стоимость ковра — для аналитики гарантий.
+            itemRepository.zeroForWarranty(newItem.id(), item.price());
         }
         // На всякий случай: суммарная сумма заказа в 0.
         repository.updateBaseAmount(warranty.id(), java.math.BigDecimal.ZERO);
@@ -1183,6 +1264,15 @@ public class OrderService {
 
     /** Пересчёт итоговой суммы заказа */
     public void recalculateTotalAmount(Long orderId) {
+        // ПР-017: гарантийный заказ для клиента бесплатный целиком. Любая новая или
+        // пересчитанная позиция в нём обнуляется (исходная цена сохраняется), и
+        // итог всегда 0 — иначе добавленный в гарантию ковёр выставлялся бы к оплате.
+        if (repository.findById(orderId).map(Order::isWarranty).orElse(false)) {
+            zeroWarrantyItems(orderId);
+            repository.updateBaseAmount(orderId, BigDecimal.ZERO);
+            repository.updateTotalAmount(orderId, BigDecimal.ZERO);
+            return;
+        }
         // Сначала пересчитываем дефолтные позиции (доставка и т.п.)
         // они зависят от суммы остальных позиций
         recalculateDefaultItemPrices(orderId);

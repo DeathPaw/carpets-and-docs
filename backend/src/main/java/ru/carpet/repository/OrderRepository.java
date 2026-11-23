@@ -110,6 +110,12 @@ public class OrderRepository {
             Timestamp deliveredTs = rs.getTimestamp("contract_delivered_at");
             contractDeliveredAt = deliveredTs != null ? deliveredTs.toLocalDateTime() : null;
         } catch (Exception ignored) {}
+        // ПР-014: источник клиента есть только в выборках с JOIN clients.
+        String clientSource = null, clientSourceNote = null;
+        try {
+            clientSource = rs.getString("client_source");
+            clientSourceNote = rs.getString("client_source_note");
+        } catch (Exception ignored) {}
         try {
             Timestamp confirmedTs = rs.getTimestamp("client_confirmed_at");
             clientConfirmedAt = confirmedTs != null ? confirmedTs.toLocalDateTime() : null;
@@ -170,7 +176,9 @@ public class OrderRepository {
                 cancelReasonCode,
                 contractId,
                 contractPricePerSqm,
-                contractDeliveredAt
+                contractDeliveredAt,
+                clientSource,
+                clientSourceNote
         );
     };
 
@@ -188,7 +196,7 @@ public class OrderRepository {
         params.put("offset", (long) page * size);
 
         StringBuilder sql = new StringBuilder(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id WHERE 1=1 ");
 
         appendWhereClause(sql, params, query);
 
@@ -452,7 +460,7 @@ public class OrderRepository {
 
     public Optional<Order> findById(Long id) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.id = :id",
                 Map.of("id", id),
                 ROW_MAPPER
@@ -462,7 +470,7 @@ public class OrderRepository {
 
     public Optional<Order> findByLegacyId(Long legacyId) {
         List<Order> result = jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.legacy_id = :legacyId",
                 Map.of("legacyId", legacyId),
                 ROW_MAPPER
@@ -651,6 +659,13 @@ public class OrderRepository {
     }
 
     /** V17: пометить/снять флаг проблемного заказа. reason обязателен при TRUE. */
+    /** ПР-017: пометить существующий заказ гарантийным и привязать к исходному. */
+    public void markWarranty(Long orderId, Long parentOrderId) {
+        jdbc.update(
+                "UPDATE orders SET is_warranty = TRUE, parent_order_id = :p, version = version + 1, updated_at = NOW() WHERE id = :id",
+                new MapSqlParameterSource().addValue("p", parentOrderId).addValue("id", orderId));
+    }
+
     public void setProblem(Long orderId, boolean isProblem, String reason) {
         jdbc.update(
                 "UPDATE orders SET is_problem = :p, problem_reason = :r, updated_at = NOW() WHERE id = :id",
@@ -707,7 +722,7 @@ public class OrderRepository {
 
     public List<Order> findWarrantyOrders(Long parentOrderId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.parent_order_id = :parentOrderId AND o.is_warranty = true ORDER BY o.id",
                 Map.of("parentOrderId", parentOrderId),
                 ROW_MAPPER
@@ -716,7 +731,7 @@ public class OrderRepository {
 
     public List<Order> findByClientName(String clientName) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_name = :clientName ORDER BY o.id DESC",
                 Map.of("clientName", clientName),
                 ROW_MAPPER
@@ -741,7 +756,7 @@ public class OrderRepository {
 
     public List<Order> findByClientId(Long clientId) {
         return jdbc.query(
-                "SELECT o.*, c.address as client_address, c.phone as client_phone, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
+                "SELECT o.*, c.address as client_address, c.phone as client_phone, c.source as client_source, c.source_note as client_source_note, drv.name AS assigned_driver_name, op.name AS assigned_operator_name FROM orders o LEFT JOIN clients c ON c.id = o.client_id LEFT JOIN employees drv ON drv.id = o.assigned_driver_id LEFT JOIN employees op ON op.id = o.assigned_operator_id " +
                 "WHERE o.client_id = :clientId ORDER BY o.id DESC",
                 Map.of("clientId", clientId),
                 ROW_MAPPER
