@@ -4,7 +4,7 @@ REM Carpet Orders — первичная установка на сервере.
 REM Запускается ОДИН РАЗ после `git clone`. Дальше — update.bat / start.bat.
 REM
 REM Что делает:
-REM   1. Проверяет наличие java/mvn/node/psql
+REM   1. Проверяет наличие java/mvn/node/psql (путь к mvn запоминает в deploy\local-tools.bat)
 REM   2. Создаёт БД carpet_db (postgres/postgres)
 REM   3. Билдит фронт + бэк (jar с фронтом внутри)
 REM   4. Регистрирует задачу авто-обновления в Task Scheduler
@@ -62,7 +62,15 @@ git reset --hard origin/main >nul 2>&1
 echo.
 echo === [1/6] Checking tools ===
 where java >nul 2>&1 || (echo X java not found & goto :err)
-where mvn  >nul 2>&1 || (echo X mvn not found  & goto :err)
+REM Maven ищем и запоминаем полный путь в deploy\local-tools.bat (не в git):
+REM автообновление работает от SYSTEM и PATH пользователя не видит.
+set "MVN="
+if exist "%ROOT%\deploy\local-tools.bat" call "%ROOT%\deploy\local-tools.bat"
+if not defined MVN for /f "delims=" %%i in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\find-mvn.ps1"') do set "MVN=%%i"
+if not defined MVN (echo X mvn not found & goto :err)
+REM Редирект впереди, без скобок: путь вида «Program Files (x86)» ломал бы блок.
+>"%ROOT%\deploy\local-tools.bat" echo set "MVN=%MVN%"
+echo Maven: %MVN%
 where node >nul 2>&1 || (echo X node not found & goto :err)
 where psql >nul 2>&1 || (echo X psql not found & goto :err)
 echo OK.
@@ -88,7 +96,9 @@ call npm run build || goto :err
 echo.
 echo === [4/6] Building backend jar (with frontend bundled) ===
 cd /d "%ROOT%\backend"
-call mvn clean package -DskipTests -q || goto :err
+call "%MVN%" clean package -DskipTests -q || goto :err
+REM Сборка из setup считается актуальной — update.bat не будет пересобирать её зря.
+for /f %%i in ('git rev-parse HEAD 2^>nul') do (echo %%i)>"%ROOT%\deploy\built.hash"
 
 echo.
 echo === [5/6] Registering auto-update task (every 5 minutes) ===

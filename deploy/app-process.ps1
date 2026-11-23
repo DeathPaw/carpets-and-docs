@@ -13,10 +13,17 @@
 param([ValidateSet('check','stop')][string]$Action = 'check')
 
 $Root = Split-Path -Parent $PSScriptRoot
-$Jar  = Join-Path $Root 'backend\target\carpet-order-management-0.0.1-SNAPSHOT.jar'
+# Свежая сборка или последняя рабочая (её start.bat запускает, если сборка упала).
+$Jars = @(
+    (Join-Path $Root 'backend\target\carpet-order-management-0.0.1-SNAPSHOT.jar'),
+    (Join-Path $Root 'deploy\last-good.jar')
+) | ForEach-Object { $_.ToLower() }
 
 $Own = @(Get-CimInstance Win32_Process -Filter "Name='java.exe'" -ErrorAction SilentlyContinue |
-    Where-Object { $_.CommandLine -and $_.CommandLine.ToLower().Contains($Jar.ToLower()) -and $_.CommandLine.Contains('--spring.profiles.active=prod') })
+    Where-Object {
+        $Cmd = if ($_.CommandLine) { $_.CommandLine.ToLower() } else { '' }
+        $Cmd.Contains('--spring.profiles.active=prod') -and ($Jars | Where-Object { $Cmd.Contains($_) })
+    })
 
 if ($Action -eq 'check') {
     if ($Own.Count -gt 0) { exit 0 } else { exit 1 }

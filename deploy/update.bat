@@ -58,21 +58,54 @@ if errorlevel 1 (
     echo Registered CarpetOrdersStart task >> "%LOG%"
 )
 
-REM Сторож: если обновлений нет, но приложение не запущено (перезагрузка,
-REM падение, кто-то остановил), поднимаем его. Раньше без нового коммита оно
-REM так и лежало. Комментарий вне блока if: REM со скобками внутри блока ломает cmd.
+set "JAR=%ROOT%\backend\target\carpet-order-management-0.0.1-SNAPSHOT.jar"
+set "LASTGOOD=%ROOT%\deploy\last-good.jar"
+set "BUILT=%ROOT%\deploy\built.hash"
+
+REM ─── Что собрано сейчас. deploy\built.hash пишется только после УСПЕШНОЙ
+REM сборки — поэтому неудавшаяся сборка повторяется на следующем запуске, а не
+REM «забывается» до следующего коммита (раньше сравнивали только хэши git:
+REM после падения сборки код уже был подтянут, и приложение так и лежало).
+set "BUILT_HASH="
+if exist "%BUILT%" set /p BUILT_HASH=<"%BUILT%"
+REM Первый запуск с этим механизмом: файла ещё нет. Если код не менялся и jar
+REM на месте — считаем текущую сборку актуальной, лишний раз не пересобираем.
+if not exist "%BUILT%" if "%OLD_HASH%"=="%NEW_HASH%" if exist "%JAR%" (
+    (echo %NEW_HASH%)>"%BUILT%"
+    set "BUILT_HASH=%NEW_HASH%"
+)
+if "%BUILT_HASH%"=="%NEW_HASH%" goto :up_to_date
+goto :do_update
+
+REM ─── Сторож: обновлений нет, но приложение не запущено (перезагрузка, падение,
+REM кто-то остановил) — поднимаем. Комментарии вне блоков if: REM со скобками
+REM внутри блока ломает cmd.
+:up_to_date
+echo No updates. >> "%LOG%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
+if errorlevel 1 (
+    echo App is not running, starting... >> "%LOG%"
+    call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+)
+goto :finish_ok
+
+:do_update
 if "%OLD_HASH%"=="%NEW_HASH%" (
-    echo No updates. >> "%LOG%"
-    powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
-    if errorlevel 1 (
-        echo App is not running, starting... >> "%LOG%"
-        call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
-    )
-    del /F /Q "%LOCK%" >nul 2>&1
-    exit /b 0
+    echo Rebuilding %NEW_HASH%: previous build did not complete >> "%LOG%"
+) else (
+    echo Updates pulled: %OLD_HASH% -^> %NEW_HASH% >> "%LOG%"
 )
 
-echo Updates pulled: %OLD_HASH% -^> %NEW_HASH% >> "%LOG%"
+REM ─── Maven ищем ДО остановки приложения. Task Scheduler работает от SYSTEM,
+REM а Maven обычно прописан только в PATH пользователя — отсюда «"mvn" не
+REM является внутренней или внешней командой». find-mvn.ps1 ищет его в PATH
+REM всех пользователей и типовых папках. Можно задать путь явно в
+REM deploy\local-tools.bat (не в git): set "MVN=C:\...\bin\mvn.cmd".
+set "MVN="
+if exist "%ROOT%\deploy\local-tools.bat" call "%ROOT%\deploy\local-tools.bat"
+if not defined MVN for /f "delims=" %%i in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\find-mvn.ps1"') do set "MVN=%%i"
+if not defined MVN goto :no_maven
+echo Maven: %MVN% >> "%LOG%"
 
 REM ─── Pre-update backup: дамп БД ДО рестарта (чтобы было откуда откатиться,
 REM если новая версия что-то сломает). Хранится один, перезаписывается каждый апдейт.
@@ -85,18 +118,19 @@ if "%PGDATABASE%"=="" set PGDATABASE=carpet_db
 pg_dump -U %PGUSER% -h %PGHOST% -Fc -f "%ROOT%\deploy\backups\pre-update.dump" %PGDATABASE% >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo Pre-update backup FAILED — aborting update for safety >> "%LOG%"
-    del /F /Q "%LOCK%" >nul 2>&1
-    exit /b 1
+    goto :keep_running
 )
 echo Pre-update backup OK: deploy\backups\pre-update.dump >> "%LOG%"
 
-REM ─── Стопим Java РАНЬШЕ, до операций с файлами. На прошлой итерации java.exe
-REM держал файлы и rmdir/move ругались «занят другим процессом».
+REM ─── Стопим Java РАНЬШЕ, до операций с файлами: java.exe держит jar, и
+REM rmdir/move ругались «занят другим процессом».
 REM Только свой процесс: `taskkill /IM java.exe` клал и «Верфь» на том же сервере.
 echo Stopping Java... >> "%LOG%"
 call "%ROOT%\deploy\stop.bat" >> "%LOG%" 2>&1
-REM Ждём 3 секунды чтобы дескрипторы освободились.
 timeout /t 3 /nobreak >nul
+
+REM Рабочую сборку сохраняем: если новая не соберётся, start.bat поднимет её.
+if exist "%JAR%" copy /Y "%JAR%" "%LASTGOOD%" >nul
 
 REM Чистим артефакты сборки. force_rmdir с retry — на случай если Defender ещё держит.
 call :force_rmdir "%ROOT%\frontend\dist"
@@ -108,23 +142,49 @@ call npm install >> "%LOG%" 2>&1
 call npm run build >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo Frontend build FAILED >> "%LOG%"
-    del /F /Q "%LOCK%" >nul 2>&1
-    exit /b 1
+    goto :build_failed
 )
 
 REM Rebuild backend
 cd /d "%ROOT%\backend"
-call mvn clean package -DskipTests -q >> "%LOG%" 2>&1
+call "%MVN%" clean package -DskipTests -q >> "%LOG%" 2>&1
 if errorlevel 1 (
     echo Backend build FAILED >> "%LOG%"
-    del /F /Q "%LOCK%" >nul 2>&1
-    exit /b 1
+    goto :build_failed
+)
+if not exist "%JAR%" (
+    echo Backend build produced no jar >> "%LOG%"
+    goto :build_failed
 )
 
 REM Start (остановили выше, перед сборкой)
 call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
-
+(echo %NEW_HASH%)>"%BUILT%"
 echo Restart complete. >> "%LOG%"
+goto :finish_ok
+
+REM ─── Сборка не удалась: приложение уже остановлено — поднимаем прежнюю
+REM версию (start.bat возьмёт deploy\last-good.jar). Сборка повторится на
+REM следующем запуске, т.к. built.hash не обновлён.
+:build_failed
+echo Starting previous version from deploy\last-good.jar >> "%LOG%"
+call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+del /F /Q "%LOCK%" >nul 2>&1
+exit /b 1
+
+:no_maven
+echo ERROR: Maven (mvn.cmd) not found. Create deploy\local-tools.bat with: set "MVN=C:\path\to\maven\bin\mvn.cmd" >> "%LOG%"
+goto :keep_running
+
+REM ─── Обновиться не получилось ещё до остановки — просто следим, чтобы
+REM приложение работало.
+:keep_running
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\app-process.ps1" check
+if errorlevel 1 call "%ROOT%\deploy\start.bat" >> "%LOG%" 2>&1
+del /F /Q "%LOCK%" >nul 2>&1
+exit /b 1
+
+:finish_ok
 del /F /Q "%LOCK%" >nul 2>&1
 endlocal
 exit /b 0

@@ -40,3 +40,8 @@ myclients
 **/.env
 **/.env.local
 !**/.env.example
+
+# Деплой на сервере: локальные пути инструментов, последняя рабочая сборка, метка собранного коммита.
+deploy/local-tools.bat
+deploy/last-good.jar
+deploy/built.hash

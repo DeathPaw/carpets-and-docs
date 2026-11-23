@@ -10,6 +10,9 @@ cd /d "%~dp0\.."
 set ROOT=%CD%
 set JAR=%ROOT%\backend\target\carpet-order-management-0.0.1-SNAPSHOT.jar
 
+REM Свежей сборки нет (сборка упала) — запускаем последнюю рабочую, которую
+REM update.bat сохраняет перед пересборкой. Лучше старая версия, чем никакой.
+if not exist "%JAR%" set JAR=%ROOT%\deploy\last-good.jar
 if not exist "%JAR%" (
     echo ERROR: jar not built. Run setup.bat or update.bat first.
     exit /b 1
