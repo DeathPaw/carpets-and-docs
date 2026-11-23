@@ -1,0 +1,5 @@
+# Батники Windows хранятся с CRLF как есть, без преобразования git'ом.
+# С LF-окончаниями cmd.exe ненадёжно находит метки goto/call :label —
+# update.bat обрывался на «goto :finish_ok» и не доходил до обновления.
+*.bat -text
+*.cmd -text

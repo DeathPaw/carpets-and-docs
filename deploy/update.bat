@@ -19,7 +19,7 @@ REM из-за чего вылезали ошибки «Процесс не мо�
 if exist "%LOCK%" (
     REM Stale lock guard: если lock-файлу >30 минут — считаем что предыдущий упал,
     REM перезаписываем. Иначе тихо выходим.
-    for /f %%A in ('powershell -NoProfile -Command "[int]((Get-Date) - (Get-Item '%LOCK%').LastWriteTime).TotalMinutes"') do set LOCK_AGE=%%A
+    for /f %%A in ('powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\deploy\lock-age.ps1" "%LOCK%"') do set LOCK_AGE=%%A
     if !LOCK_AGE! LSS 30 (
         echo === %DATE% %TIME% === LOCKED (previous run still going, age !LOCK_AGE!m) >> "%LOG%"
         exit /b 0
